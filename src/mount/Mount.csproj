@@ -1,0 +1,86 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<RootNamespace>Pgfs.Mount</RootNamespace>
+		<AssemblyName>mount.pgfs</AssemblyName>
+		<!--
+			Output layout:
+			  dotnet build -c Debug     -> bin/Debug/mount.pgfs.{dll,exe} + dependency dlls
+			  dotnet build -c Release   -> bin/Release/mount.pgfs.{dll,exe} + dependency dlls (framework-dependent)
+			  dotnet publish -c Release -> bin/Publish/mount.pgfs[.exe] (single-file self-contained, host RID)
+
+			Mount only runs on Linux/macOS, but it still builds on Windows so it can be cross-compiled.
+			When run there, it exits early at the OperatingSystem.IsWindows guard.
+		-->
+		<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<!--
+			AOT / Trim are disabled because Tmds.Fuse / Dapper / Tomlyn rely on dynamic code generation.
+		-->
+		<PublishAot>false</PublishAot>
+		<PublishTrimmed>false</PublishTrimmed>
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+	</PropertyGroup>
+
+	<!--
+		Single-file settings for Release publish.
+		PublishSingleFile / compression / DebugType=embedded are publish-only and
+		do not affect `dotnet build -c Release`.
+		-->
+	<PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+		<PublishSingleFile>true</PublishSingleFile>
+		<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+		<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+		<DebugType>embedded</DebugType>
+		<PublishDir>$(MSBuildThisFileDirectory)..\..\bin\Publish\</PublishDir>
+		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+	</PropertyGroup>
+
+	<!--
+		Enable self-contained + host RID only for `dotnet publish -c Release`.
+		Setting these directly in a PropertyGroup would also make `dotnet build -c Release`
+		self-contained, dropping 200 framework dlls into bin/Release/, so we scope it to
+		publish via a target.
+		-->
+	<Target Name="EnableSelfContainedPublish"
+	        BeforeTargets="_CheckForUnsupportedNETCoreVersion;Build"
+	        Condition=" '$(Configuration)' == 'Release' AND '$(_IsPublishing)' == 'true' ">
+		<PropertyGroup>
+			<SelfContained>true</SelfContained>
+			<RuntimeIdentifier Condition=" '$(RuntimeIdentifier)' == '' ">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+		</PropertyGroup>
+	</Target>
+
+	<!-- Per-OS symbols. -->
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+		<DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+	</PropertyGroup>
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+		<DefineConstants>$(DefineConstants);LINUX</DefineConstants>
+	</PropertyGroup>
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<DefineConstants>$(DefineConstants);MACOS</DefineConstants>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Npgsql" Version="9.0.4" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\lib\Lib.csproj" />
+		<!--
+			The original Tmds.Fuse (tmds/Tmds.Fuse 0.1.0-190711-50, 2019-07-11) does not expose
+			MountOptions.Options, so there is no way to pass `-o allow_other` / `-o use_ino` /
+			`-o attr_timeout=0` to libfuse. The active securefolderfs-community fork adds
+			MountOptions.Options and tracks net10.0, so we vendor it as a submodule under vendor/ and
+			ProjectReference it (the fork is not published on NuGet).
+		-->
+		<ProjectReference Include="..\..\vendor\Tmds.Fuse\src\Tmds.Fuse\Tmds.Fuse.csproj" />
+	</ItemGroup>
+
+</Project>
