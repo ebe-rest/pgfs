@@ -1,0 +1,49 @@
+# Sample pgfs settings file. Copy to pgfs.toml and edit.
+#
+# Every value is optional; when omitted, the Schema default is used.
+# CLI arguments (`-c`, `-m`, etc.) take precedence over this file.
+# Details: docs/Mkfs.md
+
+# ----- database connection -----
+database.connection.host = "localhost"
+database.connection.port = "5432"
+database.connection.username = "pgfs"
+database.connection.password = "pgfs"
+database.connection.database = "pgfs"
+database.connection.ssl_mode = "Prefer"
+
+# ----- database structure -----
+database.schema = "public"
+database.prefix = "pgfs_"
+# database.tablespace = "pg_default"         # default. Set to use a different tablespace
+# database.tablespace_path = "/var/lib/..."  # for mkfs --tablespace, the directory when creating a new one
+
+# ----- file system settings (fixed at FS creation) -----
+# file_system.cluster_size = 4096
+# file_system.default_chunk_size = 1048576    # 1 MiB
+# file_system.max_file_size = 1099511627776   # 1 TiB (-1 for unlimited)
+# file_system.volume_label = "pgfs"
+# file_system.version = "1.0.0"
+
+# ----- mount -----
+# mount.mount_point = "/mnt/pgfs"             # Linux/macOS. On Windows, e.g. "P:"
+# mount.cache_max_entries = 1024
+# mount.fallback_uname = "nobody"             # fallback when uname resolution fails (on Windows, e.g. "Guest")
+# mount.fallback_gname = "nogroup"            # fallback when gname resolution fails (on Windows, "Guests")
+# Note: fallback_uname / fallback_gname are SaveTo=DB, so they are read from pgfs_settings.
+# Specifying them in pgfs.toml takes precedence over the DB value (like a CLI argument), but when
+# mounting the same FS from multiple machines, the intended operation is to manage them centrally on
+# the DB side (at mkfs time or via a later UPDATE).
+
+# ----- database connection retry -----
+# database.retry_max_attempts = 5             # max attempts (including the first) on a transient failure at connection open
+# database.retry_initial_delay_ms = 200       # initial backoff delay (ms)
+# database.retry_max_delay_ms = 2000          # exponential-backoff ceiling (ms)
+
+# ----- logging -----
+# logging.level = "information"               # all / trace / debug / information / warning / error / critical / none
+# logging.output = "stderr"                   # stdout / stderr / none / "<cycle>:<dir>/<pattern>"
+#   example of file output (date rotation):
+#     logging.output = "daily:~/pgfs/log/pgfs-*.log"     # ~/pgfs/log/pgfs-20260527.log (daily)
+#   cycle = none / hourly / daily / monthly. A "*" in the pattern is replaced by the date
+#     (hourly=yyyyMMddHH / daily=yyyyMMdd / monthly=yyyyMM / none=empty). "~" expands to home.
