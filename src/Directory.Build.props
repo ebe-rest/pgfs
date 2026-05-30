@@ -1,0 +1,16 @@
+<Project>
+
+  <!--
+    Shared assembly metadata for every project under src (lib / mkfs / mount / assign).
+    The startup banner (Pgfs.Lib.AppInfo) reads the Version / Product / Copyright set here at runtime.
+    vendor/Tmds.Fuse lives outside src, so these props do not propagate to it (we respect the fork's own metadata).
+  -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Product>pgfs</Product>
+    <Company>ebe-rest</Company>
+    <Authors>ebe-rest</Authors>
+    <Copyright>Copyright (c) 2026 ebe-rest</Copyright>
+  </PropertyGroup>
+
+</Project>

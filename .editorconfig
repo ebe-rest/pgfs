@@ -1,0 +1,44 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_size = tab
+indent_style = tab
+insert_final_newline = true
+max_line_length = off
+tab_width = 4
+trim_trailing_whitespace = true
+
+# Microsoft .NET properties
+csharp_new_line_before_members_in_object_initializers = false
+csharp_prefer_braces = true:warning
+csharp_preferred_modifier_order = private, public, abstract, protected, file, new, internal, static, virtual, sealed, override, readonly, extern, unsafe, volatile, async, required:none
+csharp_preserve_single_line_blocks = true
+dotnet_style_qualification_for_event = true:suggestion
+dotnet_style_qualification_for_field = true:suggestion
+dotnet_style_qualification_for_method = true:suggestion
+dotnet_style_qualification_for_property = true:suggestion
+
+# ReSharper properties
+resharper_align_multiline_statement_conditions = false
+resharper_arrange_this_qualifier_highlighting = none
+resharper_blank_lines_after_block_statements = 0
+resharper_braces_for_dowhile = required
+resharper_braces_for_fixed = required
+resharper_braces_for_for = required
+resharper_braces_for_foreach = required
+resharper_braces_for_ifelse = required
+resharper_braces_for_lock = required
+resharper_braces_for_using = required
+resharper_braces_for_while = required
+resharper_continuous_indent_multiplier = 1
+resharper_keep_existing_embedded_block_arrangement = true
+resharper_method_or_operator_body = block_body
+resharper_object_creation_when_type_evident = explicitly_typed
+resharper_parentheses_redundancy_style = remove
+resharper_place_method_attribute_on_same_line = if_owner_is_single_line
+resharper_place_simple_accessor_on_single_line = true
+resharper_wrap_before_binary_pattern_op = false
+resharper_wrap_chained_binary_expressions = chop_if_long
+resharper_wrap_object_and_collection_initializer_style = chop_if_long

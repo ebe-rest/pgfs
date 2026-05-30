@@ -1,0 +1,16 @@
+_*
+*_
+*.csproj.user
+*.lnk
+*.local.*
+*.log
+*.lscache
+*.sln.DotSettings.user
+
+bin
+obj
+
+/.idea
+/.vs
+/vssettings.vssettings
+/rider_settings
