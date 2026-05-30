@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<RootNamespace>Pgfs.Lib</RootNamespace>
+		<AssemblyName>lib.pgfs</AssemblyName>
+		<!--
+			Output layout:
+			  Debug build   → bin/Debug/lib.pgfs.dll
+			  Release build → bin/Release/lib.pgfs.dll
+			  Publish        → not emitted (bundled inside the Mkfs/Mount/Assign single-file output)
+		-->
+		<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<!-- do not publish the library on its own into bin/Publish/ -->
+		<IsPublishable>false</IsPublishable>
+	</PropertyGroup>
+
+	<!-- embed the pdb into the dll for Release; keeps lib.pgfs.pdb out of bin/Publish/ -->
+	<PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+		<DebugType>embedded</DebugType>
+	</PropertyGroup>
+
+	<!-- per-OS symbol definitions -->
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+		<DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+	</PropertyGroup>
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+		<DefineConstants>$(DefineConstants);LINUX</DefineConstants>
+	</PropertyGroup>
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<DefineConstants>$(DefineConstants);MACOS</DefineConstants>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Dapper" Version="2.1.66" />
+		<PackageReference Include="Npgsql" Version="9.0.4" />
+		<PackageReference Include="Tomlyn" Version="0.20.0" />
+	</ItemGroup>
+
+</Project>
