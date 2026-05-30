@@ -1,0 +1,11 @@
+[submodule "vendor/Tmds.Fuse"]
+	path = vendor/Tmds.Fuse
+	# We use https://github.com/ebe-rest/Tmds.Fuse, a fork of
+	# https://github.com/securefolderfs-community/Tmds.Fuse (upstream). It carries a
+	# downstream patch (it writes `fuse_config.use_ino=1` in Init). When upstream needs
+	# to be tracked, pull it in by hand from inside the submodule:
+	#   git remote add upstream https://github.com/securefolderfs-community/Tmds.Fuse.git
+	#   git fetch upstream
+	#   git rebase upstream/master
+	#   git push origin master --force-with-lease
+	url = https://github.com/ebe-rest/Tmds.Fuse.git
