@@ -129,8 +129,8 @@ verify_state() {
                 result=FAIL; details="$details; expected coordinator shouldhaveshards=t (1-node), got '$should'"
             fi
             local dist_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='distributed';" 2>/dev/null | tr -d ' ')
-            if [ "$dist_count" != "4" ]; then
-                result=FAIL; details="$details; expected 4 distributed tables, got '$dist_count'"
+            if [ "$dist_count" != "5" ]; then
+                result=FAIL; details="$details; expected 5 distributed tables (inode/data/data_chunk/lock/audit), got '$dist_count'"
             fi
             local local_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='local';" 2>/dev/null | tr -d ' ')
             if [ "$local_count" != "1" ]; then
@@ -151,10 +151,10 @@ verify_state() {
                 result=FAIL; details="$details; expected worker shouldhaveshards=t, got '$worker_should'"
             fi
             local dist_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='distributed';" 2>/dev/null | tr -d ' ')
-            if [ "$dist_count" != "4" ]; then
-                result=FAIL; details="$details; expected 4 distributed tables, got '$dist_count'"
+            if [ "$dist_count" != "5" ]; then
+                result=FAIL; details="$details; expected 5 distributed tables (inode/data/data_chunk/lock/audit), got '$dist_count'"
             fi
-            # worker should have the same 4 distributed table metadata
+            # worker should have the same 5 distributed table metadata
             local worker_citus_ext=$(sqlwpg -tA -c "SELECT count(*) FROM pg_extension WHERE extname='citus';" 2>/dev/null | tr -d ' ')
             if [ "$worker_citus_ext" != "1" ]; then
                 result=FAIL; details="$details; worker missing citus extension"

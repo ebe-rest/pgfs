@@ -168,11 +168,11 @@ sec "mkfs --clean --citus --worker $WORKER1_SPEC"
     --worker "$WORKER1_SPEC" 2>&1 | tee -a "$LOG" >/dev/null \
     || die "mkfs failed"
 
-# Sanity: 4 distributed + 1 local
+# Sanity: 5 distributed (inode/data/data_chunk/lock/audit) + 1 local (settings)
 dist_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='distributed';" | tr -d ' ')
 local_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='local';" | tr -d ' ')
 log "  citus_tables: distributed=$dist_count local=$local_count"
-[ "$dist_count" = "4" ] && [ "$local_count" = "1" ] || die "unexpected citus_tables: dist=$dist_count local=$local_count"
+[ "$dist_count" = "5" ] && [ "$local_count" = "1" ] || die "unexpected citus_tables: dist=$dist_count local=$local_count"
 
 # === Create 2 pgfs.toml + mount points ===
 sec "create 2 pgfs.toml + mount points"
