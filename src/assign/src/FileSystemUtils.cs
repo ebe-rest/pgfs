@@ -1,6 +1,9 @@
 namespace Pgfs.Assign;
 
 using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Text.Json;
 using Lib.Api;
 using Lib.Models;
 
@@ -15,10 +18,10 @@ public static class FileSystemUtils
 {
 	/// <summary>
 	/// Hidden / System / Archive have no Linux-side equivalent, so they are stored in an xattr.
-	/// The value is a 4-byte little-endian partial mask of <see cref="FileAttributes"/>.
-	/// The key is a concise pgfs-specific one, not Samba's `user.DOSATTRIB`.
+	/// The value is JSON <c>{ "hidden": bool, "system": bool, "archive": bool }</c>. The <c>user.</c> namespace
+	/// makes it visible to Linux getfattr too. <c>compressed</c> is a future addition.
 	/// </summary>
-	public const string WinAttrsXattrKey = "user.win_attrs";
+	public const string WinAttrsXattrKey = "user.win.attrs";
 
 	/// <summary>The bits held in the xattr. The rest (ReadOnly / Directory / ReparsePoint / Normal) are managed via other routes.</summary>
 	public const FileAttributes WinAttrsMask = FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive;
@@ -74,12 +77,21 @@ public static class FileSystemUtils
 		if (raw == null) {
 			return null;
 		}
-		if (raw.Length < 4) {
-			// Treat a corrupt value as unset.
+		WinAttrsDto? dto = null;
+		try {
+			dto = JsonSerializer.Deserialize<WinAttrsDto>(raw);
+		} catch (JsonException) {
+			// Treat a corrupt value as touched-but-none (do not revive the heuristic).
 			return FileAttributes.None;
 		}
-		var mask = BitConverter.ToInt32(raw, 0);
-		return (FileAttributes)mask & WinAttrsMask;
+		if (dto == null) {
+			return FileAttributes.None;
+		}
+		var attr = FileAttributes.None;
+		if (dto.hidden) { attr |= FileAttributes.Hidden; }
+		if (dto.system) { attr |= FileAttributes.System; }
+		if (dto.archive) { attr |= FileAttributes.Archive; }
+		return attr;
 	}
 
 	/// <summary>
@@ -92,9 +104,21 @@ public static class FileSystemUtils
 	/// bug this design avoids.
 	/// </summary>
 	public static void SaveWinAttrs(Api api, long inodeId, FileAttributes attributes) {
-		var masked = attributes & WinAttrsMask;
-		var bytes = BitConverter.GetBytes((int)masked);
+		var dto = new WinAttrsDto {
+			hidden = (attributes & FileAttributes.Hidden) != 0,
+			system = (attributes & FileAttributes.System) != 0,
+			archive = (attributes & FileAttributes.Archive) != 0,
+		};
+		var bytes = JsonSerializer.SerializeToUtf8Bytes(dto);
 		api.SetXAttr(inodeId, WinAttrsXattrKey, bytes, createOnly: false, replaceOnly: false);
+	}
+
+	/// <summary>The JSON shape of user.win.attrs (docs/permission-interop.md). compressed is a future addition.</summary>
+	private sealed class WinAttrsDto
+	{
+		public bool hidden { get; set; }
+		public bool system { get; set; }
+		public bool archive { get; set; }
 	}
 
 	/// <summary>
@@ -106,18 +130,221 @@ public static class FileSystemUtils
 		if ((mode & Mode.S_IWOTH) != 0) {
 			return true;
 		}
-		// owner +w (root is treated as Administrator)
-		var uname = inode.UserName == "root" ? "Administrator" : inode.UserName;
-		if (string.Equals(uname, users.DefaultUname, StringComparison.OrdinalIgnoreCase)
+		// owner +w. Both the stored name and DefaultUname are normalized + Linux-name mapped, so compare names directly
+		// (the root <-> Administrator alias is absorbed by the WindowsUserResolver mapping).
+		if (string.Equals(inode.UserName, users.DefaultUname, StringComparison.OrdinalIgnoreCase)
 			&& (mode & Mode.S_IWUSR) != 0) {
 			return true;
 		}
-		// group +w (root -> Administrators)
-		var gname = inode.GroupName == "root" ? "Administrators" : inode.GroupName;
-		if (string.Equals(gname, users.DefaultGname, StringComparison.OrdinalIgnoreCase)
+		// group +w
+		if (string.Equals(inode.GroupName, users.DefaultGname, StringComparison.OrdinalIgnoreCase)
 			&& (mode & Mode.S_IWGRP) != 0) {
 			return true;
 		}
 		return false;
+	}
+
+	// ------------------------------------------------------------------
+	// ACL projection (docs/permission-interop.md)
+	// ------------------------------------------------------------------
+
+	/// <summary>The xattr key holding the canonical ACL document (POSIX-only / allow).</summary>
+	public const string PgfsAclXattrKey = "user.pgfs_acl";
+
+	/// <summary>Reads the inode's canonical ACL document. null if unset / malformed (project from the mode base 3 classes only).</summary>
+	public static PgfsAcl? LoadPgfsAcl(Api api, long inodeId) {
+		var raw = api.GetXAttr(inodeId, PgfsAclXattrKey);
+		if (raw == null) {
+			return null;
+		}
+		return PgfsAcl.Parse(raw);
+	}
+
+	/// <summary>
+	/// Projects an inode into a Windows security descriptor (owner / group / DACL) (docs/permission-interop.md).
+	/// owner/group are uname/gname -&gt; SID; the DACL is the st_mode base 3 classes (owner/group/Everyone allow ACEs)
+	/// plus the named entries of the canonical ACL document. deny / inheritance / ACE order are not held (POSIX projection).
+	/// </summary>
+	public static FileSystemSecurity BuildSecurity(Inode inode, WindowsUserResolver users, Api api) {
+		FileSystemSecurity sec = inode.IsDirectory ? new DirectorySecurity() : new FileSecurity();
+		var ownerSid = users.UserSidOf(inode.UserName);
+		var groupSid = users.GroupSidOf(inode.GroupName);
+		sec.SetOwner(ownerSid);
+		sec.SetGroup(groupSid);
+
+		var mode = inode.Mode;
+		var isDir = inode.IsDirectory;
+		// base 3 classes (from st_mode)
+		AddAllow(sec, ownerSid, (mode & Mode.S_IRUSR) != 0, (mode & Mode.S_IWUSR) != 0, (mode & Mode.S_IXUSR) != 0, isDir);
+		AddAllow(sec, groupSid, (mode & Mode.S_IRGRP) != 0, (mode & Mode.S_IWGRP) != 0, (mode & Mode.S_IXGRP) != 0, isDir);
+		var everyone = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+		AddAllow(sec, everyone, (mode & Mode.S_IROTH) != 0, (mode & Mode.S_IWOTH) != 0, (mode & Mode.S_IXOTH) != 0, isDir);
+
+		// named ACL (canonical document)
+		var acl = LoadPgfsAcl(api, inode.Id);
+		if (acl != null) {
+			foreach (var e in acl.Entries) {
+				var sid = e.PrincipalType == "group" ? users.GroupSidOf(e.PrincipalName) : users.UserSidOf(e.PrincipalName);
+				AddAllow(sec, sid, e.CanRead, e.CanWrite, e.CanExecute, isDir);
+			}
+		}
+		return sec;
+	}
+
+	/// <summary>Maps rwx to Windows rights and adds one allow ACE. Does nothing if the rights are empty.</summary>
+	private static void AddAllow(FileSystemSecurity sec, SecurityIdentifier sid, bool r, bool w, bool x, bool isDir) {
+		var rights = MapRights(r, w, x);
+		if (rights == 0) {
+			return;
+		}
+		sec.AddAccessRule(new FileSystemAccessRule(sid, rights, AccessControlType.Allow));
+	}
+
+	/// <summary>POSIX rwx -&gt; Windows <see cref="FileSystemRights"/>. No inheritance flags (read projection).</summary>
+	private static FileSystemRights MapRights(bool r, bool w, bool x) {
+		FileSystemRights rights = 0;
+		if (r) {
+			rights |= FileSystemRights.ReadData | FileSystemRights.ReadExtendedAttributes | FileSystemRights.ReadAttributes | FileSystemRights.ReadPermissions;
+		}
+		if (w) {
+			rights |= FileSystemRights.WriteData | FileSystemRights.AppendData | FileSystemRights.WriteExtendedAttributes | FileSystemRights.WriteAttributes;
+		}
+		if (x) {
+			rights |= FileSystemRights.ExecuteFile;
+		}
+		return rights;
+	}
+
+	/// <summary>
+	/// Reverse-projects a received Windows security descriptor into pgfs owner/group/mode/canonical ACL and saves it
+	/// (docs/permission-interop.md). If a group SID is set as the owner, dispatch to owner=nobody / group=that-group.
+	/// The DACL owner/group/Everyone allow ACEs map to the st_mode base 3 classes, named allow ACEs to user.pgfs_acl.
+	/// deny / ACE order / inheritance are dropped on projection. Only the requested <paramref name="sections"/> are
+	/// updated. Returns false on failure.
+	/// </summary>
+	public static bool ApplySecurity(Inode inode, FileSystemSecurity security, AccessControlSections sections, WindowsUserResolver users, Api api) {
+		var newUname = inode.UserName;
+		var newGname = inode.GroupName;
+		var ownerOrGroupChanged = false;
+
+		var hasOwner = (sections & AccessControlSections.Owner) != 0;
+		var hasGroup = (sections & AccessControlSections.Group) != 0;
+		var hasAccess = (sections & AccessControlSections.Access) != 0;
+
+		if (hasGroup) {
+			var gsid = security.GetGroup(typeof(SecurityIdentifier)) as SecurityIdentifier;
+			if (gsid != null) {
+				newGname = users.GnameOf(gsid);
+				ownerOrGroupChanged = true;
+			}
+		}
+		if (hasOwner) {
+			var osid = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
+			if (osid != null) {
+				var ownerIsGroup = users.IsGroupSid(osid);
+				// A group was set as the owner: owner=nobody / group=that-group.
+				if (ownerIsGroup) {
+					newUname = "nobody";
+					newGname = users.GnameOf(osid);
+					ownerOrGroupChanged = true;
+				}
+				if (!ownerIsGroup) {
+					newUname = users.UnameOf(osid);
+					ownerOrGroupChanged = true;
+				}
+			}
+		}
+
+		if (ownerOrGroupChanged) {
+			if (!api.UpdateOwner(inode.Id, newUname, newGname)) {
+				return false;
+			}
+		}
+
+		if (!hasAccess) {
+			return true;
+		}
+
+		// Classify the DACL using the SD's own owner/group SID; fall back to resolving from the updated names.
+		var ownerSid = security.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier ?? users.UserSidOf(newUname);
+		var groupSid = security.GetGroup(typeof(SecurityIdentifier)) as SecurityIdentifier ?? users.GroupSidOf(newGname);
+		var everyone = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+
+		var ownerBits = 0;
+		var groupBits = 0;
+		var otherBits = 0;
+		var acl = new PgfsAcl();
+		var rules = security.GetAccessRules(true, false, typeof(SecurityIdentifier));
+		foreach (FileSystemAccessRule rule in rules) {
+			// deny ACEs are dropped on projection.
+			if (rule.AccessControlType != AccessControlType.Allow) {
+				continue;
+			}
+			var sid = rule.IdentityReference as SecurityIdentifier;
+			if (sid == null) {
+				continue;
+			}
+			var (r, w, x) = RightsToRwx(rule.FileSystemRights);
+			if (sid.Equals(ownerSid)) {
+				ownerBits |= RwxToBits(r, w, x, Mode.S_IRUSR, Mode.S_IWUSR, Mode.S_IXUSR);
+				continue;
+			}
+			if (sid.Equals(groupSid)) {
+				groupBits |= RwxToBits(r, w, x, Mode.S_IRGRP, Mode.S_IWGRP, Mode.S_IXGRP);
+				continue;
+			}
+			if (sid.Equals(everyone)) {
+				otherBits |= RwxToBits(r, w, x, Mode.S_IROTH, Mode.S_IWOTH, Mode.S_IXOTH);
+				continue;
+			}
+			// named ACL entry
+			var isGroup = users.IsGroupSid(sid);
+			var ptype = "user";
+			var pname = users.UnameOf(sid);
+			if (isGroup) {
+				ptype = "group";
+				pname = users.GnameOf(sid);
+			}
+			acl.Entries.Add(new PgfsAclEntry { PrincipalType = ptype, PrincipalName = pname, Rights = RwxString(r, w, x) });
+		}
+
+		// Replace only the base 3 classes (keep the type / setuid / setgid / sticky bits).
+		var newMode = (inode.Mode & ~0x1FF) | ownerBits | groupBits | otherBits;
+		if (newMode != inode.Mode) {
+			if (!api.UpdateMode(inode.Id, newMode)) {
+				return false;
+			}
+		}
+		// Sync the named ACL with the DACL (overwrite even if empty).
+		api.SetXAttr(inode.Id, PgfsAclXattrKey, acl.ToBytes(), createOnly: false, replaceOnly: false);
+		return true;
+	}
+
+	/// <summary>Extracts POSIX rwx from Windows rights (the ReadData / WriteData / ExecuteFile bits).</summary>
+	private static (bool r, bool w, bool x) RightsToRwx(FileSystemRights rights) {
+		var r = (rights & FileSystemRights.ReadData) != 0;
+		var w = (rights & FileSystemRights.WriteData) != 0;
+		var x = (rights & FileSystemRights.ExecuteFile) != 0;
+		return (r, w, x);
+	}
+
+	/// <summary>Folds each rwx bit into the given mode bits.</summary>
+	private static int RwxToBits(bool r, bool w, bool x, int rb, int wb, int xb) {
+		var bits = 0;
+		if (r) { bits |= rb; }
+		if (w) { bits |= wb; }
+		if (x) { bits |= xb; }
+		return bits;
+	}
+
+	/// <summary>Renders rwx as a "rwx" / "r-x" string.</summary>
+	private static string RwxString(bool r, bool w, bool x) {
+		var rc = '-';
+		if (r) { rc = 'r'; }
+		var wc = '-';
+		if (w) { wc = 'w'; }
+		var xc = '-';
+		if (x) { xc = 'x'; }
+		return new string(new[] { rc, wc, xc });
 	}
 }

@@ -19,7 +19,7 @@ using FileAccess = DokanNet.FileAccess;
 /// Places that could be shared with Windows are marked with a `// Windows-shareable:` comment.
 ///
 /// Operations delegated or not implemented:
-///   - GetFileSecurity / SetFileSecurity — return DokanResult.NotImplemented so the kernel generates a default ACL.
+///   - GetFileSecurity / SetFileSecurity — project the inode (uname/gname/mode + canonical ACL) to/from a Windows SD.
 ///   - FindStreams — Alternate Data Streams are not supported; returns DokanResult.NotImplemented.
 ///   - LockFile / UnlockFile — return Success and let the kernel handle it via the UserModeLock option.
 /// </summary>
@@ -713,7 +713,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 	}
 
 	// ------------------------------------------------------------------
-	// GetFileSecurity / SetFileSecurity — NotImplemented for now, letting the kernel generate a default ACL
+	// GetFileSecurity — project an inode (uname/gname/mode + canonical ACL) into a Windows SD.
 	// ------------------------------------------------------------------
 
 	public NtStatus GetFileSecurity(
@@ -722,8 +722,20 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 		AccessControlSections sections,
 		ref DokanFileInfo info
 	) {
-		security = null;
-		return DokanResult.NotImplemented;
+		var path = NormalizePath(fileNamePtr);
+		var inode = this.Resolve(path, ref info);
+		if (inode == null) {
+			security = null;
+			return DokanResult.FileNotFound;
+		}
+		try {
+			security = FileSystemUtils.BuildSecurity(inode, this.users, this.api);
+			return DokanResult.Success;
+		} catch (Exception) {
+			// If projection fails, defer to the kernel's default ACL (do not break access itself).
+			security = null;
+			return DokanResult.NotImplemented;
+		}
 	}
 
 	public NtStatus SetFileSecurity(
@@ -732,8 +744,21 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 		AccessControlSections sections,
 		ref DokanFileInfo info
 	) {
-		// Provisional: reflecting ACLs into the DB is not implemented.
-		return DokanResult.NotImplemented;
+		this.SetAuditContext(ref info);
+		var path = NormalizePath(fileNamePtr);
+		var inode = this.Resolve(path, ref info);
+		if (inode == null) {
+			return DokanResult.FileNotFound;
+		}
+		try {
+			if (!FileSystemUtils.ApplySecurity(inode, security, sections, this.users, this.api)) {
+				return DokanResult.Error;
+			}
+			return DokanResult.Success;
+		} catch (Exception ex) {
+			Lib.Logging.Logger.Warning("SetFileSecurity failed: ", path, " ", ex.Message);
+			return DokanResult.Error;
+		}
 	}
 
 	// ------------------------------------------------------------------

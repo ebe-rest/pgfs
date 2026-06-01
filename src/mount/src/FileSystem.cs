@@ -1,10 +1,12 @@
 namespace Pgfs.Mount;
 
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Lib.Api;
 using Lib.Logging;
 using Lib.Models;
+using Lib.Utility;
 using Tmds.Fuse;
 using Tmds.Linux;
 using static Tmds.Linux.LibC;
@@ -40,7 +42,8 @@ public sealed class FileSystem : FuseFileSystemBase
 		if (string.IsNullOrEmpty(name)) {
 			name = "pgfs";
 		}
-		this.defaultUname = name;
+		// The owner name of a new inode is normalized before storage too (docs/permission-interop.md).
+		this.defaultUname = NameNormalizer.Normalize(name);
 		// The gname for a new inode is resolved from the running process's gid.
 		var processGid = (uint)getgid();
 		this.defaultGname = this.users.GnameOf(processGid);
@@ -605,6 +608,23 @@ public sealed class FileSystem : FuseFileSystemBase
 			if (inode == null) {
 				return -ENOENT;
 			}
+			// POSIX ACL (system.posix_acl_access) is synthesized from st_mode + the canonical ACL.
+			// A "minimal ACL" with no named entries returns ENODATA, matching the convention that getfacl derives it from mode.
+			if (n == PosixAclAccessName) {
+				var acl = this.LoadPgfsAcl(inode.Id);
+				if (acl == null || acl.Entries.Count == 0) {
+					return -61;
+				}
+				var blob = this.BuildPosixAccessAcl(inode, acl);
+				if (data.Length == 0) {
+					return blob.Length;
+				}
+				if (blob.Length > data.Length) {
+					return -34;
+				}
+				blob.AsSpan().CopyTo(data);
+				return blob.Length;
+			}
 			var value = this.api.GetXAttr(inode.Id, n);
 			if (value == null) {
 				// ENODATA / ENOATTR is 61 on Linux.
@@ -632,6 +652,10 @@ public sealed class FileSystem : FuseFileSystemBase
 			var inode = this.api.GetByPath(p);
 			if (inode == null) {
 				return -ENOENT;
+			}
+			// POSIX ACL (system.posix_acl_access) is reverse-projected into st_mode base 3 classes + canonical ACL named entries.
+			if (n == PosixAclAccessName) {
+				return this.SetPosixAccessAcl(inode, data);
 			}
 			// XATTR_CREATE = 1, XATTR_REPLACE = 2 (Linux-specific constants).
 			const int XATTR_CREATE = 1;
@@ -696,6 +720,11 @@ public sealed class FileSystem : FuseFileSystemBase
 			if (inode == null) {
 				return -ENOENT;
 			}
+			// Removing the extended ACL (setfacl -b) = clear the named entries of the canonical ACL (keep the mode).
+			if (n == PosixAclAccessName) {
+				this.api.SetXAttr(inode.Id, PgfsAclXattrKey, new PgfsAcl().ToBytes(), false, false);
+				return 0;
+			}
 			if (!this.api.RemoveXAttr(inode.Id, n)) {
 				return -61; // ENODATA
 			}
@@ -704,6 +733,115 @@ public sealed class FileSystem : FuseFileSystemBase
 			Logger.Error("RemoveXAttr failed: ", p, " ", n, " ", ex);
 			return -EIO;
 		}
+	}
+
+	// ------------------------------------------------------------------
+	// POSIX ACL <-> canonical ACL (docs/permission-interop.md)
+	// ------------------------------------------------------------------
+
+	private const string PosixAclAccessName = "system.posix_acl_access";
+	private const string PgfsAclXattrKey = "user.pgfs_acl";
+
+	private PgfsAcl? LoadPgfsAcl(long inodeId) {
+		var raw = this.api.GetXAttr(inodeId, PgfsAclXattrKey);
+		if (raw == null) {
+			return null;
+		}
+		return PgfsAcl.Parse(raw);
+	}
+
+	/// <summary>Synthesizes the POSIX ACL binary from st_mode base 3 classes + the canonical ACL named entries (named expected). Order: USER_OBJ->USER*->GROUP_OBJ->GROUP*->MASK->OTHER.</summary>
+	private byte[] BuildPosixAccessAcl(Inode inode, PgfsAcl acl) {
+		var mode = inode.Mode;
+		var entries = new List<PosixAclEntry>();
+		entries.Add(new PosixAclEntry { Tag = PosixAcl.TagUserObj, Id = PosixAcl.UndefinedId,
+			Perm = PosixAcl.PermFromRwx((mode & Mode.S_IRUSR) != 0, (mode & Mode.S_IWUSR) != 0, (mode & Mode.S_IXUSR) != 0) });
+		foreach (var e in acl.Entries) {
+			if (e.PrincipalType == "user") {
+				entries.Add(new PosixAclEntry { Tag = PosixAcl.TagUser, Id = this.users.UidOf(e.PrincipalName),
+					Perm = PosixAcl.PermFromRwx(e.CanRead, e.CanWrite, e.CanExecute) });
+			}
+		}
+		entries.Add(new PosixAclEntry { Tag = PosixAcl.TagGroupObj, Id = PosixAcl.UndefinedId,
+			Perm = PosixAcl.PermFromRwx((mode & Mode.S_IRGRP) != 0, (mode & Mode.S_IWGRP) != 0, (mode & Mode.S_IXGRP) != 0) });
+		foreach (var e in acl.Entries) {
+			if (e.PrincipalType == "group") {
+				entries.Add(new PosixAclEntry { Tag = PosixAcl.TagGroup, Id = this.users.GidOf(e.PrincipalName),
+					Perm = PosixAcl.PermFromRwx(e.CanRead, e.CanWrite, e.CanExecute) });
+			}
+		}
+		// mask = group_obj union of all named perms.
+		ushort mask = PosixAcl.PermFromRwx((mode & Mode.S_IRGRP) != 0, (mode & Mode.S_IWGRP) != 0, (mode & Mode.S_IXGRP) != 0);
+		foreach (var e in acl.Entries) {
+			mask |= PosixAcl.PermFromRwx(e.CanRead, e.CanWrite, e.CanExecute);
+		}
+		entries.Add(new PosixAclEntry { Tag = PosixAcl.TagMask, Id = PosixAcl.UndefinedId, Perm = mask });
+		entries.Add(new PosixAclEntry { Tag = PosixAcl.TagOther, Id = PosixAcl.UndefinedId,
+			Perm = PosixAcl.PermFromRwx((mode & Mode.S_IROTH) != 0, (mode & Mode.S_IWOTH) != 0, (mode & Mode.S_IXOTH) != 0) });
+		return PosixAcl.Build(entries);
+	}
+
+	/// <summary>Reverse-projects the POSIX ACL binary into st_mode base 3 classes + canonical ACL named entries. The mask is not stored; it is recomputed on read.</summary>
+	private int SetPosixAccessAcl(Inode inode, ReadOnlySpan<byte> data) {
+		var entries = PosixAcl.Parse(data);
+		if (entries == null) {
+			return -22; // EINVAL
+		}
+		var ownerBits = 0;
+		var groupBits = 0;
+		var otherBits = 0;
+		var acl = new PgfsAcl();
+		foreach (var e in entries) {
+			if (e.Tag == PosixAcl.TagUserObj) {
+				ownerBits = ClassBits(e.Perm, Mode.S_IRUSR, Mode.S_IWUSR, Mode.S_IXUSR);
+				continue;
+			}
+			if (e.Tag == PosixAcl.TagGroupObj) {
+				groupBits = ClassBits(e.Perm, Mode.S_IRGRP, Mode.S_IWGRP, Mode.S_IXGRP);
+				continue;
+			}
+			if (e.Tag == PosixAcl.TagOther) {
+				otherBits = ClassBits(e.Perm, Mode.S_IROTH, Mode.S_IWOTH, Mode.S_IXOTH);
+				continue;
+			}
+			if (e.Tag == PosixAcl.TagMask) {
+				continue;
+			}
+			if (e.Tag == PosixAcl.TagUser) {
+				acl.Entries.Add(new PgfsAclEntry { PrincipalType = "user", PrincipalName = this.users.UnameOf(e.Id), Rights = RwxFromPerm(e.Perm) });
+				continue;
+			}
+			if (e.Tag == PosixAcl.TagGroup) {
+				acl.Entries.Add(new PgfsAclEntry { PrincipalType = "group", PrincipalName = this.users.GnameOf(e.Id), Rights = RwxFromPerm(e.Perm) });
+				continue;
+			}
+		}
+		var newMode = (inode.Mode & ~0x1FF) | ownerBits | groupBits | otherBits;
+		if (newMode != inode.Mode) {
+			if (!this.api.UpdateMode(inode.Id, newMode)) {
+				return -EIO;
+			}
+		}
+		this.api.SetXAttr(inode.Id, PgfsAclXattrKey, acl.ToBytes(), false, false);
+		return 0;
+	}
+
+	private static int ClassBits(ushort perm, int rb, int wb, int xb) {
+		var bits = 0;
+		if ((perm & PosixAcl.PermRead) != 0) { bits |= rb; }
+		if ((perm & PosixAcl.PermWrite) != 0) { bits |= wb; }
+		if ((perm & PosixAcl.PermExec) != 0) { bits |= xb; }
+		return bits;
+	}
+
+	private static string RwxFromPerm(ushort perm) {
+		var rc = '-';
+		if ((perm & PosixAcl.PermRead) != 0) { rc = 'r'; }
+		var wc = '-';
+		if ((perm & PosixAcl.PermWrite) != 0) { wc = 'w'; }
+		var xc = '-';
+		if ((perm & PosixAcl.PermExec) != 0) { xc = 'x'; }
+		return new string(new[] { rc, wc, xc });
 	}
 
 	// ------------------------------------------------------------------

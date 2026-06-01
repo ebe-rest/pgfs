@@ -3,6 +3,7 @@ namespace Pgfs.Mount;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using Lib.Logging;
+using Lib.Utility;
 
 /// <summary>
 /// P/Invokes the Linux/macOS <c>libc</c> getpwnam/getpwuid/getgrnam/getgrgid to convert between
@@ -34,11 +35,12 @@ internal sealed class UserResolver
 	private readonly ConcurrentDictionary<uint, string> gidToGname = new();
 
 	public UserResolver(string fallbackUname, string fallbackGname) {
-		this.defaultUname = fallbackUname;
-		this.defaultGname = fallbackGname;
+		// Name normalization (docs/permission-interop.md). The fallback names are normalized too, for both storage and resolution.
+		this.defaultUname = NameNormalizer.Normalize(fallbackUname);
+		this.defaultGname = NameNormalizer.Normalize(fallbackGname);
 		// Resolve uid / gid from the fallback names once at startup and pin them, so getpwnam is not called on every request.
-		this.defaultUid = ResolveUidNow(fallbackUname) ?? FallbackUidWithWarning(fallbackUname);
-		this.defaultGid = ResolveGidNow(fallbackGname) ?? FallbackGidWithWarning(fallbackGname);
+		this.defaultUid = ResolveUidNow(this.defaultUname) ?? FallbackUidWithWarning(this.defaultUname);
+		this.defaultGid = ResolveGidNow(this.defaultGname) ?? FallbackGidWithWarning(this.defaultGname);
 	}
 
 	private static uint FallbackUidWithWarning(string uname) {
@@ -69,17 +71,19 @@ internal sealed class UserResolver
 		return gr.gr_gid;
 	}
 
-	/// <summary>uname -&gt; uid. Falls back to defaultUid (the fallback uname's uid) if unresolved.</summary>
+	/// <summary>uname -&gt; uid. The input name is normalized first. Falls back to defaultUid (the fallback uname's uid) if unresolved.</summary>
 	public uint UidOf(string uname) {
-		return this.unameToUid.GetOrAdd(uname, n => ResolveUidNow(n) ?? this.defaultUid);
+		var key = NameNormalizer.Normalize(uname);
+		return this.unameToUid.GetOrAdd(key, n => ResolveUidNow(n) ?? this.defaultUid);
 	}
 
-	/// <summary>gname -&gt; gid. Falls back to defaultGid (the fallback gname's gid) if unresolved.</summary>
+	/// <summary>gname -&gt; gid. The input name is normalized first. Falls back to defaultGid (the fallback gname's gid) if unresolved.</summary>
 	public uint GidOf(string gname) {
-		return this.gnameToGid.GetOrAdd(gname, n => ResolveGidNow(n) ?? this.defaultGid);
+		var key = NameNormalizer.Normalize(gname);
+		return this.gnameToGid.GetOrAdd(key, n => ResolveGidNow(n) ?? this.defaultGid);
 	}
 
-	/// <summary>uid -&gt; uname. Falls back to defaultUname if unresolved.</summary>
+	/// <summary>uid -&gt; uname. The OS-derived name is normalized before returning. Falls back to defaultUname if unresolved.</summary>
 	public string UnameOf(uint uid) {
 		return this.uidToUname.GetOrAdd(uid, id => {
 			var ptr = getpwuid(id);
@@ -88,11 +92,11 @@ internal sealed class UserResolver
 			}
 			var pw = Marshal.PtrToStructure<passwd>(ptr);
 			var s = Marshal.PtrToStringUTF8(pw.pw_name) ?? this.defaultUname;
-			return s;
+			return NameNormalizer.Normalize(s);
 		});
 	}
 
-	/// <summary>gid -&gt; gname. Falls back to defaultGname if unresolved.</summary>
+	/// <summary>gid -&gt; gname. The OS-derived name is normalized before returning. Falls back to defaultGname if unresolved.</summary>
 	public string GnameOf(uint gid) {
 		return this.gidToGname.GetOrAdd(gid, id => {
 			var ptr = getgrgid(id);
@@ -101,7 +105,7 @@ internal sealed class UserResolver
 			}
 			var gr = Marshal.PtrToStructure<group>(ptr);
 			var s = Marshal.PtrToStringUTF8(gr.gr_name) ?? this.defaultGname;
-			return s;
+			return NameNormalizer.Normalize(s);
 		});
 	}
 
