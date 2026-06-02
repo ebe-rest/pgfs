@@ -500,9 +500,20 @@ public sealed class ConfigLoader
 
 	private void AssignPositional(int index, string value) {
 		switch (index) {
-			case 0:
-				// positional[0] (source) is connection / setting.file. Not handled in the Mount scope.
+			case 0: {
+				// positional[0] (source = fstab column 1). A `postgresql://` URL is treated as
+				// database.connection, anything else as setting.file (a TOML path). Do not overwrite
+				// if an explicit flag (-c / -f / -o) already set it (CLI takes precedence over positional).
+				var srcKey = Schema.Setting.File.FullKey;
+				if (value.StartsWith("postgresql:", System.StringComparison.OrdinalIgnoreCase)
+					|| value.StartsWith("postgres:", System.StringComparison.OrdinalIgnoreCase)) {
+					srcKey = Schema.Database.Connection.FullKey;
+				}
+				if (!this.rawByFullKey.ContainsKey(srcKey)) {
+					this.rawByFullKey[srcKey] = value;
+				}
 				return;
+			}
 			case 1: {
 				// positional[1] (target) → mount.mount_point. Do not overwrite if it already came from CLI/TOML/DB.
 				var fullKey = Schema.Mount.MountPoint.FullKey;
