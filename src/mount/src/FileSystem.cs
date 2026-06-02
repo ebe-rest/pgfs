@@ -105,11 +105,21 @@ public sealed class FileSystem : FuseFileSystemBase
 	}
 
 	/// <summary>
-	/// Determines the uname/gname to use when creating a new inode, from the current process.
+	/// Determines the uname/gname to use when creating a new inode, from the "caller" of that operation
+	/// (the uid/gid from fuse_get_context). This makes the creating user the owner even under a root mount
+	/// (fstab / sudo mount). Falls back to the process default (defaultUname/defaultGname) only when the
+	/// caller cannot be obtained or resolved.
 	/// </summary>
-	// Windows-shareable: "get the current user name" is a concept shared by both OSes.
-	//                    Only the getuid() call is Linux-specific.
+	// Windows-shareable: "make the creator the owner" is a concept shared by both OSes.
+	//                    Only the fuse_get_context call is Linux-specific.
 	private (string uname, string gname) CurrentUserNames() {
+		if (Fuse.TryGetCallerContext(out var uid, out var gid, out _)) {
+			// Normalize the stored name (docs/permission-interop.md), same rule as defaultUname.
+			var uname = NameNormalizer.Normalize(this.users.UnameOf(uid));
+			if (!string.IsNullOrEmpty(uname)) {
+				return (uname, this.users.GnameOf(gid));
+			}
+		}
 		return (this.defaultUname, this.defaultGname);
 	}
 
