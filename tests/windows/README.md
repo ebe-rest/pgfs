@@ -47,7 +47,7 @@ Issues found while building out the tests. The e2e suite works around them (call
 
 ## Status
 
-The suite has 24 tests and passes 24/24 against a single PostgreSQL and a single-node Citus.
+**26 passed / 0 failed / 0 skipped — ALL PASSED** against a single PostgreSQL and a single-node Citus (the ACL projection `test_getfilesecurity_projection` / reverse `test_setfilesecurity_roundtrip` were added).
 
 ## Not covered
 
@@ -192,7 +192,7 @@ PASS: test_nested_directories
 ...
 
 ===========================================
-Results: 24 passed, 0 failed, 0 skipped (out of 24)
+Results: 26 passed, 0 failed, 0 skipped (out of 26)
 
 === unmount ===
   ...\dokanctl.exe /u P:

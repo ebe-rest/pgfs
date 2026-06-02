@@ -448,6 +448,31 @@ test_xattr_overwrite() {
 	pass
 }
 
+# --- POSIX ACL (setfacl / getfacl) ---
+
+test_posix_acl_named_user() {
+	if ! command -v setfacl >/dev/null 2>&1 || ! command -v getfacl >/dev/null 2>&1; then
+		skip "setfacl/getfacl not installed (apt install acl)"
+		return
+	fi
+	local f="$TEST_ROOT/t74_acl.txt"
+	echo "acl" > "$f"
+	# Grant r-x to the named user 'nobody' (routed through system.posix_acl_access).
+	setfacl -m u:nobody:r-x "$f" 2>/dev/null || { fail "setfacl -m"; return; }
+	local line=$(getfacl -c "$f" 2>/dev/null | grep '^user:nobody:')
+	case "$line" in
+		user:nobody:r-x*) ;;
+		*) fail "named user acl entry: got '$line'"; return ;;
+	esac
+	# Removing the extended ACL drops the named entry (setfacl -b).
+	setfacl -b "$f" 2>/dev/null || { fail "setfacl -b"; return; }
+	if getfacl -c "$f" 2>/dev/null | grep -q '^user:nobody:'; then
+		fail "named acl survived setfacl -b"
+		return
+	fi
+	pass
+}
+
 # --- metadata ---
 
 test_statfs() {
@@ -667,6 +692,9 @@ run test_xattr_set_get
 run test_xattr_list
 run test_xattr_remove
 run test_xattr_overwrite
+
+# POSIX ACL
+run test_posix_acl_named_user
 
 # metadata
 run test_statfs

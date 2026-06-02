@@ -533,6 +533,53 @@ function test_volume_info {
 	Pass
 }
 
+function test_getfilesecurity_projection {
+	# GetFileSecurity: project the inode's uname/gname/mode onto a Windows security descriptor.
+	# Confirm Get-Acl returns (a) owner = the POSIX owner name (= the current user) and (b) a non-empty DACL.
+	$f = Join-Path $TestRoot "t60_acl.txt"
+	Write-Text $f "acl"
+	$acl = Get-Acl -LiteralPath $f
+	if ($null -eq $acl) { Fail "Get-Acl returned null"; return }
+	if ([string]::IsNullOrEmpty($acl.Owner)) { Fail "owner is empty (projection missing?)"; return }
+	# The owner should resolve to the creator = the current user (normalization + SID projection).
+	$me = $env:USERNAME
+	if ($acl.Owner -notmatch [regex]::Escape($me)) {
+		Fail "owner '$($acl.Owner)' does not contain current user '$me'"
+		return
+	}
+	# The DACL should carry at least one projected ACE (owner/group/Everyone).
+	$rules = @($acl.Access)
+	if ($rules.Count -lt 1) {
+		Fail "DACL has no access rules (projection missing?)"
+		return
+	}
+	Remove-Item -LiteralPath $f
+	Pass
+}
+
+function test_setfilesecurity_roundtrip {
+	# SetFileSecurity: change the DACL to owner=Read only -> the owner loses 'w' in st_mode and
+	# the file becomes ReadOnly, confirming the SD -> mode reverse projection takes effect.
+	$f = Join-Path $TestRoot "t61_setacl.txt"
+	Write-Text $f "setacl"
+	$acl = Get-Acl -LiteralPath $f
+	foreach ($r in @($acl.Access)) { [void]$acl.RemoveAccessRule($r) }
+	$me = New-Object System.Security.Principal.NTAccount($env:USERNAME)
+	$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($me, [System.Security.AccessControl.FileSystemRights]::Read, [System.Security.AccessControl.AccessControlType]::Allow)
+	$acl.SetAccessRule($rule)
+	Set-Acl -LiteralPath $f -AclObject $acl
+	if (-not $?) { Fail "Set-Acl failed"; return }
+	$attrs = [System.IO.File]::GetAttributes($f)
+	if (($attrs -band [System.IO.FileAttributes]::ReadOnly) -eq 0) {
+		Fail "expected ReadOnly after owner=Read-only DACL, got $attrs"
+		return
+	}
+	# Cleanup: restore the write permission and delete.
+	[System.IO.File]::SetAttributes($f, [System.IO.FileAttributes]::Normal)
+	Remove-Item -LiteralPath $f -Force
+	Pass
+}
+
 function test_wildcard_pattern {
 	# FindFilesWithPattern: -Filter calls Dokan's FindFilesWithPattern.
 	$d = Join-Path $TestRoot "t50_pat"
@@ -688,6 +735,8 @@ try {
 
 	# volume / pattern
 	Invoke-Test test_volume_info
+	Invoke-Test test_getfilesecurity_projection
+	Invoke-Test test_setfilesecurity_roundtrip
 	Invoke-Test test_wildcard_pattern
 
 	# concurrent access

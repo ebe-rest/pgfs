@@ -55,6 +55,11 @@ Where the entity POCOs corresponding to one DB row live. The configuration model
 - the audit fields (`id`, `created_at`, `created_by`, `updated_at`, `updated_by`) are shared in `Base` (it exposes both lowercase and uppercase properties for Dapper)
 - `Inode.cs` / `Data.cs` / `Chunk.cs` are the POCOs representing one row of `pgfs_inode` / `pgfs_data` / `pgfs_data_chunk` respectively
 
+**Audit / ACL models**: `AuditOp.cs`, `AuditContext.cs`, `PgfsAcl.cs`, `PosixAcl.cs`
+- `AuditOp.cs` (op string constants) / `AuditContext.cs` (caller ambient context) — for the audit log ([audit-log.md](audit-log.md))
+- `PgfsAcl.cs` the canonical ACL document (the JSON of the `user.pgfs_acl` xattr: named `entries[]` / `default[]`). The common canonical model bridging Windows DACL ⇔ Linux POSIX ACL
+- `PosixAcl.cs` the codec for the Linux `system.posix_acl_access` xattr binary (Parse/Build of the header + entry array). Design in [permission-interop.md](permission-interop.md)
+
 **LoggingOutput-related enums**: `SettingLoggingKind.cs` (Flags: None/Stderr/Stdout/File), `SettingLoggingCycle.cs` (None/Hourly/Daily/Monthly), `SettingLoggingOutput.cs` (a POCO bundling the previous two)
 - these stay in Models because [`LoggingOutputField`](../src/lib/src/Config/Field.cs) references them as a type (a possible move target is `Pgfs.Lib.Logging`, but this file describes "the log format", not "the log output itself", so the current location is the safer choice)
 
@@ -92,7 +97,8 @@ Persistence convention on change: right after the caller does `config.X.Y = newV
 - **`PathParser.cs`** decomposes a path into drive / root / name elements, and can rebuild with a different separator, detect wildcard positions, and insert before/after. Each part is lazily evaluated with `Lazy<>`. A relatively well-built component. **Caution**: `PathParser.FromPath(path)` uses the OS default separator (`Path.DirectorySeparatorChar`). Paths flowing to `Api` / `InodeCache` are always normalized to `/`-separated, so when calling it inside Lib always be explicit with `PathParser.FromPath(path, "/")`.
 - **`Pg.cs`** a Dapper + Npgsql wrapper (`Query`, `QueryAsync`, `Execute`, `ExecuteAsync`). Caches an `NpgsqlDataSource` per connection string (the same connection string returns the same data source; pooling is managed inside the data source). `QuoteIdentifier` / `QuoteLiteral` escape. SQL appears in `Logger.Trace` (guarded by an early return on `Logger.IsTraceEnabled` inside `TraceQuery`, skipping `Regex.Replace` / `JsonSerializer.Serialize` when Trace is off). It provides the `Pg.OpenConnection` + `using var tx = conn.BeginTransaction()` pattern and a `Pg.WithTransaction<T>` helper (when dealing with `Span<byte>`, which is a ref struct and cannot be captured in a lambda, use `OpenConnection` directly).
 - **`ServiceResolver.cs`** service-name ↔ port conversion via `/etc/services` or Win32 `getservbyname`.
-- `Indexer.cs` (`ReadOnlyIndexer<,>` / `ReadOnlyIndexer<,,>` used by `PathParser`, `Pg`), `Fn.cs`, `String.cs`, `Json.cs` — various helpers.
+- **`NameNormalizer.cs`** normalizes owner/group/principal names (fullwidth ASCII → halfwidth + domain stripping of `\` and `@` + lowercasing). Applied to stored names, matching, and caller names so both OSes treat case and width identically (see [permission-interop.md](permission-interop.md)).
+- `Indexer.cs` (`ReadOnlyIndexer<,>` / `ReadOnlyIndexer<,,>` used by `PathParser`, `Pg`), `Fn.cs`, `String.cs`, `Json.cs`, `Retry.cs` — various helpers.
 
 ### Collections ([src/lib/src/Collections/](../src/lib/src/Collections/))
 

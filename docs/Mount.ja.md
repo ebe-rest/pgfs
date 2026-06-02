@@ -127,10 +127,11 @@ mount.pgfs が特に使うのは:
 | `Read` | ✅ | `Api.ReadData`（bytea チャンク経由、穴は 0 埋め） |
 | `Write` | ✅ | `Api.WriteData`（bytea チャンク経由、初回時は data 行を自動作成） |
 | `StatFS` | ✅ | `pg_database_size` を実使用量に |
-| `GetXAttr` | ✅ | `pgfs_inode.xattrs` JSONB から `->>` で取得、値は Base64 で復号 |
-| `SetXAttr` | ✅ | JSONB を `||` でマージ、`XATTR_CREATE` / `XATTR_REPLACE` フラグ尊重 |
+| `GetXAttr` | ✅ | `pgfs_inode.xattrs` JSONB から `->>` で取得、値は Base64 で復号。`system.posix_acl_access` は特別扱い (下記 ACL) |
+| `SetXAttr` | ✅ | JSONB を `||` でマージ、`XATTR_CREATE` / `XATTR_REPLACE` フラグ尊重。`system.posix_acl_access` は特別扱い |
 | `ListXAttr` | ✅ | `jsonb_object_keys` で列挙、NUL 終端形式で返す |
-| `RemoveXAttr` | ✅ | JSONB から `-` 演算子で削除 |
+| `RemoveXAttr` | ✅ | JSONB から `-` 演算子で削除。`system.posix_acl_access` は named を空に (setfacl -b 相当) |
+| POSIX ACL (`system.posix_acl_access`) | ✅ | setfacl/getfacl と往復。`st_mode` 基本3クラス + 正準 ACL (`user.pgfs_acl` の named) ⇄ ACL バイナリ。mask 自動算出、named 無しは ENODATA。Windows DACL と同じ正準ストアを共有 (下記 ACL / [permission-interop.md](permission-interop.md)) |
 | `SymLink` | ✅ | `Api.CreateSymlink`（`S_IFLNK | 0777`, `link_target` 列に格納） |
 | `ReadLink` | ✅ | `inode.LinkTarget` を NUL 終端で返す |
 | `Link` | ✅ | `Api.CreateHardLink`（同じ `data_id` の inode を追加、`st_nlink` を全リンクで更新） |
@@ -221,6 +222,18 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 - シンボリックリンクは `link_target` 列に格納 (`Api.CreateSymlink`)。`ReadLink` は NUL 終端で返す。
 - ハードリンクは同じ `data_id` を共有する複数 inode を作成 (`Api.CreateHardLink`)。`st_nlink` は全リンクで同期更新。
 
+### POSIX ACL (`system.posix_acl_access`)
+
+`setfacl` / `getfacl` と往復する。`system.posix_acl_access` の getxattr/setxattr を特別扱いし、ACL バイナリと
+**`st_mode` の基本3クラス + 正準 ACL ドキュメント (`user.pgfs_acl` の named エントリ)** を相互変換する
+([src/mount/src/FileSystem.cs](../src/mount/src/FileSystem.cs) の `BuildPosixAccessAcl` / `SetPosixAccessAcl`、コーデックは
+[PosixAcl](../src/lib/src/Models/PosixAcl.cs))。
+
+- entry 順は USER_OBJ → USER* → GROUP_OBJ → GROUP* → MASK → OTHER。mask は group_obj ∪ 全 named を都度再計算。
+- named エントリが無い「最小 ACL」は ENODATA を返し、getfacl が mode から導出する慣習に合わせる。
+- この正準ストアは Windows の DACL (`Get/SetFileSecurity`) と共有される。POSIX 正準・Windows 投影ビューの設計は
+  [permission-interop.md](permission-interop.md)。`system.posix_acl_default` は現状パススルー (Linux 内 round-trip のみ)。
+
 ### `st_atime`
 
 要件: 最終アクセス時刻は保持せず、`st_mtime` と同じ値を返す。実装もそのとおりです (`FillStat` で `s.st_atim = mtime.ToTimespec()`)。
@@ -237,13 +250,14 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 
 | 項目 | 状態 | メモ |
 |---|---|---|
-| データ I/O (Read/Write) | ✅ | `Api.ReadData` / `Api.WriteData` を bytea チャンクで実装 |
+| データ I/O (Read/Write) | ✅ | `Api.ReadData` / `Api.WriteData` を `pgfs_data_chunk` の `bytea` チャンクで実装 |
 | `uid/gid` ↔ `uname/gname` の双方向解決 | ✅ | [src/mount/src/UserResolver.cs](../src/mount/src/UserResolver.cs) で libc P/Invoke |
 | `Chown` の uname/gname 反映 | ✅ | `Api.UpdateOwner` を呼ぶ。`uid == -1` は変更しない慣習も尊重 |
 | 拡張属性 (xattr) | ✅ | `Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr` 実装。値は Base64 で JSONB に格納 |
 | シンボリックリンク | ✅ | `Api.CreateSymlink` / `ReadLink` 実装 |
 | ハードリンク | ✅ | `Api.CreateHardLink` 実装。`Unlink` で残り inode の `st_nlink` を更新 |
-| Truncate のチャンク削減 | ✅ | `Api.TruncateData` が新サイズを超えるチャンクを DELETE し、末端は `substring` で切り詰め |
+| Truncate のチャンク削減 | ✅ | `Api.TruncateData` が新サイズを超える `bytea` チャンク行を削除し、末端チャンクを `substring` / `overlay` で詰める |
+| POSIX ACL (setfacl/getfacl) | ✅ | `system.posix_acl_access` ⇄ `st_mode` + 正準 ACL (`user.pgfs_acl`)。Windows DACL と同じ正準ストアを共有。詳細は上記「POSIX ACL」/ [permission-interop.md](permission-interop.md)。named ACL の厳密 enforce は要件待ち |
 | macOS 動作確認 | ❌ | Tmds.Fuse の macOS 対応次第。macFUSE が必要 |
 | アクセスチェック (`Access`) | ❌ | 当面マウント時に `default_permissions` を渡せばカーネル側で判断される想定 |
 | Mount オプション `-o` | ⚠️ | fstab `-o ...` で受け取ったフラグは転送する。整理した既定セットは順次拡充 |

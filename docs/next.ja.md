@@ -11,8 +11,8 @@
 | # | 項目 | 内容 | 規模感 |
 |---|---|---|---|
 | 1 | **Mount オプション `-o`** | mount.pgfs の `-o key=val,flag,...` を Linux 側でフル対応 (Assign 側にも検討余地)。コアパーサは [ConfigLoader.cs](../src/lib/src/Config/ConfigLoader.cs) に既にあるので、残るは「未知 key の警告整流」と「`-o ro` 等の典型 mount option 互換マップ」 | 小〜中 |
-| 2 | **xattr バイト列透過** | 現状は JSONB 内で Base64 経由 ([Api.cs](../src/lib/src/Api/Api.cs) `EncodeXattrValue`/`DecodeXattrValue`)。SELinux 等の任意バイナリ xattr が来たときの分岐 + テストケース追加 | 中 (Schema 改修あり) |
-| 3 | **ACL 永続化** (Windows) | DokanNet の `GetFileSecurity` / `SetFileSecurity` を `pgfs_inode.xattrs` (もしくは別カラム) に乗せる。現状 `NotImplemented` ([docs/Assign.ja.md](Assign.ja.md) TODO 表参照) | 中 |
+| 2 | **xattr バイト列透過** | 現状は JSONB 内で Base64 経由 ([Api.cs](../src/lib/src/Api/Api.cs) `EncodeXattrValue`/`DecodeXattrValue`)。SELinux 等の任意バイナリ xattr が来たときの分岐 + テストケース追加。ACL を xattr で配送する経路 (POSIX ACL を `system.posix_acl_access` xattr で配送 — [permission-interop.ja.md](permission-interop.ja.md) 参照) の前提でもある | 中 (Schema 改修あり) |
+| 3 | **ACL / 権限の Linux↔Windows 相互運用** | 設計の正は [docs/permission-interop.ja.md](permission-interop.ja.md) / 図は [permission-interop-diagram.html](permission-interop-diagram.html)。PGFS は名前ベース ACL ストアで、POSIX mode が正準・Windows は投影ビュー。名前ハンドリングの即時項目は実装 + 回帰済み (名前正規化 [NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs) / ドメイン除去 / principal マッピング / `user.win.attrs` JSON / ReadOnly を st_mode で表現)。ACL 本体も実装済み: 正準モデル ([PgfsAcl](../src/lib/src/Models/PgfsAcl.cs))、Windows `GetFileSecurity` 読み投影、`SetFileSecurity` 逆投影 + owner=group ルーティング、Linux POSIX ACL 経路 ([PosixAcl](../src/lib/src/Models/PosixAcl.cs)、`system.posix_acl_access` ⇄ mode + `user.pgfs_acl`)。回帰: Windows 26/26・Linux 35/35・race 4/4。保留: named ACL の厳密 enforce (要件が出てから保留)、`system.posix_acl_default` の Windows 継承変換、cross-OS 往復の自動テスト | 中 |
 | 4 | **Junction** (Assign 側) | `pgfs_inode.is_junction` 列は既にあり、Linux 側は symlink で代替。Windows 側で junction 作成 / 解決 / 削除を IDokanOperations に実装 | 中 |
 | 5 | **ADS (Alternate Data Streams)** (Windows) | NTFS 互換の `:streamname` を Dokan 経由で。データモデル拡張必要 | 大 |
 
@@ -24,7 +24,7 @@
 |---|---|---|
 | 6 | **/etc/fstab 起動時マウント** 手動検証 | `/etc/fstab` 行 + 再起動 / `sudo mount -a` で自動マウントすることを実機確認 (コア実装は済み、詳細は [fstab-support.ja.md](fstab-support.ja.md)) |
 | 7 | **テストの docker 統合** | ホスト依存 (ssh linux_client / pgsql_server) を docker に寄せて再現性を上げる。Linux e2e + Citus 系はフル docker 化可能 (`race_multinode.sh` が雛形)、Windows e2e は Dokan がカーネルドライバなので対象外。分析は [docs/tests.ja.md §docker 統合の検討](tests.ja.md#docker-統合の検討) |
-| 8 | **多ノード Citus 上の Windows e2e** | クロスクライアント排他制御の残検証 ([tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh)) では Linux 34/34 のみ走らせた。Windows 24/24 を docker Citus 経由で走らせる枠は未作成 |
+| 8 | **多ノード Citus 上の Windows e2e** | クロスクライアント排他制御の残検証 ([tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh)) では Linux 35/35 のみ走らせた。Windows 26/26 を docker Citus 経由で走らせる枠は未作成 |
 | 9 | **Linux flow.cmd の harness 出力問題** | PowerShell tool の `Write-Host` が長時間 run で背景化されると stdout に届かない件。flow.ps1 を `Write-Output` 主体に書き換えるか、`*-Information` 経路を使うと harness で見えるようになる |
 
 ## 🔵 コード品質・規約
@@ -57,7 +57,8 @@
 
 本リストの前提・周辺になっている完了項目だけ残す。背景の設計判断は [history.ja.md](history.ja.md) を参照。
 
-- **Citus 対応** (分散 + クロスクライアント排他制御): Large Object → bytea 化、`mkfs --citus [--worker ...]`、`pgfs_lock` + `SELECT FOR UPDATE` 排他制御、多ノード Citus 上で Linux e2e 34/34 + 並行 write/mkdir race + lock 累積妥当。詳細は [support_for_citus.ja.md](support_for_citus.ja.md)、検証は [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh)。**→ 性能改善 #14 / #15 の前提**
+- **Linux↔Windows 権限/ACL 相互運用**: PGFS は名前ベース ACL ストアで、POSIX mode が正準・Windows は投影ビュー。名前ハンドリング (正規化 / ドメイン除去 / principal マッピング / `user.win.attrs` / ReadOnly を st_mode で表現) に加え、ACL 本体経路 (正準 `PgfsAcl`、Windows `GetFileSecurity`/`SetFileSecurity` 投影、Linux POSIX ACL を `system.posix_acl_access` 経由) を実装 + 回帰済み (Windows 26/26・Linux 35/35・race 4/4)。詳細は [permission-interop.ja.md](permission-interop.ja.md)。**→ 機能追加 #2 / #3 の前提**
+- **Citus 対応** (分散 + クロスクライアント排他制御): Large Object → bytea 化、`mkfs --citus [--worker ...]`、`pgfs_lock` + `SELECT FOR UPDATE` 排他制御、多ノード Citus 上で Linux e2e 35/35 + 並行 write/mkdir race + lock 累積妥当。詳細は [support_for_citus.ja.md](support_for_citus.ja.md)、検証は [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh)。**→ 性能改善 #14 / #15 の前提**
 - **設定モデル**: 旧 `*Settings.cs` ツリーを削除、`Pgfs.Lib.Config` (`Field<T>` + `ConfigLoader` + `ConfigStore`) に統一。詳細は [architecture.ja.md §Config](architecture.ja.md)。**→ コード品質 #10/#11/#12 の前提**
 - **監査ログ**: chmod / chown / 削除 / リネーム / 作成 / ハードリンクを専用テーブル `{prefix}audit` (`occurred_at` 月次 RANGE パーティション) に 1 操作 = 1 行で記録、操作と同一 tx。on/off は `audit.enabled` (mkfs `--audit` で初期化)。詳細は [audit-log.ja.md](audit-log.ja.md)。
 - **Notify (LISTEN/NOTIFY)**: cross-client 変更通知 ([src/lib/src/Api/NotifyChannel.cs](../src/lib/src/Api/NotifyChannel.cs))、`database.notify_enabled` opt-in。**→ 多 client 運用の前提**

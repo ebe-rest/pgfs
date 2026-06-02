@@ -11,7 +11,8 @@ Verification scripts for the Citus support (distribution and cross-client lockin
 | [verify.sql](verify.sql) + [verify.cmd](verify.cmd) | Configuration-diagnostic SQL against an empty PGFS that has been `mkfs --clean --citus`'d (= a 1-node Citus on pgsql_server). Checks `citus_tables` / distribution keys / shard placement / EXPLAIN | Windows host -> via ssh pgsql_server |
 | [multinode_probe.sh](multinode_probe.sh) | A one-off probe script to confirm Citus behavior (auto-sync / DDL propagation / shard placement / citus_add_local_table_to_metadata etc.). Spins up a 2-node Citus (coord + worker) in docker and runs 13 sections of probe SQL | linux_client (OK even from a stopped docker daemon; cleaned up via trap) |
 | [test_matrix.sh](test_matrix.sh) | An **18-case** matrix test for mkfs multi-node Citus (3 initial x 6 target). Spins up a 2-node Citus (coord + worker1) in docker and, per case, runs setup -> mkfs -> state verification -> next | linux_client (same as above) |
-| [race_multinode.sh](race_multinode.sh) | Remaining verification for cross-client locking. Spins up a 2-node docker Citus + 2 mount.pgfs and checks, end to end, (i) the Linux e2e 34/34 on multi-node Citus, (ii) cross-client consistency under a concurrent write race (md5/size match), (iii) the EEXIST guarantee under a concurrent mkdir race, (iv) a realistic cumulative size for the pgfs_lock rows | linux_client (same as above) |
+| [race_multinode.sh](race_multinode.sh) | Remaining verification for cross-client locking. Spins up a 2-node docker Citus + 2 mount.pgfs and checks, end to end, (i) the Linux e2e 35/35 on multi-node Citus, (ii) cross-client consistency under a concurrent write race (md5/size match), (iii) the EEXIST guarantee under a concurrent mkdir race, (iv) a realistic cumulative size for the pgfs_lock rows | linux_client (same as above) |
+| [audit.sh](audit.sh) | Audit-log ([docs/audit-log.md](../../docs/audit-log.md)) dedicated test. Spins up a 2-node docker Citus (coord + worker1) + 1 mount.pgfs and checks (A) per-op recording, (B) caller_* (uid/uname/host/ip), (C) automatic partition creation = the month-rollover mechanism, (D) 0 rows when audit.enabled=false. The single-transaction Citus commit is also proven once A/B/C hold | linux_client (same as above) |
 
 ## Common prerequisites
 
@@ -25,8 +26,8 @@ The config constants of each script are overridable via environment variables (`
 | Variable | Default (test_matrix / multinode_probe / race_multinode) | Purpose |
 |---|---|---|
 | `PGFS_PROBE_IMAGE` | `citusdata/citus:latest` | Citus docker image |
-| `COORD_NAME` / `WORKER1_NAME` | `pgfs-citus-{matrix,verify,race}-{coord,worker1}` | container names |
-| `COORD_PORT` / `WORKER1_PORT` | `15432` / `15433` (race uses `15532` / `15533`) | host published ports |
+| `COORD_NAME` / `WORKER1_NAME` | `pgfs-{citus-matrix,verify,race,audit}-{coord,worker1}` | container names |
+| `COORD_PORT` / `WORKER1_PORT` | `15432` / `15433` (race uses `15532` / `15533`, audit uses `15542` / `15543`) | host published ports |
 | `SUPER_USER` / `SUPER_PASSWORD` | `postgres` / `postgres` | super connection (probe uses `PG_USER` / `PG_PASSWORD`) |
 | `PGFS_USER` / `PGFS_PASSWORD` / `PGFS_DB` | `pgfs` | PGFS user / DB |
 | `MKFS_BIN` / `MOUNT_BIN` | `<repo>/bin/Publish/{mkfs,mount}.pgfs` (host-specific) | binaries under test |
@@ -136,7 +137,7 @@ bash tests/citus/race_multinode.sh
 
 | Test | Content | Guarantee verified |
 |---|---|---|
-| Test 1 | The 34 cases of [tests/linux/e2e.sh](../linux/e2e.sh) on multi-node Citus | distribution + locking work on multi-node, with no regression including cross-shard hops |
+| Test 1 | The 35 cases of [tests/linux/e2e.sh](../linux/e2e.sh) on multi-node Citus | distribution + locking work on multi-node, with no regression including cross-shard hops |
 | Test 2 | Concurrent dd from 2 clients to the same file (8MiB x 4 rounds, urandom vs zero) -> md5/size match on both clients | `LockData(dataId)` serializes the writers; combined with the PG row lock there is no chunk-level torn write / cross-client consistency holds |
 | Test 3 | Concurrent mkdir of the same name into the same parent from 2 clients (20 rounds x serial + parallel) | the `(parent_id, name)` UK guarantees cross-shard consistency (even across shards, "two of the same name under the same parent" is impossible from any client) |
 | Test 4 | The `pgfs_lock` row count + relation size after runs 1-3 complete | rows accumulate because we do not DELETE, but ~50 bytes/row x thousands = under 1MB (consistent with the design figure of under 100MB for 1M rows) |
@@ -154,6 +155,41 @@ bash tests/citus/race_multinode.sh
 ### Result
 
 **4/4 PASS** (Citus 14.0.0 + docker on linux_client). pgfs_lock rows=178 / size=768kB.
+
+## audit.sh (audit-log dedicated test)
+
+The audit-log feature ([docs/audit-log.md](../../docs/audit-log.md)) itself and the existing e2e regression already pass. This script verifies the behavior that is **specific** to auditing, as a dedicated test. It spins up coord + worker1 in docker, runs 1 mount.pgfs process, and checks the following 5 items.
+
+```bash
+# on linux_client (the mkfs.pgfs / mount.pgfs binaries are needed under bin/Publish/)
+bash tests/citus/audit.sh
+```
+
+### Checks
+
+| Test | Content | Guarantee verified |
+|---|---|---|
+| Sanity | `pgfs.pgfs_audit` appears in `citus_tables` as `distributed` (distributed by occurred_at); distributed total = 5 | audit is correctly registered as a Citus distributed table |
+| A | Run create/chmod/chown/hardlink/rename/delete through the mount -> at least 1 `pgfs_audit` row per op; inspect the create row's name / detail.kind | the 6 mutating hooks record the expected op in the same transaction |
+| B | The create row's caller_uid / caller_uname match `id -u` / `id -un`; caller_host / caller_ip are non-empty (ip is soft since it is connection-dependent) | the caller info from fuse_get_context is carried correctly |
+| C1 | Right after mkfs there is no current-month partition (`pgfs_audit_YYYY_MM`); the first audit op auto-creates it. There is no DEFAULT partition | ensure-before-insert (= the month-rollover mechanism) works, driven by an op |
+| C2 | A direct INSERT into an uncovered month (2099-01) is rejected by PG -> adding that month's partition with the same DDL lets the INSERT through | backs up the no-DEFAULT design + a month boundary is the same code path with a different key |
+| D | Re-run mkfs without `--audit` -> the same 6 ops record 0 rows in `pgfs_audit` (the table itself is always created) | the `audit.enabled=false` opt-out takes effect |
+
+> **Month-rollover note**: `occurred_at = DateTime.Now` cannot be set to a future month at real time, so the essential mechanism — "ensure the current-month partition before an op if it is absent" — is verified deterministically in two stages: C1 (current-month auto-create) + C2 (adding an arbitrary month's partition makes the INSERT succeed). A real calendar month boundary just runs the same `EnsureAuditPartition` with next month's key (= the same code path).
+
+### How it works
+
+- run 2 PG containers in `--network host` mode listening on 15542/15543 (same reason as test_matrix.sh / race_multinode.sh)
+- Part 1: `mkfs --clean --citus --audit --worker localhost:15543` -> mount -> A/B/C
+- Part 2: unmount -> `mkfs --clean --citus` (without --audit) -> remount -> D
+- DB checks reference `pgfs.pgfs_audit` directly via `docker exec <coord> psql` (super)
+- on exit, a trap runs fusermount3 -> stop docker -> restore the daemon to its original state
+- logs at `/tmp/citus_audit.log` (main) + `/tmp/pgfs_audit.mount.log` (mount.pgfs)
+
+### Result
+
+**12/12 PASS** (Citus docker on linux_client). Breakdown: Sanity (audit distributed registration) / C1-before (current-month partition not yet created + no DEFAULT = 2) / A (per-op recording + create detail = 2) / B (uid+uname / host / ip = 3) / C1-after (auto-create) / C2 (rejected + addition succeeds = 2) / D (0 rows when enabled=false). The caller uid/uname/host and the create row's detail.mode/kind were confirmed.
 
 ## Verifying cross-shard rename
 

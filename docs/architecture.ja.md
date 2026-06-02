@@ -55,6 +55,11 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 - 監査用フィールド (`id`, `created_at`, `created_by`, `updated_at`, `updated_by`) を `Base` で共通化 (Dapper 用に小文字プロパティと大文字プロパティの両方を公開)
 - `Inode.cs` / `Data.cs` / `Chunk.cs` がそれぞれ `pgfs_inode` / `pgfs_data` / `pgfs_data_chunk` の 1 行を表す POCO
 
+**監査・ACL 系**: `AuditOp.cs`, `AuditContext.cs`, `PgfsAcl.cs`, `PosixAcl.cs`
+- `AuditOp.cs` (op 文字列定数) / `AuditContext.cs` (呼び出し元 ambient コンテキスト) — 監査ログ ([audit-log.ja.md](audit-log.ja.md))
+- `PgfsAcl.cs` 正準 ACL ドキュメント (`user.pgfs_acl` xattr の JSON: named `entries[]` / `default[]`)。Windows DACL ⇔ Linux POSIX ACL の共通正準モデル
+- `PosixAcl.cs` Linux `system.posix_acl_access` の xattr バイナリ codec (header + entry 配列の Parse/Build)。設計は [permission-interop.ja.md](permission-interop.ja.md)
+
 **LoggingOutput 関連の Enum 群**: `SettingLoggingKind.cs` (Flags: None/Stderr/Stdout/File), `SettingLoggingCycle.cs` (None/Hourly/Daily/Monthly), `SettingLoggingOutput.cs` (上 2 つを束ねた POCO)
 - [`LoggingOutputField`](../src/lib/src/Config/Field.cs) が型として参照するため Models に残置 (移動先候補としては `Pgfs.Lib.Logging` だが、本ファイルは「log のフォーマット記述」であって「log 出力本体」ではないので現状の置き場が無難)
 
@@ -92,7 +97,8 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 - **`PathParser.cs`** パスをドライブ / ルート / 名前要素に分解し、別の区切り文字での再構築・ワイルドカード位置検出・前後への挿入が可能。`Lazy<>` で各部品を遅延評価。比較的しっかり書けているコンポーネント。**注意**: `PathParser.FromPath(path)` は OS デフォルトのセパレータ (`Path.DirectorySeparatorChar`) を使う。`Api` / `InodeCache` に流れるパスは常に `/` 区切りに正規化されているので、Lib 内部で呼び出すときは必ず `PathParser.FromPath(path, "/")` と明示すること。
 - **`Pg.cs`** Dapper + Npgsql のラッパ（`Query`, `QueryAsync`, `Execute`, `ExecuteAsync`）。`NpgsqlDataSource` を接続文字列ごとにキャッシュ (同じ接続文字列なら同じデータソースが返る。プールはデータソース内部で管理される)。`QuoteIdentifier` / `QuoteLiteral` でエスケープ。SQL は `Logger.Trace` に出る（`TraceQuery` 内で `Logger.IsTraceEnabled` の早期 return ガード済み、Trace 無効時は `Regex.Replace` / `JsonSerializer.Serialize` をスキップ）。`Pg.OpenConnection` + `using var tx = conn.BeginTransaction()` パターンと、`Pg.WithTransaction<T>` ヘルパも提供 (`Span<byte>` を扱うときは ref struct なので lambda にできず、直接 `OpenConnection` を使う)。
 - **`ServiceResolver.cs`** `/etc/services` または Win32 `getservbyname` でサービス名 ↔ ポート変換。
-- `Indexer.cs` (`ReadOnlyIndexer<,>` / `ReadOnlyIndexer<,,>` を `PathParser`, `Pg` で使用), `Fn.cs`, `String.cs`, `Json.cs` 各種ヘルパ。
+- **`NameNormalizer.cs`** owner/group/principal 名の正規化 (全角 ASCII → 半角 + ドメイン除去 `\`・`@` + 小文字化)。保存名・照合・呼び出し元名すべてに適用し、両 OS で大小・全半角を同一視する ([permission-interop.ja.md](permission-interop.ja.md))。
+- `Indexer.cs` (`ReadOnlyIndexer<,>` / `ReadOnlyIndexer<,,>` を `PathParser`, `Pg` で使用), `Fn.cs`, `String.cs`, `Json.cs`, `Retry.cs` 各種ヘルパ。
 
 ### Collections（[src/lib/src/Collections/](../src/lib/src/Collections/)）
 

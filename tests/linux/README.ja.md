@@ -193,7 +193,7 @@ PASS: test_concurrent_mkdir_diff_dirs
 PASS: test_fallback_uname_gname
 
 ===========================================
-Results: 34 passed, 0 failed, 0 skipped (out of 34)
+Results: 35 passed, 0 failed, 0 skipped (out of 35)
 
 === unmount ===
   unmounted
@@ -202,7 +202,9 @@ Results: 34 passed, 0 failed, 0 skipped (out of 34)
   ALL PASSED
 ```
 
-本スイートは 34 件で、単 PG モード / 1 ノード Citus / 多ノード Citus (docker) いずれでも 34/34 通過する。多ノード Citus 検証は [tests/citus/race_multinode.sh](../citus/README.md) 経由。
+## 現状
+
+**35 passed / 0 failed / 0 skipped — ALL PASSED** (単 PG モード + 1 ノード Citus + 多ノード Citus on docker、いずれも 35/35。POSIX ACL `test_posix_acl_named_user` を追加)。多ノード Citus 検証は [tests/citus/race_multinode.sh](../citus/README.md) 経由。
 
 ## 終了コード
 

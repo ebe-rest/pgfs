@@ -119,8 +119,15 @@ chmod / chown / 削除 / リネーム / 作成 / ハードリンクといった 
 
 ## テスト
 
-テスト環境 ([docs/tests.md](tests.md)) で実行する:
+監査ログは 3 レベルで検証する (全体は [docs/tests.md](tests.md) のテストハブを参照)。
 
-- 既存回帰: Linux / Windows e2e が緑のままであること。
-- 追加: 各 op で `pgfs_audit` に期待行が入ること、`audit.enabled=false` で 0 行であること、月跨ぎでパーティションが自動作成されること、caller_* (uid/uname/domain/host/ip) が期待通り入ること。
-- Citus: 多ノード Citus 上で監査有効のまま操作が同一 tx でコミットできること (2PC リスクの検証)。[tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh) の枠組みを流用。
+- **既存回帰**: Linux e2e 35/35・Windows e2e 26/26・Citus race multinode 4/4・Citus mkfs matrix 18/18 が緑のまま (監査有効構成で検証)。
+- **Citus 同一 tx commit**: `Initializer.CreateAuditTableAsync` が `--audit` に関係なく常時テーブルを作成し、`--citus` 時は `occurred_at` で分散する (Citus 分散テーブル数 = 5: inode / data / data_chunk / lock / audit)。多ノード Citus 上で監査有効のまま操作が同一トランザクションでコミットできることを `race_multinode.sh` (4/4) で実証しており、2PC リスクは顕在化しない。
+- **監査専用テスト — [tests/citus/audit.sh](../tests/citus/audit.sh)**: 監査固有の検証を共有 e2e ではなくこの専用スクリプトに分けたため、既存スイートの件数は不変。docker 2 ノード Citus + mount.pgfs × 1 を立て、12 個のチェックを実行し (詳細は [tests/citus/README.md](../tests/citus/README.md))、docker Citus 上で 12/12 PASS する:
+  - **A**: 各 op (create / delete / rename / chmod / chown / hardlink) で `pgfs_audit` に期待行が入る。create 行の `name` / `detail.kind` を精査。
+  - **B**: `caller_uid` / `caller_uname` が呼び出し元の実値 (`fuse_get_context` 経由) と一致し、`caller_host` / `caller_ip` が記録される。
+  - **C1**: mkfs 直後は当月パーティションが無い → 最初の op が ensure-before-insert で自動生成する。DEFAULT パーティションは持たない。
+  - **C2**: 未カバー月への直接 INSERT は拒否される → 同じ DDL でその月のパーティションを足せば INSERT が通る (= 月境界は同一コードパス上の別 key にすぎない)。
+  - **D**: `audit.enabled=false` では 1 行も記録されない。一方でテーブル自体は常時作成される。
+
+> **月跨ぎの注記**: `occurred_at` を実時刻で未来月にはできないため、本質である「当月パーティションが無ければ op 前に ensure する」を C1 (当月の自動生成) + C2 (任意月の追加で INSERT 成立) で決定的に検証する。実カレンダーの月境界は翌月 key で同じ `EnsureAuditPartition` が走るだけ。

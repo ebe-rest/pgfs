@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PGFS Permission / ACL Interop Diagram (Windows &#8596; Linux)</title>
+<style>
+  :root{
+    --win:#1e6fd9; --win-bg:#e8f1fd;
+    --pg:#7b3fbf;  --pg-bg:#f2eafb;
+    --lx:#d97a1e;  --lx-bg:#fdf1e3;
+    --green:#2e9e5b; --gray:#7a7a7a; --red:#d9534f;
+    --ink:#222; --muted:#666; --line:#d8d8d8;
+  }
+  *{box-sizing:border-box;}
+  body{
+    font-family:"Segoe UI","Yu Gothic UI","Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+    color:var(--ink); margin:0; padding:28px; background:#fafafa; line-height:1.6;
+  }
+  .wrap{max-width:1220px;margin:0 auto;}
+  h1{font-size:22px;margin:0 0 4px;}
+  h2{font-size:17px;margin:34px 0 10px;border-left:5px solid var(--pg);padding-left:10px;}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 18px;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px 18px;box-shadow:0 1px 3px rgba(0,0,0,.05);}
+  svg{width:100%;height:auto;display:block;}
+  .legend{display:flex;flex-wrap:wrap;gap:18px;margin:14px 0 0;font-size:13px;}
+  .legend span{display:inline-flex;align-items:center;gap:7px;}
+  .sw{width:34px;height:0;border-top-width:3px;border-top-style:solid;display:inline-block;}
+  table{border-collapse:collapse;width:100%;font-size:13px;background:#fff;}
+  th,td{border:1px solid var(--line);padding:7px 9px;vertical-align:top;text-align:left;}
+  th{background:#f3f0f8;}
+  .cWin{color:var(--win);font-weight:600;}
+  .cPg{color:var(--pg);font-weight:600;}
+  .cLx{color:var(--lx);font-weight:600;}
+  .ok{color:var(--green);font-weight:600;}
+  .part{color:#c08a00;font-weight:600;}
+  .no{color:var(--red);font-weight:600;}
+  .principles{margin:0;padding-left:20px;}
+  .principles li{margin:5px 0;}
+  .note{background:#fff8e1;border:1px solid #f0d98a;border-radius:8px;padding:10px 14px;font-size:13px;margin:14px 0;}
+  code{background:#f0eef5;padding:1px 5px;border-radius:4px;font-size:12.5px;}
+  .star{color:var(--pg);font-weight:700;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>PGFS Permission / Ownership / ACL Interop Diagram</h1>
+  <p class="sub">Windows (attributes + ACL) &#8596; <b>PGFS canonical store</b> &#8596; Linux (permissions + POSIX ACL) &#47; design reference: <code>docs/permission-interop.md</code></p>
+
+  <div class="note">
+    <b>This diagram captures the agreed design (10 items).</b> POSIX is the canonical model and the Windows ACL is a <b>projection view</b> (deny ACEs, ACE ordering, and inheritance flags are not adopted &mdash; they are dropped on projection).
+    <code>GetFileSecurity</code>/<code>SetFileSecurity</code> project and reverse-project between the inode (mode + canonical ACL) and the Windows security descriptor; the Linux side round-trips the same canonical store via <code>system.posix_acl_access</code>. Design reference: <code>docs/permission-interop.md</code>.
+  </div>
+
+  <div class="card" style="border-left:5px solid var(--pg);">
+    <b>Name normalization (shared across all principals &mdash; &#9733; core)</b> &mdash; the same normalization is applied to owner / group / principal names <b>both when storing and when matching</b>, and <b>also to the caller (the access subject) name</b>.
+    <div style="margin-top:8px;font-family:monospace;font-size:13px;background:#f6f3fb;padding:8px 12px;border-radius:6px;">
+      DOMAIN\Alice &nbsp;/&nbsp; ALICE &nbsp;/&nbsp; alice@example.com &nbsp;/&nbsp; &#xFF21;lice &nbsp;&nbsp;&rarr;&nbsp;&nbsp; <b style="color:#7b3fbf;">alice</b>
+    </div>
+    <div style="margin-top:6px;font-size:12.5px;color:#555;">(1) strip domain (<code>\</code> and <code>@domain</code>)&nbsp; &rarr; &nbsp;(2) full-width ASCII &rarr; half-width (U+FF01&ndash;FF5E)&nbsp; &rarr; &nbsp;(3) lowercase. As a result, <b>even on Linux <code>alice</code>=<code>Alice</code>=<code>&#xFF21;lice</code> are treated as identical</b> (Linux's native case-sensitivity is overridden in the pgfs layer).</div>
+  </div>
+
+  <h2>Three-Layer Correspondence</h2>
+  <div class="card">
+  <svg viewBox="0 0 1180 690" role="img" aria-label="Correspondence between the Windows and Linux permission models and the PGFS canonical store">
+    <defs>
+      <marker id="ahG" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse"><path d="M0,0 L9,4.5 L0,9 z" fill="#2e9e5b"/></marker>
+      <marker id="ahK" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse"><path d="M0,0 L9,4.5 L0,9 z" fill="#7a7a7a"/></marker>
+      <marker id="ahR" markerWidth="9" markerHeight="9" refX="7.5" refY="4.5" orient="auto-start-reverse"><path d="M0,0 L9,4.5 L0,9 z" fill="#d9534f"/></marker>
+    </defs>
+
+    <!-- ===== Panels ===== -->
+    <rect x="20"  y="92" width="300" height="500" rx="12" fill="#f4f8fe" stroke="#bcd6f6"/>
+    <rect x="410" y="92" width="360" height="500" rx="12" fill="#f8f3fd" stroke="#d6bdf0"/>
+    <rect x="860" y="92" width="300" height="500" rx="12" fill="#fdf6ec" stroke="#f0d2a6"/>
+
+    <!-- ===== Headers ===== -->
+    <rect x="20"  y="50" width="300" height="34" rx="8" fill="#1e6fd9"/>
+    <text x="170" y="72" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Windows / NTFS</text>
+    <rect x="410" y="50" width="360" height="34" rx="8" fill="#7b3fbf"/>
+    <text x="590" y="72" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">PGFS Canonical Store (pgfs_inode + xattrs)</text>
+    <rect x="860" y="50" width="300" height="34" rx="8" fill="#d97a1e"/>
+    <text x="1010" y="72" text-anchor="middle" fill="#fff" font-size="15" font-weight="700">Linux / POSIX</text>
+
+    <!-- =========================================================== -->
+    <!-- ROW 1: Owner  (y 100..158, mid 129) -->
+    <rect x="35" y="100" width="270" height="58" rx="7" fill="#e8f1fd" stroke="#1e6fd9"/>
+    <text x="48" y="120" font-size="13" font-weight="700" fill="#1e6fd9">Owner SID</text>
+    <text x="48" y="137" font-size="11" fill="#333">User or group</text>
+    <text x="48" y="151" font-size="11" fill="#666">(e.g. BUILTIN\Users is allowed too)</text>
+
+    <rect x="425" y="100" width="330" height="58" rx="7" fill="#f2eafb" stroke="#7b3fbf"/>
+    <text x="438" y="120" font-size="13" font-weight="700" fill="#7b3fbf">uname  TEXT</text>
+    <text x="438" y="138" font-size="11" fill="#333">Name-based. Domain stripped / root &#8644; Administrator</text>
+    <text x="438" y="152" font-size="11" fill="#666">If the Win owner is a group, route it to gname/ACE</text>
+
+    <rect x="875" y="100" width="270" height="58" rx="7" fill="#fdf1e3" stroke="#d97a1e"/>
+    <text x="888" y="120" font-size="13" font-weight="700" fill="#d97a1e">Owner uid</text>
+    <text x="888" y="137" font-size="11" fill="#333">&larr; getpwnam(uname)</text>
+    <text x="888" y="151" font-size="11" fill="#b23b3b">Case-sensitive / mismatch &rarr; nobody</text>
+
+    <line x1="305" y1="129" x2="425" y2="129" stroke="#2e9e5b" stroke-width="2" marker-start="url(#ahG)" marker-end="url(#ahG)"/>
+    <text x="365" y="123" text-anchor="middle" font-size="9" fill="#2e9e5b">SID &#8644; name</text>
+    <line x1="755" y1="129" x2="875" y2="129" stroke="#2e9e5b" stroke-width="2" marker-start="url(#ahG)" marker-end="url(#ahG)"/>
+    <text x="815" y="123" text-anchor="middle" font-size="9" fill="#2e9e5b">name &#8644; uid</text>
+
+    <!-- ROW 2: Group (y 172..230, mid 201) -->
+    <rect x="35" y="172" width="270" height="58" rx="7" fill="#e8f1fd" stroke="#1e6fd9"/>
+    <text x="48" y="192" font-size="13" font-weight="700" fill="#1e6fd9">Primary Group SID</text>
+    <text x="48" y="209" font-size="11" fill="#333">POSIX-compat vestige</text>
+    <text x="48" y="223" font-size="11" fill="#b23b3b">Ignored for access checks (real check is the DACL)</text>
+
+    <rect x="425" y="172" width="330" height="58" rx="7" fill="#f2eafb" stroke="#7b3fbf"/>
+    <text x="438" y="192" font-size="13" font-weight="700" fill="#7b3fbf">gname  TEXT</text>
+    <text x="438" y="210" font-size="11" fill="#333">Name-based. root &#8644; Administrators</text>
+    <text x="438" y="224" font-size="11" fill="#666">Group permission is enforced as an ACE</text>
+
+    <rect x="875" y="172" width="270" height="58" rx="7" fill="#fdf1e3" stroke="#d97a1e"/>
+    <text x="888" y="192" font-size="13" font-weight="700" fill="#d97a1e">Group gid</text>
+    <text x="888" y="209" font-size="11" fill="#333">&larr; getgrnam(gname)</text>
+    <text x="888" y="223" font-size="11" fill="#666">Both owner and group always carry meaning</text>
+
+    <line x1="305" y1="201" x2="425" y2="201" stroke="#2e9e5b" stroke-width="2" marker-start="url(#ahG)" marker-end="url(#ahG)"/>
+    <text x="365" y="195" text-anchor="middle" font-size="9" fill="#2e9e5b">SID &#8644; name</text>
+    <line x1="755" y1="201" x2="875" y2="201" stroke="#2e9e5b" stroke-width="2" marker-start="url(#ahG)" marker-end="url(#ahG)"/>
+    <text x="815" y="195" text-anchor="middle" font-size="9" fill="#2e9e5b">name &#8644; gid</text>
+
+    <!-- ROW 3+4: DACL (Win, y 244..478)  /  st_mode + pgfs_acl (center) / mode + posix_acl (linux) -->
+    <rect x="35" y="244" width="270" height="234" rx="7" fill="#e8f1fd" stroke="#1e6fd9"/>
+    <text x="48" y="264" font-size="13" font-weight="700" fill="#1e6fd9">DACL (sequence of ACEs)</text>
+    <text x="48" y="283" font-size="11" fill="#333">Base: owner / group / <b>Everyone</b> ACE</text>
+    <text x="48" y="300" font-size="11" fill="#333">Named ACE (per SID)</text>
+    <text x="48" y="317" font-size="11" fill="#333">Allow / <b>deny</b> ACE</text>
+    <text x="48" y="334" font-size="11" fill="#333">Inheritance flags OI / CI / IO</text>
+    <text x="48" y="356" font-size="11" fill="#666">&rarr; The real body of Windows access rights</text>
+    <text x="48" y="384" font-size="11" fill="#666">rwx &rarr; FILE_GENERIC_READ /</text>
+    <text x="48" y="399" font-size="11" fill="#666">WRITE / EXECUTE mapping</text>
+    <line x1="40" y1="412" x2="300" y2="412" stroke="#bcd6f6"/>
+    <text x="48" y="431" font-size="11" fill="#b23b3b">deny ACE / ACE order / inheritance</text>
+    <text x="48" y="446" font-size="11" fill="#b23b3b">are dropped on projection (not kept)</text>
+
+    <!-- center st_mode -->
+    <rect x="425" y="244" width="330" height="64" rx="7" fill="#efe6fa" stroke="#7b3fbf"/>
+    <text x="438" y="264" font-size="13" font-weight="700" fill="#7b3fbf">st_mode  INTEGER <tspan class="star">&#9733; canonical</tspan></text>
+    <text x="438" y="282" font-size="11" fill="#333">Type + owner/group/other rwx</text>
+    <text x="438" y="298" font-size="11" fill="#666">+ setuid / setgid / sticky. Single source for the 3 base classes</text>
+
+    <!-- center pgfs_acl -->
+    <rect x="425" y="320" width="330" height="158" rx="7" fill="#efe6fa" stroke="#7b3fbf"/>
+    <text x="438" y="340" font-size="13" font-weight="700" fill="#7b3fbf">xattrs &#9656; user.pgfs_acl <tspan class="star">&#9733; canonical ACL (POSIX)</tspan></text>
+    <text x="438" y="360" font-size="11" fill="#333">acl[] = sequence of ACL entries (allow only)</text>
+    <text x="452" y="378" font-size="11" fill="#666">principal_type: user | group</text>
+    <text x="452" y="393" font-size="11" fill="#666">principal_name (normalized, name-based)</text>
+    <text x="452" y="408" font-size="11" fill="#666">rights: r / w / x</text>
+    <text x="438" y="428" font-size="11" fill="#333">mask = recomputed from (named &cup; group)</text>
+    <text x="438" y="446" font-size="11" fill="#333">default[]: for directory inheritance</text>
+    <text x="438" y="465" font-size="10.5" fill="#d9534f">no deny / ACE order / inheritance flags (dropped on projection)</text>
+
+    <!-- linux mode -->
+    <rect x="875" y="244" width="270" height="64" rx="7" fill="#fdf1e3" stroke="#d97a1e"/>
+    <text x="888" y="264" font-size="13" font-weight="700" fill="#d97a1e">mode bits (ls -l)</text>
+    <text x="888" y="282" font-size="12" fill="#333" font-family="monospace">rwx rwx rwx</text>
+    <text x="888" y="299" font-size="11" fill="#666">owner / group / other</text>
+
+    <!-- linux posix acl -->
+    <rect x="875" y="320" width="270" height="158" rx="7" fill="#fdf1e3" stroke="#d97a1e"/>
+    <text x="888" y="340" font-size="13" font-weight="700" fill="#d97a1e">POSIX ACL (getfacl/setfacl)</text>
+    <text x="888" y="359" font-size="11" fill="#333" font-family="monospace">user::  group::  other::</text>
+    <text x="888" y="376" font-size="11" fill="#333" font-family="monospace">user:NAME  group:NAME</text>
+    <text x="888" y="393" font-size="11" fill="#333" font-family="monospace">mask::</text>
+    <text x="888" y="410" font-size="11" fill="#333" font-family="monospace">default: (dir only)</text>
+    <line x1="880" y1="424" x2="1140" y2="424" stroke="#f0d2a6"/>
+    <text x="888" y="443" font-size="11" fill="#666">Transport is xattr</text>
+    <text x="888" y="458" font-size="10.5" fill="#666" font-family="monospace">system.posix_acl_access / _default</text>
+
+    <!-- arrows: st_mode derives basic ACE (center -> win) -->
+    <line x1="425" y1="276" x2="305" y2="300" stroke="#7a7a7a" stroke-width="1.8" marker-end="url(#ahK)"/>
+    <text x="365" y="280" text-anchor="middle" font-size="9" fill="#7a7a7a">synthesize 3 base ACEs</text>
+    <!-- st_mode <-> linux mode -->
+    <line x1="755" y1="276" x2="875" y2="276" stroke="#2e9e5b" stroke-width="2" marker-start="url(#ahG)" marker-end="url(#ahG)"/>
+    <text x="815" y="270" text-anchor="middle" font-size="9" fill="#2e9e5b">1:1 (rwx)</text>
+    <!-- pgfs_acl <-> DACL (entries) -->
+    <line x1="305" y1="368" x2="425" y2="368" stroke="#2e9e5b" stroke-width="2" marker-start="url(#ahG)" marker-end="url(#ahG)"/>
+    <text x="365" y="362" text-anchor="middle" font-size="9" fill="#2e9e5b">ACE &#8644; entries</text>
+    <!-- pgfs_acl <-> posix acl -->
+    <line x1="755" y1="368" x2="875" y2="368" stroke="#2e9e5b" stroke-width="2" marker-start="url(#ahG)" marker-end="url(#ahG)"/>
+    <text x="815" y="362" text-anchor="middle" font-size="9" fill="#2e9e5b">entries &#8644; facl</text>
+    <!-- Windows-specific ACL dropped on projection (Win -> center, lossy) -->
+    <line x1="305" y1="438" x2="425" y2="438" stroke="#d9534f" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#ahR)"/>
+    <text x="365" y="432" text-anchor="middle" font-size="9" fill="#d9534f">projection: drop deny/order/inherit</text>
+
+    <!-- ROW 5: DOS attrs (y 492..566, mid 529) -->
+    <rect x="35" y="492" width="270" height="74" rx="7" fill="#e8f1fd" stroke="#1e6fd9"/>
+    <text x="48" y="512" font-size="13" font-weight="700" fill="#1e6fd9">DOS attributes</text>
+    <text x="48" y="530" font-size="11" fill="#333">ReadOnly / Hidden</text>
+    <text x="48" y="546" font-size="11" fill="#333">System / Archive</text>
+    <text x="48" y="561" font-size="10.5" fill="#666">ReadOnly is derived from the (w) permission, others are attributes</text>
+
+    <rect x="425" y="492" width="330" height="74" rx="7" fill="#f2eafb" stroke="#7b3fbf"/>
+    <text x="438" y="512" font-size="13" font-weight="700" fill="#7b3fbf">xattrs &#9656; user.win.attrs (JSON)</text>
+    <text x="438" y="530" font-size="11" fill="#333">{ hidden, system, archive }</text>
+    <text x="438" y="548" font-size="11" fill="#666">user namespace = visible from Linux via getfattr too</text>
+    <text x="438" y="562" font-size="10.5" fill="#7b3fbf">ReadOnly is not stored; derived from the writable check / compressed is future work</text>
+
+    <rect x="875" y="492" width="270" height="74" rx="7" fill="#fdf1e3" stroke="#d97a1e"/>
+    <text x="888" y="512" font-size="13" font-weight="700" fill="#d97a1e">Basically no DOS attributes</text>
+    <text x="888" y="530" font-size="11" fill="#333">Hidden &asymp; inferred from dotfile (.name)</text>
+    <text x="888" y="548" font-size="11" fill="#b23b3b">System / Archive unsupported</text>
+    <text x="888" y="562" font-size="10.5" fill="#666">ReadOnly is reflected in the w bit</text>
+
+    <line x1="305" y1="529" x2="425" y2="529" stroke="#2e9e5b" stroke-width="2" marker-start="url(#ahG)" marker-end="url(#ahG)"/>
+    <text x="365" y="523" text-anchor="middle" font-size="9" fill="#2e9e5b">H/S/A</text>
+    <line x1="755" y1="529" x2="875" y2="529" stroke="#d9534f" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#ahR)"/>
+    <text x="815" y="523" text-anchor="middle" font-size="9" fill="#d9534f">dotfile inference / unsupported</text>
+  </svg>
+
+  <div class="legend">
+    <span><i class="sw" style="border-top-color:#2e9e5b"></i> Bidirectional (common ground expressible in POSIX)</span>
+    <span><i class="sw" style="border-top-color:#7a7a7a"></i> One-way / derived (synthesized)</span>
+    <span><i class="sw" style="border-top-color:#d9534f;border-top-style:dashed"></i> Dropped on projection (no POSIX equivalent / not enforceable)</span>
+    <span><b class="star">&#9733;</b> = canonical (source of truth)</span>
+  </div>
+  </div>
+
+  <h2>The Agreed Design (10 Items)</h2>
+  <div class="card">
+    <ol class="principles">
+      <li><b>[1] Name normalization</b> &mdash; on store, on match, and on the caller name: strip domain + full-width ASCII &rarr; half-width + lowercase. Even on Linux, <code>alice</code>=<code>Alice</code>=<code>&#xFF21;lice</code> are treated as identical.</li>
+      <li><b>[2] Domain stripping</b> &mdash; strip both <code>\</code> (NetBIOS) and <code>@domain</code> (UPN).</li>
+      <li><b>[3] Principal mapping</b> &mdash; full bidirectional. <b>The DB stores Linux names</b>. See the table below.</li>
+      <li><b>[4] Windows ACL = projection view</b> &mdash; POSIX is canonical; Windows-specific features (deny / ACE order / inheritance) are not adopted and are dropped on projection (<code>opaque</code> was removed).</li>
+      <li><b>[5] ACL model</b> &mdash; POSIX-only / allow only. <code>acl[]={principal_type, principal_name, rights}</code>, with <code>mode + acl[]</code> coexisting.</li>
+      <li><b>[6] Windows attributes</b> &mdash; JSON <code>{hidden,system,archive}</code> in <code>user.win.attrs</code> (user namespace). <code>compressed</code> is future work.</li>
+      <li><b>[7] ReadOnly</b> &mdash; if the access subject itself cannot write, it is ReadOnly (owner/group/other writable is evaluated against the normalized caller).</li>
+      <li><b>[8] owner=group</b> &mdash; when Windows sets a group as the owner &rarr; <code>owner=nobody</code> / <code>group=that group</code>.</li>
+      <li><b>[9] Anonymous access</b> &mdash; unsupported (policy statement only, no code change). <code>nobody</code> is the evaluation result of an unresolved principal, not an authorization of anonymous access.</li>
+      <li><b>[10] ACL evaluation</b> &mdash; POSIX-order evaluation in the client driver (owner&rarr;named user&rarr;group/named group&rarr;other). Linux also evaluates in the pgfs layer with normalization rather than delegating to the kernel.</li>
+    </ol>
+    <p class="sub" style="margin:12px 0 0">Implementation status: all 10 decisions are implemented, except that strict named-ACL enforcement and <code>system.posix_acl_default</code> &rarr; Windows inheritance are deferred until requirements arrive.</p>
+  </div>
+
+  <h2>Principal Mapping Table (well-known, bidirectional)</h2>
+  <div class="card">
+    <p class="sub" style="margin-top:0">The DB stores Linux names. Each driver converts bidirectionally between "store (per-OS name &rarr; Linux name + normalization)" and "render/resolve (Linux name &rarr; per-OS name)".</p>
+    <table>
+      <thead><tr><th class="cPg">PGFS (stored, Linux name)</th><th class="cLx">Linux</th><th class="cWin">Windows</th></tr></thead>
+      <tbody>
+        <tr><td><code>root</code> (user)</td><td>root</td><td>Administrator</td></tr>
+        <tr><td><code>root</code> (group)</td><td>root</td><td>Administrators</td></tr>
+        <tr><td><code>nobody</code></td><td>nobody</td><td>ANONYMOUS LOGON (S-1-5-7)</td></tr>
+        <tr><td><code>nogroup</code></td><td>nogroup</td><td>ANONYMOUS LOGON (no dedicated group SID)</td></tr>
+        <tr><td><code>other</code> (class)</td><td>other:: class</td><td>Everyone</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Detailed Correspondence Table</h2>
+  <table>
+    <thead>
+      <tr><th>Concept</th><th class="cWin">Windows / NTFS</th><th class="cPg">PGFS Canonical Store</th><th class="cLx">Linux / POSIX</th><th>Round-trip / Notes</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Owner</td>
+        <td>Owner SID (user or group)</td>
+        <td><code>owner_name</code> (= uname, normalized)</td>
+        <td>uid (getpwnam)</td>
+        <td><span class="ok">Bidirectional</span>. Name-based + normalized. <code>root&#8644;Administrator</code>. If owner is a group, route to <code>owner=nobody</code> / <code>group=that group</code> [8]</td>
+      </tr>
+      <tr>
+        <td>Group</td>
+        <td>Group SID (ignored) / group ACE in DACL</td>
+        <td><code>group_name</code> (= gname, normalized)</td>
+        <td>gid (getgrnam)</td>
+        <td><span class="ok">Bidirectional</span>. Windows access checks use the <b>ACE</b>, not the Group SID</td>
+      </tr>
+      <tr>
+        <td>Base permissions</td>
+        <td>DACL: owner / group / Everyone ACE</td>
+        <td><code>mode</code> (st_mode) 3 classes <span class="star">&#9733;</span></td>
+        <td>mode rwx (owner/group/other)</td>
+        <td><span class="ok">Bidirectional</span>. <code>mode</code> is the single source for the 3 base classes. chmod / SetSecurity base changes happen here</td>
+      </tr>
+      <tr>
+        <td>Named ACL</td>
+        <td>DACL: per-SID allow ACE</td>
+        <td><code>user.pgfs_acl</code> acl[] (allow only)</td>
+        <td><code>user:NAME</code> / <code>group:NAME</code> (+ mask)</td>
+        <td><span class="ok">Bidirectional</span>. <code>mask</code> = recomputed from (named &cup; group) [5]</td>
+      </tr>
+      <tr>
+        <td>Inheritance</td>
+        <td>Inheritable ACE (OI/CI/IO)</td>
+        <td><code>default[]</code> (dir only)</td>
+        <td>default ACL (directories only)</td>
+        <td><span class="part">Partial</span>. dir default ACL &#8644; inheritable ACE. Windows-specific inheritance flags are dropped on projection</td>
+      </tr>
+      <tr>
+        <td>Deny</td>
+        <td>deny ACE</td>
+        <td>(not held)</td>
+        <td>(no equivalent)</td>
+        <td><span class="no">Dropped on projection</span> [4]. POSIX is allow only. Windows-specific deny is not kept</td>
+      </tr>
+      <tr>
+        <td>ReadOnly</td>
+        <td>DOS ReadOnly</td>
+        <td>derived from the <code>mode</code> writable check</td>
+        <td>write bit (w)</td>
+        <td><span class="ok">Bidirectional (derived)</span>. If the access subject itself cannot write, it is ReadOnly [7]</td>
+      </tr>
+      <tr>
+        <td>Hidden</td>
+        <td>DOS Hidden</td>
+        <td><code>user.win.attrs</code>.hidden</td>
+        <td>inferred from dotfile (.name)</td>
+        <td><span class="part">Win&#8644;xattr is bidirectional</span>. Linux is heuristic only (not enforced)</td>
+      </tr>
+      <tr>
+        <td>System / Archive</td>
+        <td>DOS System / Archive</td>
+        <td><code>user.win.attrs</code>.system/.archive</td>
+        <td>(unsupported)</td>
+        <td><span class="no">xattr held only</span>. Linux ignores it (not lost on round-trip). compressed is future work [6]</td>
+      </tr>
+      <tr>
+        <td>Case / full vs. half width</td>
+        <td>ignored</td>
+        <td>stored normalized (lowercase + half-width)</td>
+        <td>treated as identical via normalization</td>
+        <td><span class="ok">Identical on both OSes</span> [1]. Caller name is normalized too &rarr; <code>Users</code>=<code>users</code>, <code>&#xFF21;lice</code>=<code>alice</code></td>
+      </tr>
+      <tr>
+        <td>Anonymous</td>
+        <td>ANONYMOUS LOGON</td>
+        <td><code>nobody</code> / <code>nogroup</code></td>
+        <td>nobody / nogroup</td>
+        <td><span class="part">Unsupported policy</span> [9]. The evaluation result of an unresolved principal, not an authorization of anonymous access</td>
+      </tr>
+      <tr>
+        <td>Audit</td>
+        <td>SACL (out of scope here)</td>
+        <td><code>pgfs_audit</code> (separate table)</td>
+        <td>&mdash;</td>
+        <td>ACL/ownership changes are audited per <code>audit-log.md</code>. A <code>setacl</code> op is planned</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Worked Example: Setting the owner to "Users" on Windows</h2>
+  <div class="card">
+    <p style="margin-top:0;font-size:13.5px">Premise: Linux has user <code>user</code> / group <code>users</code> (there is no user <code>Users</code>).</p>
+    <table>
+      <thead><tr><th>Approach</th><th>Behavior</th></tr></thead>
+      <tbody>
+        <tr><td><b>Naive impl</b><br>(uname as-is)</td><td>Stores uname=<code>Users</code> &rarr; Linux resolves the owner via <code>getpwnam("Users")</code> &rarr; <span class="no">(a)</span> <code>Users</code> is a group but is looked up as a user / <span class="no">(b)</span> case-sensitivity also mismatches <code>user</code> &rarr; appears as <b>nobody</b> (the information intended for group <code>users</code> is lost)</td></tr>
+        <tr><td><b>Agreed design</b><br>(this diagram)</td><td>The Windows owner is detected as a <b>group SID</b> [8] &rarr; <code>owner_name=nobody</code> / <code>group_name=users</code> (normalization turns <code>Users</code>&rarr;<code>users</code> [1]). Linux: owner=nobody / group=users (getgrnam resolution). Windows re-render: owner=projection of ANONYMOUS LOGON [3] / group=Users. &rarr; group info is preserved and case is absorbed</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="sub" style="margin-top:26px">Related: <code>docs/permission-interop.md</code> (design reference) / <code>docs/audit-log.md</code> / <code>docs/settings-matrix.md</code> / <code>src/assign/src/FileSystemUtils.cs</code> &middot; <code>src/mount/src/UserResolver.cs</code></p>
+
+</div>
+</body>
+</html>

@@ -32,7 +32,7 @@ DDL: [docs/ddl/pgfs_inode.sql](ddl/pgfs_inode.sql)
 | `link_target` | `TEXT`      | `NULL`     |                     |         | シンボリックリンクやジャンクションの場合のリンク先パス。    |
 | `is_junction` | `BOOLEAN`   | `NOT NULL` | `FALSE`             |         | Windows ジャンクションの場合 `TRUE`。                       |
 | `data_id`     | `BIGINT`    | `NULL`     |                     |         | ファイルデータ本体を参照する ID (`pgfs_data.id`)。ディレクトリは `NULL`。 |
-| `xattrs`      | `JSONB`     | `NOT NULL` | `{}`                |         | 拡張属性 (xattr) をキー/バリュー形式で保持。                |
+| `xattrs`      | `JSONB`     | `NOT NULL` | `{}`                |         | 拡張属性 (xattr) をキー/バリュー形式で保持。一般 xattr の値は Base64。予約キー: `user.pgfs_acl` (正準 ACL ドキュメント JSON)、`user.win.attrs` (Windows 属性 JSON `{hidden,system,archive}`)。詳細は [permission-interop.ja.md](permission-interop.ja.md)。 |
 | `created_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | 作成日時                                                   |
 | `created_by`  | `TEXT`      | `NOT NULL` |                     |         | 作成ユーザー名                                             |
 | `updated_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | 更新日時                                                   |

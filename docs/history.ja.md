@@ -141,9 +141,22 @@ PostgreSQL `LISTEN` / `NOTIFY` を使った cross-client change propagation ([sr
 
 ## Windows 属性の永続化
 
-Windows e2e ([tests/windows/](../tests/windows/README.ja.md)) は Linux 版と対称な構造で 24 件。POSIX 専用 (symlink / hardlink / chmod / chown / xattr API 公開) は DokanNet 非対応のため対象外、代わりに Windows 固有 (SetFileAttributes / SetFileTime / FindFilesWithPattern) を追加。
+Windows e2e ([tests/windows/](../tests/windows/README.ja.md)) は Linux 版と対称な構造で 26 件。POSIX 専用 (symlink / hardlink / chmod / chown / xattr API 公開) は DokanNet 非対応のため対象外、代わりに Windows 固有 (SetFileAttributes / SetFileTime / FindFilesWithPattern) を追加。
 
-**Hidden / System / Archive 属性の xattr 永続化**: `pgfs_inode.xattrs` JSONB の `user.win_attrs` キーに `FileAttributes` のマスク値 (Hidden\|System\|Archive のみ) を 4-byte little-endian int で保存。**マスクが空 (全 OFF) でも xattr は削除せず 4 バイト 0 を書き込む**: 「xattr 有り = Windows 側で SetFileAttributes を触った」「xattr 無し = まだ触っていない」の二値で扱い、xattr 無しのときだけ「先頭ドット = Hidden」heuristic を fallback として適用。マスク 0 で削除する設計だと「ドットファイルを Explorer で un-hide → 次回 heuristic 復活でまた Hidden に戻る」UX バグを踏む。`ReadOnly` は引き続き st_mode の write ビット。実装は [src/assign/src/FileSystemUtils.cs](../src/assign/src/FileSystemUtils.cs) の `WinAttrsXattrKey` / `LoadWinAttrs` / `SaveWinAttrs`。
+**Hidden / System / Archive 属性の xattr 永続化**: `pgfs_inode.xattrs` JSONB の `user.win.attrs` キーに JSON `{hidden,system,archive}` (bool) で保存。`user.` 名前空間なので Linux の `getfattr` からも見える。**全 OFF でも xattr は削除せず JSON を書き込む**: 「xattr 有り = Windows 側で SetFileAttributes を触った」「xattr 無し = まだ触っていない」の二値で扱い、xattr 無しのときだけ「先頭ドット = Hidden」heuristic を fallback として適用。空で削除する設計だと「ドットファイルを Explorer で un-hide → 次回 heuristic 復活でまた Hidden に戻る」UX バグを踏む。`ReadOnly` は引き続き st_mode の write ビット。実装は [src/assign/src/FileSystemUtils.cs](../src/assign/src/FileSystemUtils.cs) の `WinAttrsXattrKey` (= `user.win.attrs`) / `LoadWinAttrs` / `SaveWinAttrs`。(旧形は `user.win_attrs` に `FileAttributes` マスクを 4-byte little-endian int で保存していたが、JSON 形は可読で Linux からも見える。)
+
+---
+
+## 権限・ACL の相互運用 (Linux ↔ Windows)
+
+PGFS は認証システムではなく、**名前ベース ACL を保持するストレージ**である。UID/GID/SID/GUID を一切永続化せず、ユーザー/グループ DB も持たない — 名前は各 OS が実行時に解決する。内部モデルは **POSIX ACL を正準**とし、**Windows ACL はその lossy な投影ビュー**として描画する。設計の正は [permission-interop.md](permission-interop.ja.md) (図は [permission-interop-diagram.html](permission-interop-diagram.html))。
+
+- **名前正規化が中核**。owner / group / principal 名 — および呼び出し元自身の名前 — を保存時も照合時も同一に正規化する: ドメイン除去 (`DOMAIN\name` と `name@domain`)、全角 ASCII → 半角、小文字化。これにより Linux 本来の case-sensitive を pgfs 層で上書きし、両 OS で `alice`=`Alice`=`Ａlice` を同一視する。共通ヘルパは [NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs) で、各 resolver と mount FileSystem の保存・解決・呼び出し元 path に挿入。
+- **DB は Linux 名で保存**し、各ドライバが well-known principal を双方向にマップする: `root`↔`Administrator(s)`、`nobody`/`nogroup`↔`NT AUTHORITY\ANONYMOUS LOGON`、`other`↔`Everyone` ([WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs))。未解決名は保存上は書き換えず、評価時のみ `nobody`/`nogroup` に解決する。
+- **ACL モデルは POSIX-only / allow のみ**。`mode` が owner/group/other 基本3クラスの正準。named user/group エントリと都度再計算する mask は正準 ACL ドキュメント ([PgfsAcl](../src/lib/src/Models/PgfsAcl.cs)) に置き、`user.pgfs_acl` xattr に JSON で保存 (ディレクトリ継承用の `default[]` も併存)。スキーマ追加なし。
+- **Windows は投影ビュー**。`GetFileSecurity` は inode (owner/group→SID、mode→owner/group/Everyone allow ACE、named は `user.pgfs_acl`) をセキュリティ記述子へ投影し、`SetFileSecurity` は受領した SD を mode + named ACL + owner/group へ逆投影する。deny ACE・ACE 順・継承フラグは POSIX に等価が無いため投影で落とす — Windows ⇄ Windows の ACL 完全一致は保証しない代わりに、実装が大幅に簡素になる (verbatim 保存・復元が不要)。owner にグループ SID が来たら `owner=nobody` / group フィールドへ振り分け、Linux の owner 解決でグループ情報を失わないようにする。
+- **Linux も同じ正準ストアを往復**する (`system.posix_acl_access` 経由)。[PosixAcl](../src/lib/src/Models/PosixAcl.cs) コーデックが ACL バイナリと `st_mode` 基本3クラス + `user.pgfs_acl` named を相互変換し、mask を都度再計算する。named 無しの最小 ACL は ENODATA を返し、getfacl が mode から導出する慣習に合わせる。`system.posix_acl_default` は現状パススルー (Linux 内 round-trip のみ)。
+- **enforcement と保留事項**。両側とも正準ストアを表示・往復する (`ls -l` / Windows の Security タブ / `getfacl` すべて反映)。所有者一致判定は正規化済みの保存名で行う。Linux カーネルでの named ACL の厳密 enforce、`system.posix_acl_default` の Windows 継承変換、cross-OS 往復の自動テストは、ワークロードが要求するまで保留する。
 
 ---
 

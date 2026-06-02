@@ -93,14 +93,14 @@ What pgfs.assign uses in particular:
 | `ReadFile` | done | `Api.ReadData` (via bytea chunks). |
 | `WriteFile` | done | `Api.WriteData`; append mode when `info.WriteToEndOfFile`. |
 | `FlushFileBuffers` | done | no-op, since the PostgreSQL side is already persisted by commit. |
-| `SetFileAttributes` | done | `ReadOnly` is reflected into st_mode's write bits; `Hidden` / `System` / `Archive` are stored in an xattr (`user.win_attrs`) as a 4-byte little-endian int. |
+| `SetFileAttributes` | done | `ReadOnly` is reflected into st_mode's write bits; `Hidden` / `System` / `Archive` are stored in an xattr (`user.win.attrs`) as JSON `{hidden,system,archive}`. |
 | `SetFileTime` | done | Only `lastWriteTime` is written to the DB. `atime` is ignored per requirement. |
 | `DeleteFile` / `DeleteDirectory` | done | Per the Windows convention, only checks deletability; the actual deletion happens in `Cleanup`. |
 | `MoveFile` | done | Handles the `replace` flag, same-kind check, empty-directory check. |
 | `SetEndOfFile` | done | `Api.TruncateData` (truncates the bytea chunks together). |
 | `SetAllocationSize` | done | Provisionally the same behavior as `SetEndOfFile`. |
 | `LockFile` / `UnlockFile` | done (simple) | Delegated to the kernel via `DokanOptions.UserModeLock`; always returns Success here. |
-| `GetFileSecurity` / `SetFileSecurity` | not done | Returns `NotImplemented` so the kernel generates a default ACL. |
+| `GetFileSecurity` / `SetFileSecurity` | done | Projects/reverse-projects between the inode (uname/gname/st_mode + canonical ACL) and a Windows security descriptor: owner/group -> SID, mode -> owner/group/Everyone allow ACEs, named entries via `user.pgfs_acl`. Deny ACEs / ACE ordering / inheritance are dropped in projection. See [permission-interop.md](permission-interop.md). |
 | `FindStreams` | not done | Alternate Data Streams not supported; returns `NotImplemented`. |
 
 ## Architecture
@@ -139,19 +139,19 @@ What pgfs.assign uses in particular:
 | Path separator | fixed `/` | normalize `\` to `/` before Api |
 | Deletion timing | `Unlink` deletes immediately | `Cleanup` deletes when it sees `DeletePending` |
 | Append mode | offset argument | `info.WriteToEndOfFile` |
-| ACL | st_mode + uname/gname | NTAccount + SID (provisionally `NotImplemented`) |
+| ACL | st_mode + canonical ACL (via `system.posix_acl_access`) | st_mode + canonical ACL (SD projection via `Get/SetFileSecurity`) |
 
 Both just call [`Pgfs.Lib.Api.Api`](../src/lib/src/Api/Api.cs), so the actual DB operations are shared.
 
 ## Design decisions / provisional implementation
 
-### root -> Administrator mapping
+### Name normalization + well-known principal mapping
 
-Files created on the Linux side with `uname = root`, `gname = root` are treated, in practice, as `Administrator` / `Administrators` on Windows. `IsWritable` in [src/assign/src/FileSystemUtils.cs](../src/assign/src/FileSystemUtils.cs) absorbs the difference.
+Owner / group / principal names are normalized **on store, on match, and on caller-name** ([NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs): fullwidth ASCII -> halfwidth + domain stripping `\` / `@` + lowercasing). The DB **stores Linux names**, and the well-known names are converted bidirectionally between Windows and Linux via the [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) mapping: `root` <-> `Administrator(s)` / `nobody` / `nogroup` <-> `NT AUTHORITY\ANONYMOUS LOGON` / `other` <-> `Everyone`. This lets files created on Windows resolve to the same name on Linux, and treats case and fullwidth/halfwidth as equivalent (the design of record is [permission-interop.md](permission-interop.md)).
 
 ### `Hidden` / `System` / `Archive` attributes
 
-There is no Linux-side equivalent, so they are stored in the `user.win_attrs` key of `pgfs_inode.xattrs` JSONB as a `FileAttributes` bitmask (extracting only Hidden=0x02 / System=0x04 / Archive=0x20) in a 4-byte little-endian int. Even when the mask is empty (all OFF), **the xattr is not deleted; 4 bytes of 0 are written**.
+There is no Linux-side equivalent, so they are stored in the `user.win.attrs` key of `pgfs_inode.xattrs` JSONB as JSON `{hidden,system,archive}` (bool). Being in the `user.` namespace, it is also visible from Linux `getfattr`. `compressed` is future work. Even when all OFF, **the xattr is not deleted; the JSON is written**.
 
 The decision in `GetFileInformation` / `FindFiles` is two-valued:
 - **xattr present** (even if the value is 0) = the Windows side has touched `SetFileAttributes` at least once -> trust the xattr value as-is.
@@ -159,7 +159,7 @@ The decision in `GetFileInformation` / `FindFiles` is two-valued:
 
 A "delete the xattr when the mask is 0" design would hit a **UX bug where un-hiding a dotfile in Windows Explorer deletes the xattr, then the heuristic revives on the next read and re-hides it**, so the presence/absence of the xattr is kept as a "has it been touched" flag.
 
-`ReadOnly` continues to be managed via st_mode's write bits (so it is visible bidirectionally with the Linux side). Implemented as `WinAttrsXattrKey` / `LoadWinAttrs` / `SaveWinAttrs` in [src/assign/src/FileSystemUtils.cs](../src/assign/src/FileSystemUtils.cs).
+`ReadOnly` continues to be managed via st_mode's write bits (so it is visible bidirectionally with the Linux side). Implemented as `WinAttrsXattrKey` (= `user.win.attrs`) / `LoadWinAttrs` / `SaveWinAttrs` in [src/assign/src/FileSystemUtils.cs](../src/assign/src/FileSystemUtils.cs).
 
 ### Alternate Data Streams (ADS)
 
@@ -167,7 +167,12 @@ NTFS `file.txt:stream`-style alternate streams are not supported. `FindStreams` 
 
 ### ACL (GetFileSecurity / SetFileSecurity)
 
-Returning `NotImplemented` makes the Dokan kernel auto-generate a standard ACL carrying the current process's permissions. Explorer can display and operate without issues. Full ACL persistence is planned for later (stored in `pgfs_inode`'s `xattrs` or a dedicated column).
+POSIX is canonical and the Windows ACL is implemented as a **projection view** (the design of record is [permission-interop.md](permission-interop.md)).
+
+- **GetFileSecurity (read)**: projects the inode onto a Windows security descriptor ([FileSystemUtils.BuildSecurity](../src/assign/src/FileSystemUtils.cs)). Owner/group are mapped uname/gname -> SID, and the DACL is composed from `st_mode`'s owner/group/Everyone allow ACEs plus the canonical ACL (`user.pgfs_acl`) named entries. Explorer's "Security" tab and `icacls` reflect the POSIX permissions.
+- **SetFileSecurity (write)**: reverse-projects the received SD ([FileSystemUtils.ApplySecurity](../src/assign/src/FileSystemUtils.cs)). Owner/group SID -> name (if a group SID arrives as the owner, it is routed to `owner=nobody` / `group=that`), the DACL's three base classes -> `st_mode`, named -> `user.pgfs_acl`.
+- **Dropped in projection**: deny ACEs / ACE ordering / inheritance flags are not adopted because they have no POSIX equivalent (an exact Windows <-> Windows ACL match is not guaranteed).
+- The Linux side round-trips the same canonical store via `system.posix_acl_access` (setfacl/getfacl) ([Mount.md](Mount.md)).
 
 ### LockFile / UnlockFile
 
@@ -194,14 +199,14 @@ Returns `Success` with `DokanOptions.UserModeLock` set. This makes the Dokan ker
 | Data I/O (Read/Write) | done | Uses `Api.ReadData` / `WriteData` as the shared base. |
 | SID <-> uname/gname resolution | done | NTAccount.Translate in [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs). |
 | Chunk reduction on Truncate | done | `Api.TruncateData` (shared with Mount). |
-| ACL (Get/Set FileSecurity) | not done | `NotImplemented`, leaving it to the Dokan default. Full support planned for later. |
-| Hidden / System / Archive attributes | done | Stored in the xattr `user.win_attrs` as a 4-byte LE int. `ReadOnly` uses st_mode's write bits (as before). A dotfile created on Linux is shown Hidden via the heuristic fallback. |
+| ACL (Get/Set FileSecurity) | done | POSIX canonical, Windows projection view. SD <-> st_mode + canonical ACL (`user.pgfs_acl`). owner=group is routed to nobody/that. Deny / inheritance are dropped in projection. See [permission-interop.md](permission-interop.md). Remaining: strict named-ACL enforcement (pending requirements). |
+| Hidden / System / Archive attributes | done | Stored in the xattr `user.win.attrs` as JSON `{hidden,system,archive}`. `ReadOnly` uses st_mode's write bits (as before). A dotfile created on Linux is shown Hidden via the heuristic fallback. |
 | Alternate Data Streams | not done | NTFS ADS not supported. |
 | POSIX-compatible range lock | not done | Left to the kernel via `DokanOptions.UserModeLock`. |
 | Junction (reparse points) | not done | The DB schema has an `is_junction` column. Referenced only from Mount. The Assign side does not support it. |
 | Notify (cross-client change notification) | done | Enabled with `database.notify_enabled=true` (CLI `--notify`). Receives other clients' writes via PostgreSQL LISTEN/NOTIFY, invalidates the local `InodeCache`, then [FileSystem.PropagateRemoteChange](../src/assign/src/FileSystem.cs) asks Explorer to redraw via `DokanInstance.NotifyUpdate(WindowsPath)`. For the payload spec etc., see "Cross-client change notification (Notify)" in [history.md](history.md). |
 | Reconnection on connection failure | done | Wraps `Pg.OpenConnection`-family calls with [Retry](../src/lib/src/Utility/Retry.cs). Exponential backoff, tuned by `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. Exceptions mid-query are not retried because of idempotency concerns. |
-| Fallback for uname / gname absent on the OS | done | On `NTAccount.Translate` failure, resolves the SID of `mount.fallback_uname` / `mount.fallback_gname` (stored in the DB; defaults `nobody` / `nogroup`) and returns it (on Windows, changing these to `Guest` / `Guests` etc. in pgfs.toml is recommended). If the fallback name itself cannot be resolved to a SID, hardcodes `WellKnownSidType.AnonymousSid` and logs a warning. Implemented in [src/assign/src/WindowsUserResolver.cs](../src/assign/src/WindowsUserResolver.cs). |
+| Fallback for uname / gname absent on the OS | done | On `NTAccount.Translate` failure, resolves the SID of `mount.fallback_uname` / `mount.fallback_gname` (stored in the DB; defaults `nobody` / `nogroup`) and returns it. `nobody` / `nogroup` resolve to `NT AUTHORITY\ANONYMOUS LOGON` via the well-known mapping. If that itself cannot be resolved to a SID, hardcodes `WellKnownSidType.AnonymousSid` and logs a warning. Implemented in [src/assign/src/WindowsUserResolver.cs](../src/assign/src/WindowsUserResolver.cs). |
 
 ## Verification scenario (Windows)
 

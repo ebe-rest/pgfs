@@ -11,7 +11,7 @@
 - 設定値は **TOML** (`pgfs.toml`) と DB の `pgfs_settings` テーブルから読み込み、CLI 引数で上書きできます。
 - DB スキーマは [docs/database.ja.md](docs/database.ja.md) を参照してください。
 
-> **現状**: 3 本柱 (Mkfs / Mount / Assign) すべて実装が完了し、Linux e2e 34/34 + Windows e2e 24/24 + 多ノード Citus 上の race 検証 4/4 まで通過。Citus (水平分散) は完了。次にやることの一覧は [docs/next.ja.md](docs/next.ja.md) を参照してください。
+> **現状**: 3 本柱 (Mkfs / Mount / Assign) すべて実装が完了し、Linux e2e 35/35 + Windows e2e 26/26 + 多ノード Citus 上の race 検証 4/4 + 監査ログ専用 12/12 まで通過。Citus (水平分散) と監査ログは完了、ACL/権限の Linux↔Windows 相互運用も実装済 ([docs/permission-interop.ja.md](docs/permission-interop.ja.md))。次にやることの一覧は [docs/next.ja.md](docs/next.ja.md) を参照してください。
 
 ## ソリューション構成
 
@@ -19,8 +19,8 @@
 |---|---|---|---|---|
 | **Lib** | [src/lib/](src/lib/) | コアライブラリ（Models / Api / Logging / Collections / Utility / Objects） | クロスプラットフォーム | 実装完了 |
 | **Mkfs** | [src/mkfs/](src/mkfs/) | PostgreSQL 側のテーブル等を初期化する CLI (`mkfs.pgfs`) | クロスプラットフォーム | 実装完了・Linux で動作確認 |
-| **Mount** | [src/mount/](src/mount/) | Linux/macOS 用マウントツール (`mount.pgfs`、Tmds.Fuse) | Linux / macOS | 全 FUSE 操作実装済み（データ I/O・xattr・symlink・hard link 含む）・Linux で動作確認 |
-| **Assign** | [src/assign/](src/assign/) | Windows 用マウントツール (`pgfs.assign`、DokanNet) | Windows | 全 Dokan 操作実装済み（ACL と ADS は未対応）・Windows で動作確認 |
+| **Mount** | [src/mount/](src/mount/) | Linux/macOS 用マウントツール (`mount.pgfs`、Tmds.Fuse) | Linux / macOS | 全 FUSE 操作実装済み（データ I/O・xattr・symlink・hard link・POSIX ACL 含む）・Linux で動作確認 |
+| **Assign** | [src/assign/](src/assign/) | Windows 用マウントツール (`pgfs.assign`、DokanNet) | Windows | 全 Dokan 操作実装済み（ACL = Get/SetFileSecurity 投影も対応、ADS のみ未対応）・Windows で動作確認 |
 
 ## 必要なもの
 

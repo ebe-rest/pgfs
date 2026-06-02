@@ -10,18 +10,19 @@ The **hub document** for all pgfs tests. It collects "what tests exist / how to 
 
 | Suite | Count | What it checks | Location | Detailed README |
 |---|---|---|---|---|
-| **Linux e2e** | 34 | every mount.pgfs (FUSE) operation, via real FS operations | [tests/linux/e2e.sh](../tests/linux/e2e.sh) | [tests/linux/README.md](../tests/linux/README.md) |
-| **Windows e2e** | 24 | every pgfs.assign (Dokan) operation, via real FS operations | [tests/windows/e2e.ps1](../tests/windows/e2e.ps1) | [tests/windows/README.md](../tests/windows/README.md) |
+| **Linux e2e** | 35 | every mount.pgfs (FUSE) operation, via real FS operations (incl. POSIX ACL setfacl/getfacl) | [tests/linux/e2e.sh](../tests/linux/e2e.sh) | [tests/linux/README.md](../tests/linux/README.md) |
+| **Windows e2e** | 26 | every pgfs.assign (Dokan) operation, via real FS operations (incl. ACL projection Get/SetFileSecurity) | [tests/windows/e2e.ps1](../tests/windows/e2e.ps1) | [tests/windows/README.md](../tests/windows/README.md) |
 | **Citus mkfs matrix** | 18 | the combined behavior of `mkfs --citus / --worker / --clean` (new / keep-existing / rebuild) | [tests/citus/test_matrix.sh](../tests/citus/test_matrix.sh) | [tests/citus/README.md](../tests/citus/README.md) |
 | **Citus multinode probe** | 13 sections | a one-off probe of Citus behavior (auto-sync / DDL propagation / shard placement etc.) | [tests/citus/multinode_probe.sh](../tests/citus/multinode_probe.sh) | [tests/citus/README.md](../tests/citus/README.md) |
 | **Citus race multinode** | 4 | cross-client locking + multi-node e2e on multi-node Citus with 2 mount clients | [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh) | [tests/citus/README.md](../tests/citus/README.md) |
+| **Audit-log dedicated** | 12 | multi-node Citus + 1 mount client; per-op recording / caller_* / automatic partition creation (month-rollover mechanism) / 0 rows when audit.enabled=false | [tests/citus/audit.sh](../tests/citus/audit.sh) | [tests/citus/README.md](../tests/citus/README.md) |
 | **Citus verify** | SQL diagnostics | `citus_tables` / distribution key / shard placement / EXPLAIN after a 1-node Citus setup | [tests/citus/verify.sql](../tests/citus/verify.sql) | [tests/citus/README.md](../tests/citus/README.md) |
 
-### Linux e2e (34) categories
+### Linux e2e (35) categories
 
-Directory operations / basic file operations / data I/O (bytea) / rename / permissions (chmod/chown) / symbolic links / hard links / xattr / metadata (StatFS/utime) / concurrency / name resolution fallback. The coverage is the ✅ operations of [docs/Mount.md](Mount.md).
+Directory operations / basic file operations / data I/O (bytea) / rename / permissions (chmod/chown) / symbolic links / hard links / xattr / POSIX ACL (setfacl/getfacl) / metadata (StatFS/utime) / concurrency / name resolution fallback. The coverage is the ✅ operations of [docs/Mount.md](Mount.md).
 
-### Windows e2e (24) categories
+### Windows e2e (26) categories
 
 Directory operations / basic file operations / data I/O (bytea) / truncate / rename / attributes (ReadOnly/Hidden/System/Archive) / volume / pattern / concurrency. POSIX-only features (symlink/hardlink/chmod/chown/xattr APIs) are out of scope as DokanNet does not support them; Windows-specific tests are added instead. The coverage is the ✅/⚠️ operations of [docs/Assign.md](Assign.md).
 
@@ -29,10 +30,11 @@ Directory operations / basic file operations / data I/O (bytea) / truncate / ren
 
 | Suite | Result | Verified on |
 |---|---|---|
-| Linux e2e | **34/34 ALL PASSED** | single PG / 1-node Citus (pgsql_server) / multi-node Citus (docker), all of them |
-| Windows e2e | **24/24 ALL PASSED** | single PG / 1-node Citus (pgsql_server) |
+| Linux e2e | **35/35 ALL PASSED** | single PG / 1-node Citus (pgsql_server) / multi-node Citus (docker), all of them |
+| Windows e2e | **26/26 ALL PASSED** | single PG / 1-node Citus (pgsql_server) |
 | Citus mkfs matrix | **18/18 PASS** | Citus 14.0.0 docker on linux_client |
 | Citus race multinode | **4/4 PASS** | Citus 14.0.0 docker on linux_client |
+| Audit-log dedicated | **12/12 PASS** | Citus docker on linux_client |
 
 (The authoritative latest pass status for each suite is its directory README.)
 
@@ -79,6 +81,7 @@ Details in [tests/windows/README.md](../tests/windows/README.md).
 bash tests/citus/test_matrix.sh        # mkfs 18-case matrix
 bash tests/citus/multinode_probe.sh    # Citus behavior probe
 bash tests/citus/race_multinode.sh     # cross-client locking + multi-node e2e
+bash tests/citus/audit.sh              # audit-log dedicated (per-op recording / caller_* / partition / enabled=false)
 ```
 
 ```cmd
@@ -101,6 +104,7 @@ The environment each suite **currently** needs. Material for the docker consider
 | Citus mkfs matrix | ssh Linux (bash) | **docker Citus** (coord + worker1) | none (mkfs only) | **yes** | linux_client (docker daemon) |
 | Citus multinode probe | ssh Linux (bash) | **docker Citus** (coord + worker) | none | **yes** | linux_client |
 | Citus race multinode | ssh Linux (bash) | **docker Citus** (coord + worker1) | libfuse3 (mount runs on the **host**) | DB only on docker | linux_client |
+| Audit-log dedicated | ssh Linux (bash) | **docker Citus** (coord + worker1) | libfuse3 (mount runs on the **host**) | DB only on docker | linux_client |
 | Citus verify | Windows -> ssh pgsql_server | **1-node Citus on pgsql_server** (live) | none | none | **pgsql_server** |
 
 ### Common prerequisites

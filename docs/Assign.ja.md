@@ -93,14 +93,14 @@ pgfs.assign が特に使うのは:
 | `ReadFile` | ✅ | `Api.ReadData`（bytea チャンク経由） |
 | `WriteFile` | ✅ | `Api.WriteData`、`info.WriteToEndOfFile` のときは追記モード |
 | `FlushFileBuffers` | ✅ | PostgreSQL 側のコミットで永続化済みなので no-op |
-| `SetFileAttributes` | ✅ | `ReadOnly` は st_mode の write ビットに反映、`Hidden` / `System` / `Archive` は xattr (`user.win_attrs`) に 4-byte little-endian int で保存 |
+| `SetFileAttributes` | ✅ | `ReadOnly` は st_mode の write ビットに反映、`Hidden` / `System` / `Archive` は xattr (`user.win.attrs`) に JSON `{hidden,system,archive}` で保存 |
 | `SetFileTime` | ✅ | `lastWriteTime` のみ DB 反映。`atime` は要件により無視 |
 | `DeleteFile` / `DeleteDirectory` | ✅ | Windows お作法どおり、削除可能性チェックのみ。実削除は `Cleanup` で行う |
 | `MoveFile` | ✅ | `replace` フラグ対応、同種類チェック、空ディレクトリチェック |
 | `SetEndOfFile` | ✅ | `Api.TruncateData`（bytea チャンクもまとめて切り詰め） |
 | `SetAllocationSize` | ✅ | 暫定で `SetEndOfFile` と同じ挙動 |
 | `LockFile` / `UnlockFile` | ✅ (簡易) | `DokanOptions.UserModeLock` でカーネル側に任せ、ここは常に Success |
-| `GetFileSecurity` / `SetFileSecurity` | ❌ | `NotImplemented` を返してカーネル側に既定 ACL を作らせる |
+| `GetFileSecurity` / `SetFileSecurity` | ✅ | inode (uname/gname/st_mode + 正準 ACL) ⇄ Windows SD を投影/逆投影。owner/group→SID、mode→owner/group/Everyone の allow ACE、named は `user.pgfs_acl`。deny/ACE順/継承は投影で落とす。詳細は [permission-interop.md](permission-interop.md) |
 | `FindStreams` | ❌ | Alternate Data Streams は未対応、`NotImplemented` を返す |
 
 凡例: ✅ 完了、⚠️ 部分実装、❌ 未実装。
@@ -141,19 +141,19 @@ pgfs.assign が特に使うのは:
 | パス区切り | `/` 固定 | `\` を `/` に正規化してから Api へ |
 | 削除のタイミング | `Unlink` 即削除 | `Cleanup` で `DeletePending` を見て削除 |
 | 書き込みの追記モード | offset 引数 | `info.WriteToEndOfFile` |
-| ACL | st_mode + uname/gname | NTAccount + SID（暫定で `NotImplemented`） |
+| ACL | st_mode + 正準 ACL (`system.posix_acl_access` 経由) | st_mode + 正準 ACL (`Get/SetFileSecurity` で SD 投影) |
 
 両者とも [`Pgfs.Lib.Api.Api`](../src/lib/src/Api/Api.cs) を呼ぶだけで実 DB 操作は共通化されています。
 
 ## 設計判断・暫定実装
 
-### root → Administrator マッピング
+### 名前正規化 + well-known principal マッピング
 
-Linux 側で `uname = root`、`gname = root` で作成したファイルは、Windows 側では実用上 `Administrator` / `Administrators` として扱います。[src/assign/src/FileSystemUtils.cs](../src/assign/src/FileSystemUtils.cs) の `IsWritable` でその差分を吸収しています。
+owner / group / principal 名は **保存時・照合時・呼び出し元名のすべて**で正規化する ([NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs): 全角ASCII→半角 + ドメイン除去 `\`・`@` + 小文字化)。DB は **Linux 名で保存**し、Windows ⇄ Linux の well-known 名は [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) のマッピングで双方向変換する: `root`↔`Administrator(s)` / `nobody`・`nogroup`↔`NT AUTHORITY\ANONYMOUS LOGON` / `other`↔`Everyone`。これにより Windows で作ったファイルも Linux で同名解決でき、大小・全半角も同一視される (設計の正は [permission-interop.md](permission-interop.md))。
 
 ### `Hidden` / `System` / `Archive` 属性
 
-Linux 側に対応する概念が無いため、`pgfs_inode.xattrs` JSONB の `user.win_attrs` キーに `FileAttributes` のビットマスク (Hidden=0x02 / System=0x04 / Archive=0x20 だけを抽出) を 4-byte little-endian int で保存する。マスクが空 (全 OFF) のときも **xattr は削除せず 4 バイトの 0 を書き込む**。
+Linux 側に対応する概念が無いため、`pgfs_inode.xattrs` JSONB の `user.win.attrs` キーに JSON `{hidden,system,archive}` (bool) で保存する。`user.` 名前空間なので Linux の `getfattr` からも見える。`compressed` は将来対応。空 (全 OFF) でも **xattr は削除せず JSON を書き込む**。
 
 `GetFileInformation` / `FindFiles` 系での判定は二値:
 - **xattr 有り** (値が 0 でも) = Windows 側で `SetFileAttributes` を一度でも触ったことがある → xattr 値をそのまま信頼
@@ -161,7 +161,7 @@ Linux 側に対応する概念が無いため、`pgfs_inode.xattrs` JSONB の `u
 
 「マスク 0 のとき xattr を消す」設計だと、ドットファイルを Windows Explorer で un-hide した直後に xattr が消え、次回読み出しで heuristic が復活して **また Hidden に戻ってしまう UX バグ** を踏むため、xattr 有無を「触ったかどうか」のフラグとして残す設計にしている。
 
-`ReadOnly` は引き続き st_mode の write ビットで管理 (Linux 側と双方向で見える形)。実装は [src/assign/src/FileSystemUtils.cs](../src/assign/src/FileSystemUtils.cs) の `WinAttrsXattrKey` / `LoadWinAttrs` / `SaveWinAttrs`。
+`ReadOnly` は引き続き st_mode の write ビットで管理 (Linux 側と双方向で見える形)。実装は [src/assign/src/FileSystemUtils.cs](../src/assign/src/FileSystemUtils.cs) の `WinAttrsXattrKey` (= `user.win.attrs`) / `LoadWinAttrs` / `SaveWinAttrs`。
 
 ### Alternate Data Streams (ADS)
 
@@ -169,7 +169,12 @@ NTFS の `file.txt:stream` 形式の代替ストリームは未対応。`FindStr
 
 ### ACL (GetFileSecurity / SetFileSecurity)
 
-`NotImplemented` を返すことで、Dokan カーネルが現在のプロセス権限を持つ標準的な ACL を自動生成する挙動になります。これで Explorer は問題なく表示・操作できます。本格的な ACL 永続化は将来対応予定（pgfs_inode の `xattrs` または専用列に格納）。
+POSIX を正準・Windows ACL を **投影ビュー**として実装済み (設計の正は [permission-interop.md](permission-interop.md))。
+
+- **GetFileSecurity (読み)**: inode を Windows セキュリティ記述子に投影する ([FileSystemUtils.BuildSecurity](../src/assign/src/FileSystemUtils.cs))。owner/group を uname/gname→SID、DACL を `st_mode` の owner/group/Everyone allow ACE + 正準 ACL (`user.pgfs_acl`) の named エントリに合成。Explorer の「セキュリティ」タブと `icacls` が POSIX 権限を反映する。
+- **SetFileSecurity (書き)**: 受領した SD を逆投影する ([FileSystemUtils.ApplySecurity](../src/assign/src/FileSystemUtils.cs))。owner/group SID→名前 (owner にグループ SID が来たら `owner=nobody` / `group=該当` に振り分け)、DACL の基本 3 クラス→`st_mode`、named→`user.pgfs_acl`。
+- **投影で落とすもの**: deny ACE / ACE 順序 / 継承フラグ は POSIX に等価が無いため採用しない (Windows⇄Windows の ACL 完全一致は保証しない)。
+- Linux 側は `system.posix_acl_access` (setfacl/getfacl) が同じ正準ストアと往復する ([Mount.md](Mount.md))。
 
 ### LockFile / UnlockFile
 
@@ -196,14 +201,14 @@ NTFS の `file.txt:stream` 形式の代替ストリームは未対応。`FindStr
 | データ I/O (Read/Write) | ✅ | `Api.ReadData` / `WriteData` を共通基盤として使用 |
 | SID ↔ uname/gname 解決 | ✅ | [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) で NTAccount.Translate |
 | Truncate のチャンク削減 | ✅ | `Api.TruncateData`（Mount と共通） |
-| ACL (Get/Set FileSecurity) | ❌ | `NotImplemented` で Dokan のデフォルトに任せる。本格対応は将来 |
-| Hidden / System / Archive 属性 | ✅ | xattr `user.win_attrs` に 4-byte LE int で保存。`ReadOnly` は st_mode の write ビット (従来通り)。Linux で作った dotfile は heuristic fallback で Hidden 表示 |
+| ACL (Get/Set FileSecurity) | ✅ | POSIX 正準・Windows 投影ビュー。SD ⇄ st_mode + 正準 ACL (`user.pgfs_acl`)。owner=group は nobody/該当へ。deny/継承は投影で落とす。詳細は [permission-interop.md](permission-interop.md)。残: named ACL の厳密 enforce (要件待ち) |
+| Hidden / System / Archive 属性 | ✅ | xattr `user.win.attrs` に JSON `{hidden,system,archive}` で保存。`ReadOnly` は st_mode の write ビット (従来通り)。Linux で作った dotfile は heuristic fallback で Hidden 表示 |
 | Alternate Data Streams | ❌ | NTFS の ADS は未対応 |
 | POSIX 互換 range lock | ❌ | `DokanOptions.UserModeLock` でカーネル任せ |
 | Junction（再解析ポイント） | ❌ | DB スキーマには `is_junction` 列あり。Mount からのみ参照可能。Assign 側は未対応 |
 | Notify (他クライアント変更通知) | ✅ | `database.notify_enabled=true` (CLI `--notify`) で有効化。PostgreSQL LISTEN/NOTIFY 経由で他クライアントの書き込みを受信し、ローカル `InodeCache` を invalidate した後、[FileSystem.PropagateRemoteChange](../src/assign/src/FileSystem.cs) が `DokanInstance.NotifyUpdate(WindowsPath)` で Explorer に再描画を依頼する。ペイロード仕様等の詳細は [history.md](history.md) 「他クライアント変更通知 (Notify)」参照 |
 | 接続失敗時の再接続 | ✅ | [Retry](../src/lib/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。クエリ実行中の例外は idempotency 問題があるため再試行しない |
-| OS に存在しない uname / gname のフォールバック | ✅ | `NTAccount.Translate` 失敗時、`mount.fallback_uname` / `mount.fallback_gname` (DB 保存、既定 `nobody` / `nogroup`) を SID 解決して返す (Windows 環境では pgfs.toml で `Guest` / `Guests` 等に変更推奨)。fallback 名自体が SID 解決できなければ `WellKnownSidType.AnonymousSid` を hardcode し warning ログ。実装は [src/assign/src/WindowsUserResolver.cs](../src/assign/src/WindowsUserResolver.cs) |
+| OS に存在しない uname / gname のフォールバック | ✅ | `NTAccount.Translate` 失敗時、`mount.fallback_uname` / `mount.fallback_gname` (DB 保存、既定 `nobody` / `nogroup`) を SID 解決して返す。`nobody`/`nogroup` は well-known マッピングで `NT AUTHORITY\ANONYMOUS LOGON` に解決される。それも SID 解決できなければ `WellKnownSidType.AnonymousSid` を hardcode し warning ログ。実装は [src/assign/src/WindowsUserResolver.cs](../src/assign/src/WindowsUserResolver.cs) |
 
 ## 動作確認シナリオ（Windows 想定）
 

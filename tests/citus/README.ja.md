@@ -11,7 +11,8 @@ Citus 対応 (分散化 / 排他制御) に関する検証スクリプト。
 | [verify.sql](verify.sql) + [verify.cmd](verify.cmd) | mkfs --clean --citus 済みの空 PGFS (= 1 ノード Citus on pgsql_server) に対する構成診断 SQL。`citus_tables` / 分散キー / shard 配置 / EXPLAIN を確認 | Windows ホスト → ssh pgsql_server 経由 |
 | [multinode_probe.sh](multinode_probe.sh) | Citus の仕様確認 (auto-sync / DDL 伝搬 / shard 配置 / citus_add_local_table_to_metadata 等) 用 one-off probe スクリプト。docker で 2 ノード Citus (coord + worker) を立てて 13 セクションの probe SQL を流す | linux_client (docker daemon 未起動からでも OK、trap で後始末) |
 | [test_matrix.sh](test_matrix.sh) | mkfs 多ノード Citus の **18 ケース** マトリックステスト (3 initial × 6 target)。docker で 2 ノード Citus (coord + worker1) を立てて、各 case で setup → mkfs → state 検証 → 次へ | linux_client (同上) |
-| [race_multinode.sh](race_multinode.sh) | クロスクライアント排他制御の残検証。docker 2 ノード Citus + mount.pgfs × 2 を立てて (i) 多ノード Citus 上の Linux e2e 34/34、(ii) 並行 write race の cross-client 整合性 (md5/size 一致)、(iii) 並行 mkdir race の EEXIST 保証、(iv) pgfs_lock 行累積の現実的サイズ、を一気通貫で確認 | linux_client (同上) |
+| [race_multinode.sh](race_multinode.sh) | クロスクライアント排他制御の残検証。docker 2 ノード Citus + mount.pgfs × 2 を立てて (i) 多ノード Citus 上の Linux e2e 35/35、(ii) 並行 write race の cross-client 整合性 (md5/size 一致)、(iii) 並行 mkdir race の EEXIST 保証、(iv) pgfs_lock 行累積の現実的サイズ、を一気通貫で確認 | linux_client (同上) |
+| [audit.sh](audit.sh) | 監査ログ ([docs/audit-log.md](../../docs/audit-log.md)) 専用テスト。docker 2 ノード Citus (coord + worker1) + mount.pgfs × 1 を立てて (A) 各 op の記録、(B) caller_* (uid/uname/host/ip)、(C) パーティション自動作成 = 月跨ぎ機構、(D) `audit.enabled=false` で 0 行、を確認。Citus 同一 tx commit も A/B/C 成立で同時実証 | linux_client (同上) |
 
 ## 共通の前提
 
@@ -25,8 +26,8 @@ Citus 対応 (分散化 / 排他制御) に関する検証スクリプト。
 | 変数 | 既定 (test_matrix / multinode_probe / race_multinode) | 用途 |
 |---|---|---|
 | `PGFS_PROBE_IMAGE` | `citusdata/citus:latest` | Citus docker イメージ |
-| `COORD_NAME` / `WORKER1_NAME` | `pgfs-citus-{matrix,verify,race}-{coord,worker1}` | コンテナ名 |
-| `COORD_PORT` / `WORKER1_PORT` | `15432` / `15433` (race は `15532` / `15533`) | ホスト公開ポート |
+| `COORD_NAME` / `WORKER1_NAME` | `pgfs-{citus-matrix,verify,race,audit}-{coord,worker1}` | コンテナ名 |
+| `COORD_PORT` / `WORKER1_PORT` | `15432` / `15433` (race は `15532` / `15533`、audit は `15542` / `15543`) | ホスト公開ポート |
 | `SUPER_USER` / `SUPER_PASSWORD` | `postgres` / `postgres` | super 接続 (probe は `PG_USER` / `PG_PASSWORD`) |
 | `PGFS_USER` / `PGFS_PASSWORD` / `PGFS_DB` | `pgfs` | PGFS ユーザ / DB |
 | `MKFS_BIN` / `MOUNT_BIN` | `<repo>/bin/Publish/{mkfs,mount}.pgfs` (実値はホスト個別) | テスト対象バイナリ |
@@ -136,7 +137,7 @@ bash tests/citus/race_multinode.sh
 
 | Test | 内容 | 検証している保証 |
 |---|---|---|
-| Test 1 | 多ノード Citus 上で [tests/linux/e2e.sh](../linux/e2e.sh) 34 ケース | 分散 + 排他制御が多ノードで機能、cross-shard hop も含めて regression なし |
+| Test 1 | 多ノード Citus 上で [tests/linux/e2e.sh](../linux/e2e.sh) 35 ケース | 分散 + 排他制御が多ノードで機能、cross-shard hop も含めて regression なし |
 | Test 2 | 2 client から同じファイルへ並行 dd (8MiB × 4 round、urandom vs zero) → md5/size が両 client で一致 | `LockData(dataId)` で writer 同士が直列化、PG 行ロックと相まってチャンク level の torn write 無し / cross-client 整合性 |
 | Test 3 | 2 client から同じ親に並行 mkdir 同名 (20 round × serial + parallel) | `(parent_id, name)` UK が cross-shard 整合性を保証 (シャード跨ぎでも全 client から見た「同じ親に同名 2 つ」は不可能) |
 | Test 4 | 上記 1-3 完走後の `pgfs_lock` 行数 + relation size | DELETE しない方針なので累積するが、1 行 ~50 bytes × 数千 = 1MB 以下に収まる (設計値 100 万行で 100MB 以下と整合) |
@@ -154,6 +155,41 @@ bash tests/citus/race_multinode.sh
 ### 実績
 
 **4/4 PASS** (Citus 14.0.0 + docker on linux_client)。pgfs_lock rows=178 / size=768kB。
+
+## audit.sh (監査ログ専用テスト)
+
+監査ログ ([docs/audit-log.md](../../docs/audit-log.md)) の機能本体と既存 e2e 回帰は通過済み。本スクリプトは監査に**固有**の振る舞いを専用テストとして検証する。docker で coord + worker1 を立て、mount.pgfs を 1 プロセス起動して以下 5 項目を確認する。
+
+```bash
+# linux_client 上で (mkfs.pgfs / mount.pgfs バイナリが bin/Publish/ に必要)
+bash tests/citus/audit.sh
+```
+
+### 確認項目
+
+| Test | 内容 | 検証している保証 |
+|---|---|---|
+| Sanity | `citus_tables` に `pgfs.pgfs_audit` が `distributed` (occurred_at 分散) として現れる、distributed 計 5 | audit が Citus 分散テーブルに正しく登録される |
+| A | mount 経由で create/chmod/chown/hardlink/rename/delete を実行 → op 別に `pgfs_audit` 行が 1 件以上。create 行の name / detail.kind を精査 | 6 つの mutating フックが期待 op を同一 tx で記録する |
+| B | create 行の caller_uid / caller_uname が `id -u` / `id -un` と一致、caller_host / caller_ip が非空 (ip は接続形態依存で soft) | fuse_get_context 由来の呼び出し元情報が正しく載る |
+| C1 | mkfs 直後は当月パーティション (`pgfs_audit_YYYY_MM`) が無く、最初の監査 op で自動生成。DEFAULT パーティションは持たない | ensure-before-insert (= 月跨ぎ機構) が op 駆動で働く |
+| C2 | 未カバー月 (2099-01) への直接 INSERT は PG が拒否 → 同じ DDL でその月のパーティションを足すと INSERT が通る | DEFAULT 無し設計の裏取り + 月境界は別 key で同一コードパス |
+| D | mkfs を `--audit` 無しで打ち直し → 同じ 6 op を実行しても `pgfs_audit` は 0 行 (テーブル自体は常時作成) | `audit.enabled=false` の opt-out が効く |
+
+> **月跨ぎの注記**: `occurred_at = DateTime.Now` を実時刻で未来月にはできないため、本質である「当月パーティションが無ければ op 前に自動 ensure する」機構を C1 (当月の自動生成) と C2 (任意月のパーティション追加で INSERT 成立) の 2 段で決定的に検証する。実カレンダーの月境界は、翌月 1 日に同じ `EnsureAuditPartition` が翌月 key で走るだけ (= 同一コードパス)。
+
+### 仕組み
+
+- `--network host` で 2 PG コンテナを 15542/15543 で listen (test_matrix.sh / race_multinode.sh と同じ理由)
+- Part 1: `mkfs --clean --citus --audit --worker localhost:15543` → mount → A/B/C
+- Part 2: unmount → `mkfs --clean --citus`(--audit 無し)→ remount → D
+- DB 検査は `docker exec <coord> psql` (super) で `pgfs.pgfs_audit` を直接参照
+- 終了時 trap で fusermount3 → docker 停止 → daemon 元状態に戻す
+- ログは `/tmp/citus_audit.log` (本体) + `/tmp/pgfs_audit.mount.log` (mount.pgfs)
+
+### 実績
+
+**12/12 PASS** (Citus docker on linux_client)。内訳: Sanity(audit 分散登録) / C1-before(当月パーティション未作成 + DEFAULT 無し = 2) / A(op 別記録 + create detail = 2) / B(uid+uname / host / ip = 3) / C1-after(自動生成) / C2(拒否 + 追加成立 = 2) / D(enabled=false で 0 行)。呼び出し元の uid/uname/host と create 行の detail.mode/kind を確認。
 
 ## cross-shard rename の動作確認
 

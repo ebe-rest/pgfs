@@ -11,7 +11,7 @@ A project implementing a **FUSE filesystem backed by PostgreSQL storage** in C# 
 - Settings are read from **TOML** (`pgfs.toml`) and the DB `pgfs_settings` table, and can be overridden with CLI arguments.
 - For the DB schema, see [docs/database.md](docs/database.md).
 
-> **Status**: all three pillars (Mkfs / Mount / Assign) are implemented, passing Linux e2e 34/34 + Windows e2e 24/24 + the race verification 4/4 on multi-node Citus. Citus (horizontal distribution) is complete. For the list of what to do next, see [docs/next.md](docs/next.md).
+> **Status**: all three pillars (Mkfs / Mount / Assign) are implemented, passing Linux e2e 35/35 + Windows e2e 26/26 + the race verification 4/4 on multi-node Citus + the audit-log dedicated suite 12/12. Citus (horizontal distribution) and the audit log are complete, and the Linux↔Windows interop for permissions/ownership/ACLs is implemented as well ([docs/permission-interop.md](docs/permission-interop.md)). For the list of what to do next, see [docs/next.md](docs/next.md).
 
 ## Solution layout
 
@@ -19,8 +19,8 @@ A project implementing a **FUSE filesystem backed by PostgreSQL storage** in C# 
 |---|---|---|---|---|
 | **Lib** | [src/lib/](src/lib/) | core library (Models / Api / Logging / Collections / Utility / Objects) | cross-platform | implemented |
 | **Mkfs** | [src/mkfs/](src/mkfs/) | CLI that initializes the PostgreSQL-side tables etc. (`mkfs.pgfs`) | cross-platform | implemented, verified on Linux |
-| **Mount** | [src/mount/](src/mount/) | mount tool for Linux/macOS (`mount.pgfs`, Tmds.Fuse) | Linux / macOS | all FUSE operations implemented (incl. data I/O, xattr, symlink, hard link), verified on Linux |
-| **Assign** | [src/assign/](src/assign/) | mount tool for Windows (`pgfs.assign`, DokanNet) | Windows | all Dokan operations implemented (ACL and ADS unsupported), verified on Windows |
+| **Mount** | [src/mount/](src/mount/) | mount tool for Linux/macOS (`mount.pgfs`, Tmds.Fuse) | Linux / macOS | all FUSE operations implemented (incl. data I/O, xattr, symlink, hard link, POSIX ACL), verified on Linux |
+| **Assign** | [src/assign/](src/assign/) | mount tool for Windows (`pgfs.assign`, DokanNet) | Windows | all Dokan operations implemented (ACL via Get/SetFileSecurity projection is supported too; only ADS is unsupported), verified on Windows |
 
 ## Requirements
 

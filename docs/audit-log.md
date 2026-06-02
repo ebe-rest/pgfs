@@ -119,8 +119,15 @@ Three layers:
 
 ## Tests
 
-Run in the test environment ([docs/tests.md](tests.md)):
+The audit log is covered at three levels (see [docs/tests.md](tests.md) for the overall test hub).
 
-- Existing regression: the Linux / Windows e2e stay green.
-- Added: each op inserts the expected row into `pgfs_audit`; `audit.enabled=false` yields 0 rows; partitions are auto-created across a month boundary; caller_* (uid/uname/domain/host/ip) are populated as expected.
-- Citus: with auditing enabled on multi-node Citus, an operation commits in a single tx (verifying the 2PC risk), reusing the [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh) framework.
+- **Existing regression**: Linux e2e 35/35, Windows e2e 26/26, Citus race multinode 4/4, and Citus mkfs matrix 18/18 stay green, verified with the audit-enabled configuration.
+- **Citus single-tx commit**: `Initializer.CreateAuditTableAsync` always creates the table regardless of `--audit`, and under `--citus` distributes it by `occurred_at` (Citus distributed-table count = 5: inode / data / data_chunk / lock / audit). With auditing enabled on multi-node Citus, an operation commits in the same transaction — demonstrated by `race_multinode.sh` (4/4) — so the 2PC risk does not materialize.
+- **Dedicated audit test — [tests/citus/audit.sh](../tests/citus/audit.sh)**: the existing suite counts stay unchanged because the audit-specific checks live in this dedicated script rather than the shared e2e runs. It brings up a docker 2-node Citus + one mount.pgfs and runs 12 checks (details in [tests/citus/README.md](../tests/citus/README.md)), passing 12/12 on docker Citus:
+  - **A**: each op (create / delete / rename / chmod / chown / hardlink) inserts the expected row into `pgfs_audit`; a create row's `name` and `detail.kind` are inspected.
+  - **B**: `caller_uid` / `caller_uname` match the caller's real values (obtained via `fuse_get_context`), and `caller_host` / `caller_ip` are recorded.
+  - **C1**: right after mkfs there is no current-month partition → the first op auto-creates it via ensure-before-insert; no DEFAULT partition exists.
+  - **C2**: a direct INSERT into an uncovered month is rejected → adding that month's partition with the same DDL lets the INSERT through (= a month boundary is just another key on the same code path).
+  - **D**: with `audit.enabled=false` nothing is recorded, while the table itself is always created.
+
+> **Month-rollover note**: because `occurred_at` cannot be set to a future month at real time, the essence — "ensure the current-month partition before the op if it is missing" — is verified deterministically by C1 (auto-creating the current month) + C2 (adding an arbitrary month makes the INSERT succeed). A real calendar month boundary simply runs the same `EnsureAuditPartition` with next month's key.

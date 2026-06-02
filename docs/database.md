@@ -32,7 +32,7 @@ The core table of the filesystem. It holds the (inode-like) metadata for every f
 | `link_target` | `TEXT`      | `NULL`     |                     |         | The link target path for a symlink or junction.                  |
 | `is_junction` | `BOOLEAN`   | `NOT NULL` | `FALSE`             |         | `TRUE` for a Windows junction.                                   |
 | `data_id`     | `BIGINT`    | `NULL`     |                     |         | ID referencing the file body (`pgfs_data.id`). `NULL` for directories. |
-| `xattrs`      | `JSONB`     | `NOT NULL` | `{}`                |         | Extended attributes (xattr) as key/value pairs.                  |
+| `xattrs`      | `JSONB`     | `NOT NULL` | `{}`                |         | Extended attributes (xattr) as key/value pairs. General xattr values are Base64. Reserved keys: `user.pgfs_acl` (canonical ACL document JSON), `user.win.attrs` (Windows attributes JSON `{hidden,system,archive}`). See [permission-interop.md](permission-interop.md). |
 | `created_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | Creation timestamp                                               |
 | `created_by`  | `TEXT`      | `NOT NULL` |                     |         | Creating user name                                               |
 | `updated_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | Update timestamp                                                 |

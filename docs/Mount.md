@@ -127,10 +127,11 @@ What mount.pgfs uses in particular:
 | `Read` | done | `Api.ReadData` (via bytea chunks; holes are zero-filled). |
 | `Write` | done | `Api.WriteData` (via bytea chunks; creates the data row on first write). |
 | `StatFS` | done | Uses `pg_database_size` as the actual usage. |
-| `GetXAttr` | done | Reads from `pgfs_inode.xattrs` JSONB via `->>`, decoding the value from Base64. |
-| `SetXAttr` | done | Merges JSONB with `||`, honoring `XATTR_CREATE` / `XATTR_REPLACE` flags. |
+| `GetXAttr` | done | Reads from `pgfs_inode.xattrs` JSONB via `->>`, decoding the value from Base64. `system.posix_acl_access` is special-cased (see ACL below). |
+| `SetXAttr` | done | Merges JSONB with `||`, honoring `XATTR_CREATE` / `XATTR_REPLACE` flags. `system.posix_acl_access` is special-cased. |
 | `ListXAttr` | done | Enumerates with `jsonb_object_keys`, returns in NUL-terminated form. |
-| `RemoveXAttr` | done | Deletes from JSONB with the `-` operator. |
+| `RemoveXAttr` | done | Deletes from JSONB with the `-` operator. For `system.posix_acl_access` it clears the named entries (equivalent to `setfacl -b`). |
+| POSIX ACL (`system.posix_acl_access`) | done | Round-trips with setfacl/getfacl. `st_mode`'s 3 base classes + canonical ACL (`user.pgfs_acl` named entries) <-> ACL binary. The mask is auto-computed; no named entries returns ENODATA. Shares the same canonical store as the Windows DACL (see ACL below / [permission-interop.md](permission-interop.md)). |
 | `SymLink` | done | `Api.CreateSymlink` (`S_IFLNK | 0777`, stored in the `link_target` column). |
 | `ReadLink` | done | Returns `inode.LinkTarget`, NUL-terminated. |
 | `Link` | done | `Api.CreateHardLink` (adds an inode with the same `data_id`; updates `st_nlink` across all links). |
@@ -219,6 +220,18 @@ All implemented:
 - Symbolic links are stored in the `link_target` column (`Api.CreateSymlink`). `ReadLink` returns NUL-terminated.
 - Hard links create multiple inodes sharing the same `data_id` (`Api.CreateHardLink`). `st_nlink` is updated consistently across all links.
 
+### POSIX ACL (`system.posix_acl_access`)
+
+Round-trips with `setfacl` / `getfacl`. The getxattr/setxattr of `system.posix_acl_access` is special-cased,
+converting between the ACL binary and **`st_mode`'s 3 base classes + the canonical ACL document (`user.pgfs_acl` named entries)**
+(implemented in [src/mount/src/FileSystem.cs](../src/mount/src/FileSystem.cs) `BuildPosixAccessAcl` / `SetPosixAccessAcl`; the codec lives in
+[PosixAcl](../src/lib/src/Models/PosixAcl.cs)).
+
+- Entry order is USER_OBJ -> USER* -> GROUP_OBJ -> GROUP* -> MASK -> OTHER. The mask is recomputed each time as group_obj union all named entries.
+- A "minimal ACL" with no named entries returns ENODATA, matching the getfacl convention of deriving the ACL from the mode.
+- This canonical store is shared with the Windows DACL (`Get/SetFileSecurity`). For the POSIX-canonical / Windows-projection view design, see
+  [permission-interop.md](permission-interop.md). `system.posix_acl_default` is currently pass-through (Linux-internal round-trip only).
+
 ### `st_atime`
 
 Requirement: the last-access time is not stored, and the same value as `st_mtime` is returned. The implementation matches (`s.st_atim = mtime.ToTimespec()` in `FillStat`).
@@ -235,13 +248,14 @@ On `Ctrl+C` it attempts `LazyUnmount` (equivalent to `fusermount3 -uz`). If the 
 
 | Item | Status | Notes |
 |---|---|---|
-| Data I/O (Read/Write) | done | `Api.ReadData` / `Api.WriteData` over bytea chunks. |
+| Data I/O (Read/Write) | done | `Api.ReadData` / `Api.WriteData` implemented over `pgfs_data_chunk` `bytea` chunks. |
 | Bidirectional `uid/gid` <-> `uname/gname` resolution | done | libc P/Invoke in [src/mount/src/UserResolver.cs](../src/mount/src/UserResolver.cs). |
 | `Chown` applying uname/gname | done | Calls `Api.UpdateOwner`. Honors the `uid == -1` = do-not-change convention. |
 | Extended attributes (xattr) | done | `Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`. Values stored Base64 in JSONB. |
 | Symbolic links | done | `Api.CreateSymlink` / `ReadLink`. |
 | Hard links | done | `Api.CreateHardLink`. `Unlink` updates `st_nlink` on the remaining inodes. |
-| Chunk reduction on Truncate | done | `Api.TruncateData` DELETEs chunks beyond the new size and trims the tail chunk's payload. |
+| Chunk reduction on Truncate | done | `Api.TruncateData` deletes whole `bytea` chunk rows beyond the new size and trims the tail chunk with `substring` / `overlay`. |
+| POSIX ACL (setfacl/getfacl) | done | `system.posix_acl_access` <-> `st_mode` + canonical ACL (`user.pgfs_acl`). Shares the same canonical store as the Windows DACL. See "POSIX ACL" above / [permission-interop.md](permission-interop.md). Strict named-ACL enforcement is pending requirements. |
 | macOS verification | not done | Depends on Tmds.Fuse's macOS support. Requires macFUSE. |
 | Access check (`Access`) | not done | For now, passing `default_permissions` at mount time lets the kernel decide. |
 | Mount option `-o` | partial | Flags received via fstab `-o ...` are forwarded; a curated set is still being expanded. |

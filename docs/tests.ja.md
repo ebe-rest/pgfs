@@ -10,18 +10,19 @@ pgfs の全テストの **ハブドキュメント**。「どんなテストが�
 
 | スイート | 件数 | 何を見るか | 場所 | 詳細 README |
 |---|---|---|---|---|
-| **Linux e2e** | 34 | mount.pgfs (FUSE) の全オペレーションを実 FS 操作で確認 | [tests/linux/e2e.sh](../tests/linux/e2e.sh) | [tests/linux/README.ja.md](../tests/linux/README.ja.md) |
-| **Windows e2e** | 24 | pgfs.assign (Dokan) の全オペレーションを実 FS 操作で確認 | [tests/windows/e2e.ps1](../tests/windows/e2e.ps1) | [tests/windows/README.ja.md](../tests/windows/README.ja.md) |
+| **Linux e2e** | 35 | mount.pgfs (FUSE) の全オペレーションを実 FS 操作で確認 (POSIX ACL setfacl/getfacl 含む) | [tests/linux/e2e.sh](../tests/linux/e2e.sh) | [tests/linux/README.ja.md](../tests/linux/README.ja.md) |
+| **Windows e2e** | 26 | pgfs.assign (Dokan) の全オペレーションを実 FS 操作で確認 (ACL 投影 Get/SetFileSecurity 含む) | [tests/windows/e2e.ps1](../tests/windows/e2e.ps1) | [tests/windows/README.ja.md](../tests/windows/README.ja.md) |
 | **Citus mkfs マトリックス** | 18 | `mkfs --citus / --worker / --clean` の組合せ挙動 (新規 / 既存維持 / 再構築) | [tests/citus/test_matrix.sh](../tests/citus/test_matrix.sh) | [tests/citus/README.ja.md](../tests/citus/README.ja.md) |
 | **Citus multinode probe** | 13 セクション | Citus 仕様の挙動確認 (auto-sync / DDL 伝搬 / shard 配置 等) の one-off probe | [tests/citus/multinode_probe.sh](../tests/citus/multinode_probe.sh) | [tests/citus/README.ja.md](../tests/citus/README.ja.md) |
 | **Citus race multinode** | 4 | 多ノード Citus + 2 mount client でのクロスクライアント排他制御 + 多ノード e2e | [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh) | [tests/citus/README.ja.md](../tests/citus/README.ja.md) |
+| **監査ログ専用** | 12 | 多ノード Citus + 1 mount client で監査ログ固有の振る舞い (各 op 記録 / caller_* / パーティション自動作成 = 月跨ぎ機構 / `audit.enabled=false` で 0 行) | [tests/citus/audit.sh](../tests/citus/audit.sh) | [tests/citus/README.ja.md](../tests/citus/README.ja.md) |
 | **Citus verify** | SQL 診断 | 1 ノード Citus セットアップ後の `citus_tables` / 分散キー / shard 配置 / EXPLAIN | [tests/citus/verify.sql](../tests/citus/verify.sql) | [tests/citus/README.ja.md](../tests/citus/README.ja.md) |
 
-### Linux e2e (34 件) のカテゴリ
+### Linux e2e (35 件) のカテゴリ
 
-ディレクトリ操作 / ファイル基本 / データ I/O (bytea) / 名前変更 / 権限 (chmod/chown) / シンボリックリンク / ハードリンク / xattr / メタデータ (StatFS/utime) / 並行性 / 名前解決 fallback。カバー範囲は [docs/Mount.md](Mount.md) の ✅ オペレーション。
+ディレクトリ操作 / ファイル基本 / データ I/O (bytea) / 名前変更 / 権限 (chmod/chown) / シンボリックリンク / ハードリンク / xattr / **POSIX ACL (setfacl/getfacl)** / メタデータ (StatFS/utime) / 並行性 / 名前解決 fallback。カバー範囲は [docs/Mount.md](Mount.md) の ✅ オペレーション。
 
-### Windows e2e (24 件) のカテゴリ
+### Windows e2e (26 件) のカテゴリ
 
 ディレクトリ操作 / ファイル基本 / データ I/O (bytea) / truncate / 名前変更 / 属性 (ReadOnly/Hidden/System/Archive) / ボリューム・パターン / 並行性。POSIX 専用 (symlink/hardlink/chmod/chown/xattr API) は DokanNet 非対応で対象外、代わりに Windows 固有を追加。カバー範囲は [docs/Assign.md](Assign.md) の ✅/⚠️ オペレーション。
 
@@ -29,10 +30,11 @@ pgfs の全テストの **ハブドキュメント**。「どんなテストが�
 
 | スイート | 結果 | 検証環境 |
 |---|---|---|
-| Linux e2e | **34/34 ALL PASSED** | 単 PG / 1 ノード Citus (pgsql_server) / 多ノード Citus (docker) いずれも |
-| Windows e2e | **24/24 ALL PASSED** | 単 PG / 1 ノード Citus (pgsql_server) |
+| Linux e2e | **35/35 ALL PASSED** | 単 PG / 1 ノード Citus (pgsql_server) / 多ノード Citus (docker) いずれも |
+| Windows e2e | **26/26 ALL PASSED** | 単 PG / 1 ノード Citus (pgsql_server) |
 | Citus mkfs マトリックス | **18/18 PASS** | Citus 14.0.0 docker on linux_client |
 | Citus race multinode | **4/4 PASS** | Citus 14.0.0 docker on linux_client |
+| 監査ログ専用 | **12/12 PASS** | Citus docker on linux_client |
 
 (各スイートの最新パス状況の正は各ディレクトリ README。)
 
@@ -79,6 +81,7 @@ tests\windows\run.cmd
 bash tests/citus/test_matrix.sh        # mkfs 18 ケースマトリックス
 bash tests/citus/multinode_probe.sh    # Citus 仕様 probe
 bash tests/citus/race_multinode.sh     # クロスクライアント排他制御 + 多ノード e2e
+bash tests/citus/audit.sh              # 監査ログ専用 (各 op 記録 / caller_* / パーティション / enabled=false)
 ```
 
 ```cmd
@@ -101,6 +104,7 @@ tests\citus\verify.cmd
 | Citus mkfs マトリックス | ssh Linux (bash) | **docker Citus** (coord + worker1) | なし (mkfs のみ) | **あり** | linux_client (docker daemon) |
 | Citus multinode probe | ssh Linux (bash) | **docker Citus** (coord + worker) | なし | **あり** | linux_client |
 | Citus race multinode | ssh Linux (bash) | **docker Citus** (coord + worker1) | libfuse3 (mount は **ホスト** で起動) | DB のみ docker | linux_client |
+| 監査ログ専用 | ssh Linux (bash) | **docker Citus** (coord + worker1) | libfuse3 (mount は **ホスト** で起動) | DB のみ docker | linux_client |
 | Citus verify | Windows → ssh pgsql_server | **1 ノード Citus on pgsql_server** (実機) | なし | なし | **pgsql_server** |
 
 ### 共通の前提

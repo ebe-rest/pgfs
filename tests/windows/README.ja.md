@@ -47,7 +47,7 @@ Linux 版 ([tests/linux/](../linux/README.ja.md)) と対になる Windows 版で
 
 ## 現状
 
-本スイートは 24 件で、単 PG モード / 1 ノード Citus いずれでも 24/24 通過する。
+**26 passed / 0 failed / 0 skipped — ALL PASSED** (単 PG モード / 1 ノード Citus いずれでも 26/26。ACL 投影 `test_getfilesecurity_projection` / 逆投影 `test_setfilesecurity_roundtrip` を追加)。
 
 ## カバーしていないもの
 
@@ -192,7 +192,7 @@ PASS: test_nested_directories
 ...
 
 ===========================================
-Results: 24 passed, 0 failed, 0 skipped (out of 24)
+Results: 26 passed, 0 failed, 0 skipped (out of 26)
 
 === unmount ===
   ...\dokanctl.exe /u P:

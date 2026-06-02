@@ -193,7 +193,7 @@ PASS: test_concurrent_mkdir_diff_dirs
 PASS: test_fallback_uname_gname
 
 ===========================================
-Results: 34 passed, 0 failed, 0 skipped (out of 34)
+Results: 35 passed, 0 failed, 0 skipped (out of 35)
 
 === unmount ===
   unmounted
@@ -202,7 +202,9 @@ Results: 34 passed, 0 failed, 0 skipped (out of 34)
   ALL PASSED
 ```
 
-The suite has 34 tests and passes 34/34 against a single PostgreSQL, a single-node Citus, and a multi-node Citus (on docker). Multi-node Citus verification runs through [tests/citus/race_multinode.sh](../citus/README.md).
+## Current status
+
+**35 passed / 0 failed / 0 skipped — ALL PASSED** (single PG mode + 1-node Citus + multi-node Citus on docker, all of them 35/35; the POSIX ACL `test_posix_acl_named_user` was added). Multi-node Citus verification runs through [tests/citus/race_multinode.sh](../citus/README.md).
 
 ## Exit codes
 
