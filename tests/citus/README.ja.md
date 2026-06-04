@@ -13,6 +13,7 @@ Citus 対応 (分散化 / 排他制御) に関する検証スクリプト。
 | [test_matrix.sh](test_matrix.sh) | mkfs 多ノード Citus の **18 ケース** マトリックステスト (3 initial × 6 target)。docker で 2 ノード Citus (coord + worker1) を立てて、各 case で setup → mkfs → state 検証 → 次へ | linux_client (同上) |
 | [race_multinode.sh](race_multinode.sh) | クロスクライアント排他制御の残検証。docker 2 ノード Citus + mount.pgfs × 2 を立てて (i) 多ノード Citus 上の Linux e2e 35/35、(ii) 並行 write race の cross-client 整合性 (md5/size 一致)、(iii) 並行 mkdir race の EEXIST 保証、(iv) pgfs_lock 行累積の現実的サイズ、を一気通貫で確認 | linux_client (同上) |
 | [audit.sh](audit.sh) | 監査ログ ([docs/audit-log.md](../../docs/audit-log.md)) 専用テスト。docker 2 ノード Citus (coord + worker1) + mount.pgfs × 1 を立てて (A) 各 op の記録、(B) caller_* (uid/uname/host/ip)、(C) パーティション自動作成 = 月跨ぎ機構、(D) `audit.enabled=false` で 0 行、を確認。Citus 同一 tx commit も A/B/C 成立で同時実証 | linux_client (同上) |
+| [statfs.sh](statfs.sh) | df ([docs/df-support.md](../../docs/df-support.md)) 専用テスト。**plperl 入り自前イメージ** ([tests/docker/Dockerfile.citus-plperl](../docker/Dockerfile.citus-plperl)) で docker 2 ノード Citus (coord+worker1) を立て、`pgfs_statfs()` の **worker 集約** (R1〜R5) と `require`/`auto`/`nominal` 3 モード (A1/N1) を検証。R5 は `citus.enable_ddl_propagation=off` で coord ローカル `fs_free` だけ DROP して集約機構を証明。mount 不要 (mkfs + psql のみ) | linux_client (同上) |
 
 ## 共通の前提
 

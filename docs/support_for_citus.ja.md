@@ -207,7 +207,7 @@ EnsureSchemaAsync は coordinator のみで CREATE SCHEMA を発行 → Citus �
 
 ### 設計の核となる制約 (覚えておくべき判断)
 
-1. **`--citus` × `--tablespace` (≠ pg_default) は両立不可** ([ValidateConfigCombinations](../src/mkfs/src/Initializer.cs))。Citus は worker 側に同名 tablespace が無いと shard 配置が失敗するため、pre-flight で拒否。これにより「DB 既存時の現状把握」で tablespace 確認分岐が不要。
+1. **`--citus` × カスタム `--tablespace` は両立可能**。per-table `TABLESPACE` 句をやめ **`CREATE DATABASE WITH TABLESPACE` で既定 tablespace を継承**させる方式にしたため、shard も worker DB の既定 tablespace を継承する。tablespace はノードローカルなので [EnsureTablespaceAsync](../src/mkfs/src/Initializer.cs) が **coordinator + 全 worker** に作成 (Citus は CREATE TABLESPACE を伝搬しない)。LOCATION dir は `app.plperlu` 許可時に plperlu auto-mkdir (postgres 所有 0700) で自動作成。多ノードは各 worker に dir が必要 (mkfs は SQL のみで remote mkdir 不可だが、各 worker 接続で plperlu mkdir が走る)。設計は [settings-and-plperlu.md](settings-and-plperlu.md)。
 2. **DB 既存 (--clean なし or --clean しても drop 失敗等) なら Citus 関連 mutate は全部スキップ**: `EnsureDatabaseAsync` の冒頭で coordinator DB の存在チェックを行い、既存なら現状把握 ([LogExistingCitusStateAsync](../src/mkfs/src/Initializer.cs)) だけして即 return。`citus_add_node` / `shouldhaveshards` / `create_distributed_table` / `citus_add_local_table_to_metadata` は一切呼ばない。これにより「mkfs 再実行で稼働中クラスタを壊さない」「空 DB への誤 `mkfs --citus --worker w1` のやり直しは `--clean` 必須」「冪等に何度叩いてもクラスタ状態は不変」が保証される。
 3. **DB 新規作成時のみ全セットアップを走らせる** — 上記 (2) の対偶。
 4. **`create_distributed_table` / `citus_add_local_table_to_metadata` は per-table メソッドの責務**: `CreateXxxTableAsync` がテーブル新規作成したら続けて呼ぶ (`CreateTableAsync` は `Task<bool>` で「作成 / スキップ」を返す)。既存テーブルスキップ時は distribute も触らない。

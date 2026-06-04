@@ -67,14 +67,14 @@ The design takes a single connection string. Individual `--host`, `--port`, `--u
 |---|---|---|
 | `-s`, `--schema`, `--schema-name` | Schema name. | `public` |
 | `-x`, `--prefix`, `--table-prefix`, `--table-name-prefix` | Table name prefix. A trailing `_` is added automatically if missing. | `pgfs_` |
-| `--tablespace`, `--tablespace-name` | Tablespace name. | `pg_default` |
-| `--tablespace-path` | Directory path when creating a new tablespace. | (empty) |
+| `--tablespace`, `--tablespace-name` | Tablespace name (custom is allowed even on Citus; inherited via `CREATE DATABASE WITH TABLESPACE`). | `pg_default` |
+| `--tablespace-path` | Directory path when creating a new tablespace. With `--allow-plperlu` (default), mkfs auto-creates the dir owned by postgres 0700 via plperlu. | (empty) |
 | `--citus` | Register the tables as Citus distributed tables. See [docs/support_for_citus.md](support_for_citus.md). | `false` |
 | `-w`, `--worker`, `--workers` | Comma-separated `host[:port]` Citus worker nodes (e.g. `--worker "w1:5432,w2:5432"`). Empty means a single-node setup (coordinator only). Used with `--citus`. | (empty) |
 
-### Filesystem settings
+### Filesystem settings (DB-stored, shared by all clients)
 
-These are also saved into the `pgfs_settings` table (and, since they also carry `SaveTo=File`, written into `pgfs.toml`).
+These are fs-identifying information, so they are **saved into `pgfs_settings`** (SaveTo=Db) and **not written into the generated `pgfs.toml`**. In particular, a mismatch of `cluster_size` / `default_chunk_size` across clients can corrupt data, so a single DB authority is correct (see [settings-and-plperlu.md](settings-and-plperlu.md)).
 
 | Option | Meaning | Default |
 |---|---|---|
@@ -83,6 +83,16 @@ These are also saved into the `pgfs_settings` table (and, since they also carry 
 | `--default-chunk-size` | bytea chunk size (bytes). | `1048576` (1 MiB) |
 | `--max-file-size` | Maximum file size (bytes; `-1` for unlimited). | `1099511627776` (1 TiB) |
 | `--version` | Filesystem version. | `1.0.0` |
+
+### Feature flags (DB-stored, shared by all clients)
+
+These are saved into `pgfs_settings`; mount / assign read them from the DB at startup (not written to TOML).
+
+| Option | Meaning | Default |
+|---|---|---|
+| `--audit` | Record metadata-change audit logs into `{prefix}audit`. See [docs/audit-log.md](audit-log.md). | `false` |
+| `--statfs`, `--statfs-mode` | Mode for `df` (statfs) real free-space reporting. `auto` (measure if plperlu is present / nominal otherwise) / `require` (plperlu required, mkfs fails if absent) / `nominal` (always nominal capacity, no functions created). Stored key is `app.statfs`. See [docs/df-support.md](df-support.md). | `auto` |
+| `--plperlu` `[true\|false]` / `--allow-plperlu` / `--deny-plperlu` | Permission to use untrusted plperlu (the upper gate, `app.plperlu`). `require`+deny is a contradiction and errors; auto+deny is equivalent to nominal. The tablespace auto-mkdir is also under this gate. See [settings-and-plperlu.md](settings-and-plperlu.md). | `true` (allow) |
 
 ### Mount settings
 
@@ -160,7 +170,8 @@ With [docs/database.md](database.md) as the source of truth, the tables mkfs act
 | `link_target` | `TEXT` | NULL | |
 | `is_junction` | `BOOLEAN` | NOT NULL | `FALSE` |
 | `data_id` | `BIGINT` | NULL | |
-| `xattrs` | `JSONB` | NOT NULL | `'{}'::JSONB` |
+| `xattr_names` | `TEXT[]` | NOT NULL | `'{}'::TEXT[]` |
+| `xattr_values` | `BYTEA[]` | NOT NULL | `'{}'::BYTEA[]` |
 | `created_at` | `TIMESTAMP` | NOT NULL | `current_timestamp` |
 | `created_by` | `TEXT` | NOT NULL | |
 | `updated_at` | `TIMESTAMP` | NOT NULL | `current_timestamp` |
@@ -246,7 +257,7 @@ mkfs.pgfs --clean --citus \
 
 ### Constraints
 
-- `--citus` x `--tablespace != pg_default` cannot be combined (rejected pre-flight).
+- `--citus` × a custom `--tablespace` **can be combined**. With the `CREATE DATABASE WITH TABLESPACE` inheritance scheme, the tablespace is created on the coordinator + every worker. The LOCATION dir is auto-created by plperlu owned by postgres 0700 when `--allow-plperlu` (default allow) and `--tablespace-path` is given. See [settings-and-plperlu.md](settings-and-plperlu.md).
 - `--clean --citus` only DROPs worker DBs on **the workers specified by `--worker`**. To remove a worker from the topology you must DROP the pgfs DB on that worker manually.
 - In a multi-node setup, the worker PG instances must also have `shared_preload_libraries = 'citus'` configured.
 

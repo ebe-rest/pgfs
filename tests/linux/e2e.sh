@@ -448,6 +448,35 @@ test_xattr_overwrite() {
 	pass
 }
 
+test_xattr_binary() {
+	# Byte-string transparency (docs/xattr-bytea.md): does a value containing NUL (0x00) and a
+	# high byte (0xff) round-trip faithfully? Inject the raw bytes with setfattr -v 0s<base64>,
+	# read back with getfattr -e base64, and compare. This also passed under the old JSONB+Base64
+	# implementation, so it guards against regression after the bytea migration.
+	if ! command -v setfattr >/dev/null 2>&1; then
+		skip "setfattr not installed"
+		return
+	fi
+	local f="$TEST_ROOT/t73b_xa_bin.txt"
+	touch "$f"
+	# value = 0x00 0xff 0x41 0x00 0x42 (NUL even in the middle) → base64 "AP9BAEI="
+	# NB: getfattr --only-values ignores -e base64 and returns raw bytes (NUL gets dropped by bash
+	#     command substitution), so do not use --only-values; pick up the "user.bin=0s<base64>" line.
+	# Confirm the round-trip with multiple keys + a NUL/high-byte mix.
+	# NB: an empty-value xattr (setfattr -v '0s') is not enumerated/fetched stably by getfattr/the OS
+	#     (even on plain ext4 it does not appear in `getfattr -d` and `-n` returns ENODATA), so it is
+	#     not tested.
+	local b64="AP9BAEI="  # 0x00 0xff 0x41 0x00 0x42 (NUL even in the middle)
+	setfattr -n user.bin -v "0s$b64" "$f" || { fail "setfattr binary"; return; }
+	# user.txt = also keep a normal text value to confirm there is no mix-up
+	setfattr -n user.txt -v "plain" "$f" || { fail "setfattr txt"; return; }
+	local got=$(getfattr -e base64 -n user.bin "$f" 2>/dev/null | grep '^user.bin=' | cut -d= -f2-)
+	assert_eq "0s$b64" "$got" "binary xattr (NUL+high byte) round-trip" || return
+	local txtv=$(getfattr --only-values -n user.txt "$f" 2>/dev/null)
+	assert_eq "plain" "$txtv" "text xattr alongside binary" || return
+	pass
+}
+
 # --- POSIX ACL (setfacl / getfacl) ---
 
 test_posix_acl_named_user() {
@@ -476,8 +505,15 @@ test_posix_acl_named_user() {
 # --- metadata ---
 
 test_statfs() {
-	# df calls StatFS.
+	# df calls StatFS (Api.GetStatFs). It must not crash + capacity/free must be positive.
+	# total>0 / avail>=0 hold whether measured (plperlu functions present via mkfs --statfs) or nominal fallback.
 	df "$MOUNT_ROOT" > /dev/null || { fail "df"; return; }
+	local total avail
+	read -r total avail < <(df -B1 --output=size,avail "$MOUNT_ROOT" 2>/dev/null | tail -1)
+	[[ "$total" =~ ^[0-9]+$ ]] || { fail "statfs total not numeric: '$total'"; return; }
+	[[ "$avail" =~ ^[0-9]+$ ]] || { fail "statfs avail not numeric: '$avail'"; return; }
+	[ "$total" -gt 0 ] || { fail "statfs total not positive: $total"; return; }
+	[ "$avail" -le "$total" ] || { fail "statfs avail > total: $avail > $total"; return; }
 	pass
 }
 
@@ -602,7 +638,7 @@ test_fallback_uname_gname() {
 	fi
 	# Directly INSERT an inode with a user/group name that does not exist on the OS.
 	local ghost="t100_ghost_$$"
-	echo "INSERT INTO pgfs.pgfs_inode (parent_id, name, uname, gname, st_mode, st_nlink, st_size, is_junction, xattrs, created_by, updated_by) VALUES ($test_id, '$ghost', '__no_such_user_xyz__', '__no_such_group_xyz__', 33188, 1, 0, false, '{}'::jsonb, 'pgfs', 'pgfs')" | pg_exec >/dev/null
+	echo "INSERT INTO pgfs.pgfs_inode (parent_id, name, uname, gname, st_mode, st_nlink, st_size, is_junction, xattr_names, xattr_values, created_by, updated_by) VALUES ($test_id, '$ghost', '__no_such_user_xyz__', '__no_such_group_xyz__', 33188, 1, 0, false, '{}'::text[], '{}'::bytea[], 'pgfs', 'pgfs')" | pg_exec >/dev/null
 	# stat -> GetByPath -> child (cache miss) -> DB fetch -> uname resolution fails -> fallback.
 	# Note: the childrenByParent cache is stale, but a direct-path stat goes through byPath/byId,
 	#       so the freshly inserted row is still visible (ListChildren is not called).
@@ -692,6 +728,7 @@ run test_xattr_set_get
 run test_xattr_list
 run test_xattr_remove
 run test_xattr_overwrite
+run test_xattr_binary
 
 # POSIX ACL
 run test_posix_acl_named_user

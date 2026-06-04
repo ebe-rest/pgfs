@@ -151,9 +151,9 @@ pgfs_inode
  ├─ uname   TEXT     ← owner_name (normalized / Linux name)
  ├─ gname   TEXT     ← group_name (normalized / Linux name)
  ├─ st_mode INTEGER  ← mode (the 3 base classes = canonical)
- └─ xattrs  JSONB
-      ├─ user.pgfs_acl   : { "v":1, "entries":[{principal_type,principal_name,rights}...], "default":[...] }
-      └─ user.win.attrs  : { "hidden":bool, "system":bool, "archive":bool }
+ └─ xattr_names TEXT[] / xattr_values BYTEA[]  (parallel-array KVS, values are bytea; xattr-bytea.md)
+      ├─ user.pgfs_acl   : { "v":1, "entries":[{principal_type,principal_name,rights}...], "default":[...] } (JSON byte string)
+      └─ user.win.attrs  : { "hidden":bool, "system":bool, "archive":bool } (JSON byte string)
 ```
 
 ## Implementation status

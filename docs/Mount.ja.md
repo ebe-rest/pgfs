@@ -126,11 +126,11 @@ mount.pgfs が特に使うのは:
 | `Release` | ✅ | no-op |
 | `Read` | ✅ | `Api.ReadData`（bytea チャンク経由、穴は 0 埋め） |
 | `Write` | ✅ | `Api.WriteData`（bytea チャンク経由、初回時は data 行を自動作成） |
-| `StatFS` | ✅ | `pg_database_size` を実使用量に |
-| `GetXAttr` | ✅ | `pgfs_inode.xattrs` JSONB から `->>` で取得、値は Base64 で復号。`system.posix_acl_access` は特別扱い (下記 ACL) |
-| `SetXAttr` | ✅ | JSONB を `||` でマージ、`XATTR_CREATE` / `XATTR_REPLACE` フラグ尊重。`system.posix_acl_access` は特別扱い |
-| `ListXAttr` | ✅ | `jsonb_object_keys` で列挙、NUL 終端形式で返す |
-| `RemoveXAttr` | ✅ | JSONB から `-` 演算子で削除。`system.posix_acl_access` は named を空に (setfacl -b 相当) |
+| `StatFS` | ✅ | `Api.GetStatFs` 経由。mkfs `--statfs` で `{prefix}statfs()` (plperlu) を作っていればテーブルスペースの**実ディスク空き**、無ければ公称容量 (`max_file_size` − `pg_database_size`)。詳細 [docs/df-support.ja.md](df-support.ja.md) |
+| `GetXAttr` | ✅ | `xattr_names`/`xattr_values` 並行配列から取得 (キャッシュは in-memory 探索、DB は `xattr_values[array_position(xattr_names,@name)]`)。値は bytea 透過。`system.posix_acl_access` は特別扱い (下記 ACL) |
+| `SetXAttr` | ✅ | 単一 UPDATE で既存 index 差し替え or 末尾追記 (`array_position`+スライス、原子)、`XATTR_CREATE` / `XATTR_REPLACE` フラグ尊重。`system.posix_acl_access` は特別扱い |
+| `ListXAttr` | ✅ | `xattr_names` をそのまま列挙、NUL 終端形式で返す |
+| `RemoveXAttr` | ✅ | 単一 UPDATE で name の index を両配列から除去 (スライス連結、原子)。`system.posix_acl_access` は named を空に (setfacl -b 相当) |
 | POSIX ACL (`system.posix_acl_access`) | ✅ | setfacl/getfacl と往復。`st_mode` 基本3クラス + 正準 ACL (`user.pgfs_acl` の named) ⇄ ACL バイナリ。mask 自動算出、named 無しは ENODATA。Windows DACL と同じ正準ストアを共有 (下記 ACL / [permission-interop.md](permission-interop.md)) |
 | `SymLink` | ✅ | `Api.CreateSymlink`（`S_IFLNK | 0777`, `link_target` 列に格納） |
 | `ReadLink` | ✅ | `inode.LinkTarget` を NUL 終端で返す |
@@ -218,7 +218,7 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 
 すべて実装済み:
 
-- 拡張属性は `pgfs_inode.xattrs` JSONB に Base64 で格納 (`Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`)。`GetXAttr` / `ListXAttr` はキャッシュにある `Inode.Xattrs` JSON をローカル解析する (SELinux の `security.selinux` 頻繁プローブ対策)。
+- 拡張属性は `pgfs_inode.xattr_names TEXT[]` + `xattr_values BYTEA[]` の並行配列に格納 (`Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`、値は bytea 忠実保持)。`GetXAttr` / `ListXAttr` はキャッシュにある `Inode.xattr_names`/`xattr_values` を in-memory 探索する (SELinux の `security.selinux` 頻繁プローブ対策)。設計は [xattr-bytea.ja.md](xattr-bytea.ja.md)。
 - シンボリックリンクは `link_target` 列に格納 (`Api.CreateSymlink`)。`ReadLink` は NUL 終端で返す。
 - ハードリンクは同じ `data_id` を共有する複数 inode を作成 (`Api.CreateHardLink`)。`st_nlink` は全リンクで同期更新。
 
@@ -238,9 +238,27 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 
 要件: 最終アクセス時刻は保持せず、`st_mtime` と同じ値を返す。実装もそのとおりです (`FillStat` で `s.st_atim = mtime.ToTimespec()`)。
 
-### マウントオプション
+### マウントオプション (`-o key=val,flag,...`)
 
-既定の FUSE オプションは `attr_timeout=0` (kernel attr キャッシュ無効化。これにより `ln` 直後の `stat` が最新の `st_nlink` を見る) に加え、fstab `-o ...` で受け取ったフラグ。後勝ちなので、ユーザーが `-o` で同名キーを上書きすれば効く。
+`mount -t pgfs` / fstab / 直接起動のいずれでも `-o` を受け付けます。パースは
+[ConfigLoader.ParseDashOOptions](../src/lib/src/Config/ConfigLoader.cs) が担い、各キーを次の**クラス**の
+いずれか 1 つに分類します (互換マップの正はこのメソッド)。`mount(8)` helper 呼び出し規約・fstab エントリ書式・
+起動時自動マウントの詳細は [fstab-support.ja.md](fstab-support.ja.md) を参照。
+
+| クラス | 例 | 扱い |
+|---|---|---|
+| **(1) FUSE passthrough** | `allow_other` `allow_root` `default_permissions` `ro` `auto_unmount` `kernel_cache` `auto_cache` / 値あり: `umask=022` `uid=` `gid=` `max_read=` `fsname=` `subtype=` `max_write=` `max_readahead=` `entry_timeout=` `attr_timeout=` | libfuse へ verbatim 転送 ([Program.RunFuseMountAsync](../src/mount/src/Program.cs) が `attr_timeout=0` の後ろに連結。後勝ちで上書き可) |
+| **(2) 受理して無視** | `rw` `nonempty` `direct_io` `defaults` `nofail` `noauto` `_netdev` `user(s)` `owner` `group` `noatime` 系 `nostrictatime` `lazytime`/`nolazytime` `mand`/`nomand` `iversion`/`noiversion` `comment=` `nosuid`/`nodev`/`noexec`/`exec` `async`/`sync` 等 | カーネル mount 層 / fstab 慣習。FUSE には**渡さない** (黙って受理) |
+| **(2′) userspace 接頭辞** | `x-systemd.automount` `x-systemd.requires=` `x-gvfs-show` `x-mount.mkdir` | `x-` 接頭辞を一括で (2) と同じく無視 (systemd / gvfs 等が解釈する fstab 拡張) |
+| **(3) pgfs 設定** | `-o schema=foo` `-o cache-max-entries=2048` | `-`/`_` を正規化して設定 [Field](../src/lib/src/Config/Field.cs) に流す (`Scope.Key` / dash-o 名で照合) |
+| **(4) 未知** | `-o allwo_other` (タイポ) | **Warning ログ**を出して無視 (起動時に気づけるように) |
+| **(5) 非対応のマウント操作** | `remount` `bind` `rbind` `move` | **専用 Warning** (「pgfs では未対応」) を出して無視。タイポ (4) と区別し "remount したつもり" の誤解を防ぐ |
+
+ポイント:
+- `-o ro` は libfuse 経由でカーネルがマウントを `MS_RDONLY` 化し、書き込みをカーネルが弾きます (FS 層の改修不要)。`rw` は既定なので無視。
+- libfuse3 で**有効なオプションだけ** (1) に載せています。`fuse_new` は未知オプションで失敗するため、`nonempty` (libfuse3 で廃止) / `direct_io` (libfuse3 では mount-wide ではなく per-file `fi->direct_io` へ移行) のような値は (1) ではなく (2) で握りつぶします。**(1) に載せる値あり key (`fsname=` `subtype=` `max_write=` `max_readahead=`) は libfuse 3.14.0 の `.so` に option token が compiled-in されていることを実機で確認済み** (`direct_io` は token 不在だったため (2) へ)。
+- `defaults` / `nofail` / `x-systemd.*` は実機 fstab で踏む定番です。(2)/(2′) で握りつぶすので警告は出ません。
+- `Tmds.Fuse.MountOptions` 自体は `SingleThread` のみ持ち、今は `false` (マルチスレッド) 固定です。
 
 ### シャットダウン
 
@@ -253,18 +271,18 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 | データ I/O (Read/Write) | ✅ | `Api.ReadData` / `Api.WriteData` を `pgfs_data_chunk` の `bytea` チャンクで実装 |
 | `uid/gid` ↔ `uname/gname` の双方向解決 | ✅ | [src/mount/src/UserResolver.cs](../src/mount/src/UserResolver.cs) で libc P/Invoke |
 | `Chown` の uname/gname 反映 | ✅ | `Api.UpdateOwner` を呼ぶ。`uid == -1` は変更しない慣習も尊重 |
-| 拡張属性 (xattr) | ✅ | `Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr` 実装。値は Base64 で JSONB に格納 |
+| 拡張属性 (xattr) | ✅ | `Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr` 実装。値は **`xattr_names TEXT[]` + `xattr_values BYTEA[]` の並行配列**で bytea 忠実保持 (NUL 含む任意バイト列も無加工で往復)。設計は [xattr-bytea.ja.md](xattr-bytea.ja.md) |
 | シンボリックリンク | ✅ | `Api.CreateSymlink` / `ReadLink` 実装 |
 | ハードリンク | ✅ | `Api.CreateHardLink` 実装。`Unlink` で残り inode の `st_nlink` を更新 |
 | Truncate のチャンク削減 | ✅ | `Api.TruncateData` が新サイズを超える `bytea` チャンク行を削除し、末端チャンクを `substring` / `overlay` で詰める |
 | POSIX ACL (setfacl/getfacl) | ✅ | `system.posix_acl_access` ⇄ `st_mode` + 正準 ACL (`user.pgfs_acl`)。Windows DACL と同じ正準ストアを共有。詳細は上記「POSIX ACL」/ [permission-interop.md](permission-interop.md)。named ACL の厳密 enforce は要件待ち |
 | macOS 動作確認 | ❌ | Tmds.Fuse の macOS 対応次第。macFUSE が必要 |
 | アクセスチェック (`Access`) | ❌ | 当面マウント時に `default_permissions` を渡せばカーネル側で判断される想定 |
-| Mount オプション `-o` | ⚠️ | fstab `-o ...` で受け取ったフラグは転送する。整理した既定セットは順次拡充 |
+| Mount オプション `-o` | ✅ | `-o key=val,flag,...` を分類 (FUSE passthrough / 受理して無視 + `x-` 接頭辞 / pgfs 設定 / 未知=Warning / 非対応マウント操作=明示 Warning)。詳細は上記「マウントオプション」。実装は [ConfigLoader.ParseDashOOptions](../src/lib/src/Config/ConfigLoader.cs) |
 | 接続失敗時の再接続 | ✅ | [Retry](../src/lib/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。クエリ実行中の例外は idempotency 問題があるため再試行しない |
 | OS に存在しない uname / gname のフォールバック | ✅ | `getpwnam` / `getgrnam` 失敗時、`mount.fallback_uname` / `mount.fallback_gname` (DB 保存、既定 `nobody` / `nogroup`) に解決した uid/gid を返す。fallback 名自体が解決できなければ uid=65534 (NFS の nobody 慣習値) を hardcode し warning ログ。実装は [src/mount/src/UserResolver.cs](../src/mount/src/UserResolver.cs)、Linux e2e の `test_fallback_uname_gname` で検証 |
 | Read/Write のストリーミング | ⚠️ | 現状各チャンクで個別に upsert/read している。大量 I/O では複数チャンク分を 1 往復にまとめる最適化余地 |
-| xattr 値のバイナリ表現 | ⚠️ | Base64 で JSONB に格納している（JSON string にバイト列が乗らないため）。OS の getxattr/setxattr とは透過だが、SQL で直接見ると Base64 のままで読みづらい |
+| xattr 値のバイナリ表現 | ✅ | `xattr_values BYTEA[]` に**生バイト列を忠実保持** (旧 Base64+JSONB から移行)。NUL 含む任意バイト列が無加工で往復し、SQL でも bytea として直接見える。設計・検証は [xattr-bytea.ja.md](xattr-bytea.ja.md) |
 
 ## 動作確認シナリオ（Linux 想定）
 

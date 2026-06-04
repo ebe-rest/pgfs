@@ -144,9 +144,9 @@ pgfs_inode
  ├─ uname   TEXT     ← owner_name (正規化済み / Linux 名)
  ├─ gname   TEXT     ← group_name (正規化済み / Linux 名)
  ├─ st_mode INTEGER  ← mode (基本3クラス = 正準)
- └─ xattrs  JSONB
-      ├─ user.pgfs_acl   : { "v":1, "entries":[{principal_type,principal_name,rights}...], "default":[...] }
-      └─ user.win.attrs  : { "hidden":bool, "system":bool, "archive":bool }
+ └─ xattr_names TEXT[] / xattr_values BYTEA[]  (並行配列 KVS、値は bytea。xattr-bytea.md)
+      ├─ user.pgfs_acl   : { "v":1, "entries":[{principal_type,principal_name,rights}...], "default":[...] } (JSON バイト列)
+      └─ user.win.attrs  : { "hidden":bool, "system":bool, "archive":bool } (JSON バイト列)
 ```
 
 ## 実装状況

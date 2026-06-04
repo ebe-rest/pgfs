@@ -375,9 +375,20 @@ If upstream accepts a PR, the downstream patch can be dropped.
 
 ## Known limitations
 
-### Boot-time mount (an `/etc/fstab` line + reboot) is unverified
+### Boot-time mount (an `/etc/fstab` line + reboot) — verified
 
-Manual `sudo mount -t pgfs ...` works, but the path where the fstab line is processed by `mount -a` at system startup has not been exercised by hand. Verifying the `_netdev` behavior of waiting for a remote PG is also left to on-hardware verification.
+It is verified on real hardware that simply adding an fstab line on `linux_client` and **rebooting** auto-mounts `/mnt/pgfs` with no extra command:
+
+```text
+$ findmnt | grep pgfs
+└─/mnt/pgfs   /dev/fuse   fuse   rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other
+```
+
+- `default_permissions,allow_other` appearing in `findmnt` = the `-o` options in the fstab 4th column were correctly expanded at boot.
+- A regular user can read entries with `ls -al /mnt/pgfs` = `allow_other` + `user_allow_other` in `/etc/fuse.conf` are effective.
+- The child-process separation (scheme B) returns success to `mount(8)` even within the systemd startup sequence.
+
+This closes the fstab-support core + verification entirely.
 
 ---
 

@@ -26,13 +26,14 @@ DDL: [docs/ddl/pgfs_inode.sql](ddl/pgfs_inode.sql)
 | `gname`       | `TEXT`      | `NOT NULL` |                     | IX4     | オーナーグループ名。                                        |
 | `st_mode`     | `INTEGER`   | `NOT NULL` |                     |         | ファイルの種類とパーミッション (chmod)。                    |
 | `st_nlink`    | `INTEGER`   | `NOT NULL` | `1`                 |         | ハードリンク数。                                            |
-| `st_size`     | `BIGINT`    | `NOT NULL` | `0`                 |         | ファイルサイズ (バイト)。ディレクトリやシンボリックリンクは 0。 |
+| `st_size`     | `BIGINT`    | `NOT NULL` | `0`                 |         | ファイルサイズ (バイト)。ディレクトリやシンボリックリンクは **0 のまま** (理由は下記注)。 |
 | `st_mtime`    | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | 最終更新時刻 (マイクロ秒精度)。                             |
 | `st_ctime`    | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | inode 最終変更時刻 (マイクロ秒精度)。                       |
 | `link_target` | `TEXT`      | `NULL`     |                     |         | シンボリックリンクやジャンクションの場合のリンク先パス。    |
 | `is_junction` | `BOOLEAN`   | `NOT NULL` | `FALSE`             |         | Windows ジャンクションの場合 `TRUE`。                       |
 | `data_id`     | `BIGINT`    | `NULL`     |                     |         | ファイルデータ本体を参照する ID (`pgfs_data.id`)。ディレクトリは `NULL`。 |
-| `xattrs`      | `JSONB`     | `NOT NULL` | `{}`                |         | 拡張属性 (xattr) をキー/バリュー形式で保持。一般 xattr の値は Base64。予約キー: `user.pgfs_acl` (正準 ACL ドキュメント JSON)、`user.win.attrs` (Windows 属性 JSON `{hidden,system,archive}`)。詳細は [permission-interop.ja.md](permission-interop.ja.md)。 |
+| `xattr_names`  | `TEXT[]`  | `NOT NULL` | `{}`                |         | 拡張属性 (xattr) の名前配列。同じ index の `xattr_values` とペア。予約キー: `user.pgfs_acl` (正準 ACL ドキュメント JSON)、`user.win.attrs` (Windows 属性 JSON `{hidden,system,archive}`)。詳細は [permission-interop.ja.md](permission-interop.ja.md)。 |
+| `xattr_values` | `BYTEA[]` | `NOT NULL` | `{}`                |         | xattr の値配列 (bytea で忠実保持、NUL 含む任意バイト列可)。`xattr_names` と同じ index でペア。設計は [xattr-bytea.ja.md](xattr-bytea.ja.md)。 |
 | `created_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | 作成日時                                                   |
 | `created_by`  | `TEXT`      | `NOT NULL` |                     |         | 作成ユーザー名                                             |
 | `updated_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | 更新日時                                                   |
@@ -40,6 +41,7 @@ DDL: [docs/ddl/pgfs_inode.sql](ddl/pgfs_inode.sql)
 
 * ルートディレクトリ ID: PostgreSQL の `BIGSERIAL` は自動採番開始が `1` のため `id` = 0 は通常挿入できませんが、初期データ投入時に明示的に 0 を指定して `INSERT` します。
 * 最終アクセス時刻 `st_atime` は持ちません。`st_mtime` と同じ値を返します。
+* **ディレクトリの `st_size` は 0 固定** (エントリ数や 4096 にしない)。理由: (1) `st_size` を「エントリ数」と解釈する標準ツールは無く (`du` は `st_blocks`、`ls -l` の数字が変わるだけの装飾)、機能上の必要が無い。(2) 読み取り時 COUNT は `getattr` 毎に DB 往復が増えて InodeCache のヒット効果を潰す。(3) 書き込み時に親の件数を維持する方式は全 mutating 操作に UPDATE を足す侵襲があり、装飾目的には見合わない。よって最も安全・低コストな 0 据え置きを採用。
 
 -----
 

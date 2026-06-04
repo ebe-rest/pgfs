@@ -1,0 +1,29 @@
+# syntax=docker/dockerfile:1
+#
+# A Citus image with plperl. A test-only image for verifying the Citus multi-worker
+# aggregation of df (statfs) (not for production deployment). The source of truth for
+# the design is docs/df-support.md.
+#
+# Background: the Citus branch of pgfs_statfs() calls plperlu's statvfs() on each worker
+# (via run_command_on_workers). But citusdata/citus:latest does not include plperl, so the
+# worker-aggregation path alone remained unverified on real hardware. There is no published
+# off-the-shelf "citus + plperl" image, so we build one here.
+#
+# citusdata/citus derives from the official postgres image, so:
+#   - it has the PG_MAJOR env var (e.g. 17)
+#   - the PGDG apt source is configured
+# Therefore postgresql-plperl-$PG_MAJOR can be added straightforwardly with apt. plperl is
+# dynamically loaded (CREATE EXTENSION plperlu), so no restart is needed.
+#
+# Usage:
+#   docker build -t pgfs-citus-plperl -f tests/docker/Dockerfile.citus-plperl tests/docker/
+#   PGFS_PROBE_IMAGE=pgfs-citus-plperl bash tests/citus/statfs.sh
+
+ARG CITUS_IMAGE=citusdata/citus:latest
+FROM ${CITUS_IMAGE}
+
+# postgresql-plperl-$PG_MAJOR: provides plperlu (used by statvfs()).
+# --no-install-recommends avoids pulling perl's recommended deps (docs, etc.).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-plperl-$PG_MAJOR \
+ && rm -rf /var/lib/apt/lists/*

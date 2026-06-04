@@ -26,13 +26,14 @@ The core table of the filesystem. It holds the (inode-like) metadata for every f
 | `gname`       | `TEXT`      | `NOT NULL` |                     | IX4     | Owner group name.                                                |
 | `st_mode`     | `INTEGER`   | `NOT NULL` |                     |         | File type and permission (chmod).                                |
 | `st_nlink`    | `INTEGER`   | `NOT NULL` | `1`                 |         | Hardlink count.                                                  |
-| `st_size`     | `BIGINT`    | `NOT NULL` | `0`                 |         | File size in bytes. 0 for directories and symlinks.              |
+| `st_size`     | `BIGINT`    | `NOT NULL` | `0`                 |         | File size in bytes. **Stays 0** for directories and symlinks (reason in the note below). |
 | `st_mtime`    | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | Last modification time (microsecond precision).                  |
 | `st_ctime`    | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | Inode last change time (microsecond precision).                  |
 | `link_target` | `TEXT`      | `NULL`     |                     |         | The link target path for a symlink or junction.                  |
 | `is_junction` | `BOOLEAN`   | `NOT NULL` | `FALSE`             |         | `TRUE` for a Windows junction.                                   |
 | `data_id`     | `BIGINT`    | `NULL`     |                     |         | ID referencing the file body (`pgfs_data.id`). `NULL` for directories. |
-| `xattrs`      | `JSONB`     | `NOT NULL` | `{}`                |         | Extended attributes (xattr) as key/value pairs. General xattr values are Base64. Reserved keys: `user.pgfs_acl` (canonical ACL document JSON), `user.win.attrs` (Windows attributes JSON `{hidden,system,archive}`). See [permission-interop.md](permission-interop.md). |
+| `xattr_names`  | `TEXT[]`  | `NOT NULL` | `{}`                |         | The xattr name array. Paired with `xattr_values` at the same index. Reserved keys: `user.pgfs_acl` (canonical ACL document JSON), `user.win.attrs` (Windows attributes JSON `{hidden,system,archive}`). See [permission-interop.md](permission-interop.md). |
+| `xattr_values` | `BYTEA[]` | `NOT NULL` | `{}`                |         | The xattr value array (held faithfully as bytea; any byte string including NUL). Paired with `xattr_names` at the same index. See [xattr-bytea.md](xattr-bytea.md) for the design. |
 | `created_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | Creation timestamp                                               |
 | `created_by`  | `TEXT`      | `NOT NULL` |                     |         | Creating user name                                               |
 | `updated_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP` |         | Update timestamp                                                 |
@@ -40,6 +41,7 @@ The core table of the filesystem. It holds the (inode-like) metadata for every f
 
 * Root directory ID: because PostgreSQL `BIGSERIAL` starts auto-numbering at `1`, `id` = 0 cannot normally be inserted; it is `INSERT`ed explicitly as 0 during initial data seeding.
 * There is no last-access time `st_atime`; it returns the same value as `st_mtime`.
+* **A directory's `st_size` is fixed at 0** (not the entry count nor 4096). Reasons: (1) no standard tool interprets `st_size` as "entry count" (`du` uses `st_blocks`; it would only decorate the number in `ls -l`), so there is no functional need. (2) Counting on read adds a DB round-trip per `getattr`, defeating the InodeCache hit rate. (3) Maintaining the parent's count on write is invasive — it adds an UPDATE to every mutating operation — and not worth it for a decorative value. So the safest, lowest-cost choice of leaving it 0 is adopted.
 
 -----
 

@@ -60,9 +60,9 @@
 |---|---|---|---|---|---|---|---|
 | `file_system.version` | `--version` | ❌ | ✅ | `1.0.0` | string | (現状コード上の参照なし) | mkfs 時凍結用。将来の互換性チェック余地 |
 | `file_system.volume_label` | `--volume-label` | ❌ | ✅ | `pgfs` | string | `assign.pgfs` の `GetVolumeInformation` | Windows のドライブ名 |
-| `file_system.cluster_size` | `--cluster-size` | ✅ | ❌ | 4096 | long | `Api.StatFs` (`f_bsize`) | バイト単位 |
-| `file_system.default_chunk_size` | `--default-chunk-size` | ✅ | ❌ | 1048576 (1 MiB) | long | (現状 chunk_size は pgfs_data の `chunk_size` 列を真とするため、設定値は新規 data 行作成時のみ初期値として使用) | |
-| `file_system.max_file_size` | `--max-file-size` | ✅ | ❌ | 1099511627776 (1 TiB) | long | `Api.StatFs` (`f_blocks`) ほか | |
+| `file_system.cluster_size` | `--cluster-size` | ❌ | ✅ | 4096 | long | `Api.StatFs` (`f_bsize`) | バイト単位。**DB 権威** (SaveTo=Db)。クライアント間で値がズレると事故るため。生成 toml には書かない |
+| `file_system.default_chunk_size` | `--default-chunk-size` | ❌ | ✅ | 1048576 (1 MiB) | long | (現状 chunk_size は pgfs_data の `chunk_size` 列を真とするため、設定値は新規 data 行作成時のみ初期値として使用) | **DB 権威**。値ズレは chunk 境界解釈不一致でデータ破損しうる |
+| `file_system.max_file_size` | `--max-file-size` | ❌ | ✅ | 1099511627776 (1 TiB) | long | `Api.StatFs` (`f_blocks`) ほか | **DB 権威** |
 
 ## 6. `database.*`
 
@@ -72,18 +72,26 @@
 | `database.super_connection` | `-su` `--su` `--super` `--super-connection` `--super-connection-string` `--super-user` `--super-user-connection` `--super-user-connection-string` | ❌ | ❌ | `Host=localhost;...Username=postgres;Password=postgres;Database=template1;...` | 同上 | mkfs `Initializer` の DB / ROLE / EXTENSION 作成 | `SaveTo=None` でファイルにも DB にも書かない (資格情報の安全)。**`--super` を明示しないときは `database.connection` の Host/Port/SslMode を継承**し、super と user が同じサーバを向くようにする (user をリモートに向けたのに super が localhost の別 DB を DROP/CREATE する事故を防ぐ)。super 資格情報・maintenance DB は既定のまま (postgres / template1)。明示時はその値を完全に尊重 |
 | `database.schema` | **`-s`** `--schema` `--schema-name` | ✅ | ❌ | `public` | string | `Api` の全 SQL 修飾 | 短縮形 `-s` は **直接実行時のみ有効** (helper context では `mount(8)` 由来の `--sloppy` として silent 飲み込み — [docs/fstab-support.ja.md §短縮形の衝突](fstab-support.ja.md#短縮形の衝突)) |
 | `database.prefix` | **`-x`** `--prefix` `--table-prefix` `--table-name-prefix` | ✅ | ❌ | `pgfs_` | string | テーブル名生成 (`pgfs_inode` 等) | `Database.GetPrefix()` 経由で末尾 `_` を正規化 |
-| `database.tablespace` | `--tablespace` `--tablespace-name` | ✅ | ❌ | `pg_default` | string | mkfs `Initializer.CreateTablespace` | |
-| `database.tablespace_path` | `--tablespace-path` | ✅ | ❌ | `""` | string | mkfs `Initializer.CreateTablespace` | 空文字なら新規作成しない |
+| `database.tablespace` | `--tablespace` `--tablespace-name` | ❌ | ✅ | `pg_default` | string | mkfs `Initializer.EnsureTablespaceAsync` (coordinator + 全 worker) | **Citus でもカスタム可**。per-table 句を廃し `CREATE DATABASE WITH TABLESPACE` 継承。**DB 権威** (設定ファイルで書き換えさせない fs 識別情報。生成 toml 非出力) |
+| `database.tablespace_path` | `--tablespace-path` | ❌ | ✅ | `""` | string | mkfs `Initializer.EnsureTablespaceAsync` | 空文字なら新規作成しない。指定時、`app.plperlu` 許可なら plperlu auto-mkdir (postgres 所有 0700)。**DB 権威** |
 | `database.retry_max_attempts` | `--retry-max-attempts` | ✅ | ❌ | 5 | int | `Api` ctor の `Retry.Configure` | 接続オープン時のみ再試行 (クエリ実行中は対象外) |
 | `database.retry_initial_delay_ms` | `--retry-initial-delay-ms` | ✅ | ❌ | 200 | int | 同上 | 指数バックオフの初期値 |
 | `database.retry_max_delay_ms` | `--retry-max-delay-ms` | ✅ | ❌ | 2000 | int | 同上 | バックオフ上限 |
 | `database.notify_enabled` | `--notify` `--notify-enabled` | ✅ | ❌ | `false` | bool | `Api` ctor で `NotifyChannel` を起動 | 他クライアント変更通知 (LISTEN/NOTIFY)。1 クライアント運用では OFF 推奨。詳細 [docs/Mount.ja.md](Mount.ja.md) / [docs/Assign.ja.md](Assign.ja.md) |
+| `database.citus` | **`--citus`** | ❌ | ✅ | `false` | bool | mkfs `Initializer` が PGFS テーブルを Citus 分散登録するか | **DB 権威** (SaveTo=Db)。「この FS は Citus 化済み」を後追い確認する bool。mount/assign は条件分岐に使わない。詳細 [docs/support_for_citus.ja.md](support_for_citus.ja.md) |
 
 ## 8. `audit.*` — 監査ログ
 
 | キー | CLI | TOML | DB | 既定 | 型 | 参照タイミング | 備考 |
 |---|---|---|---|---|---|---|---|
 | `audit.enabled` | **`--audit`** | ❌ | ✅ | `false` | bool | mkfs が `pgfs_settings` に保存 → `Api` ctor で読み、各 mutating 操作のフックを有効化 | メタデータ変更を `{prefix}audit` に記録。`mount.fallback_*` と同じ「mkfs で凍結、DB 保管」の項目。詳細 [docs/audit-log.ja.md](audit-log.ja.md) |
+
+## 9. `app.*` — アプリ挙動 (df モード / plperlu ゲート)
+
+| キー | CLI | TOML | DB | 既定 | 型 | 参照タイミング | 備考 |
+|---|---|---|---|---|---|---|---|
+| `app.statfs` | **`--statfs`** `--statfs-mode` | ❌ | ✅ | `auto` | string (`auto`/`require`/`nominal`) | mkfs が `{prefix}statfs()` (plperlu) を作る/消す分岐に使用 + `pgfs_settings` に保存。`Api.GetStatFs` は `nominal` のときサーバ問い合わせをスキップ | C# 参照は `Schema.Statfs.Mode`。`df` が実ディスク空きを返すモード。`auto`=plperlu あれば実測/無ければ公称、`require`=plperlu 必須(無ければ mkfs 失敗)、`nominal`=常に公称容量。plperlu 使用可否は `app.plperlu` が上位ゲート。詳細 [docs/df-support.ja.md](df-support.ja.md) / [docs/settings-and-plperlu.ja.md](settings-and-plperlu.ja.md) |
+| `app.plperlu` | **`--plperlu [true\|false]`** `--allow-plperlu` (bare) / `--deny-plperlu` (bare, 否定) | ❌ | ✅ | `true` | bool | mkfs が statfs 実測関数 / tablespace auto-mkdir に plperlu を使ってよいかの上位ゲート | untrusted plperlu の許可。`require`+`deny` は矛盾で mkfs エラー。auto+deny は nominal 相当。matrix は [docs/settings-and-plperlu.ja.md](settings-and-plperlu.ja.md) |
 
 ---
 
@@ -98,6 +106,10 @@
 - `file_system.max_file_size`
 - `database.tablespace` / `database.tablespace_path` / `database.prefix` / `database.schema`
 - `audit.enabled` (DB 保管、`--audit`。将来は管理ツールで切り替え予定)
+- `app.statfs` (DB 保管、`--statfs`。`{prefix}statfs()` 関数の有無を mkfs で凍結)
+- `database.citus` (DB 保管、`--citus`)
+- `app.plperlu` (DB 保管、`--plperlu`/`--allow-plperlu`/`--deny-plperlu`。plperlu 許可ゲート)
+- **DB 権威の FS サイズ系**: `file_system.cluster_size` / `default_chunk_size` / `max_file_size` も DB 保管 (上記 §5 参照、生成 toml には書かない)
 
 これらは mkfs 後に書き換えても、後続のマウントが従う保証はない (`pgfs_data.chunk_size` のように DB 側の列が真になっている場合は特に)。
 

@@ -15,15 +15,19 @@ database.connection.ssl_mode = "Prefer"
 # ----- database structure -----
 database.schema = "public"
 database.prefix = "pgfs_"
-# database.tablespace = "pg_default"         # default. Set to use a different tablespace
-# database.tablespace_path = "/var/lib/..."  # for mkfs --tablespace, the directory when creating a new one
+# database.tablespace / database.tablespace_path are SaveTo=DB fs-identifying info (set via mkfs
+# `--tablespace` / `--tablespace-path` → stored in pgfs_settings). They are not written to the generated
+# toml. Overriding them via a config file is not intended (same handling as the file_system keys below).
 
 # ----- file system settings (fixed at FS creation) -----
-# file_system.cluster_size = 4096
-# file_system.default_chunk_size = 1048576    # 1 MiB
-# file_system.max_file_size = 1099511627776   # 1 TiB (-1 for unlimited)
-# file_system.volume_label = "pgfs"
-# file_system.version = "1.0.0"
+# file_system.* (cluster_size / default_chunk_size / max_file_size / volume_label / version) and
+# app.statfs / database.citus / app.plperlu are SaveTo=DB fs-identifying info. They are stored into
+# pgfs_settings at mkfs time and read from there by all clients. **Not written to toml** (and not
+# emitted to the generated toml). In particular, a mismatch of cluster_size / default_chunk_size across
+# clients can corrupt data, so a single DB authority is correct.
+# NB: if you hand-write them, they are read per spec and the TOML value takes precedence, but breakage
+#     is at your own risk (an escape hatch for temporarily changing a value during development).
+#     Details: docs/settings-and-plperlu.md
 
 # ----- mount -----
 # mount.mount_point = "/mnt/pgfs"             # Linux/macOS. On Windows, e.g. "P:"
@@ -44,6 +48,6 @@ database.prefix = "pgfs_"
 # logging.level = "information"               # all / trace / debug / information / warning / error / critical / none
 # logging.output = "stderr"                   # stdout / stderr / none / "<cycle>:<dir>/<pattern>"
 #   example of file output (date rotation):
-#     logging.output = "daily:~/pgfs/log/pgfs-*.log"     # ~/pgfs/log/pgfs-20260527.log (daily)
+#     logging.output = "daily:~/pgfs/log/pgfs-*.log"     # ~/pgfs/log/pgfs-YYYYMMDD.log (daily)
 #   cycle = none / hourly / daily / monthly. A "*" in the pattern is replaced by the date
 #     (hourly=yyyyMMddHH / daily=yyyyMMdd / monthly=yyyyMM / none=empty). "~" expands to home.

@@ -60,9 +60,9 @@ Related: [docs/Mkfs.md](Mkfs.md) (the mkfs.pgfs CLI list) / [docs/Mount.md](Moun
 |---|---|---|---|---|---|---|---|
 | `file_system.version` | `--version` | ❌ | ✅ | `1.0.0` | string | (no reference in the current code) | for freezing at mkfs. Room for a future compatibility check |
 | `file_system.volume_label` | `--volume-label` | ❌ | ✅ | `pgfs` | string | `assign.pgfs`'s `GetVolumeInformation` | the Windows drive name |
-| `file_system.cluster_size` | `--cluster-size` | ✅ | ❌ | 4096 | long | `Api.StatFs` (`f_bsize`) | in bytes |
-| `file_system.default_chunk_size` | `--default-chunk-size` | ✅ | ❌ | 1048576 (1 MiB) | long | (currently chunk_size treats the `chunk_size` column of pgfs_data as authoritative, so the config value is used only as the initial value when a new data row is created) | |
-| `file_system.max_file_size` | `--max-file-size` | ✅ | ❌ | 1099511627776 (1 TiB) | long | `Api.StatFs` (`f_blocks`) and others | |
+| `file_system.cluster_size` | `--cluster-size` | ❌ | ✅ | 4096 | long | `Api.StatFs` (`f_bsize`) | in bytes. **DB-authoritative** (SaveTo=Db), because a mismatch across clients is dangerous. Not written to the generated toml |
+| `file_system.default_chunk_size` | `--default-chunk-size` | ❌ | ✅ | 1048576 (1 MiB) | long | (currently chunk_size treats the `chunk_size` column of pgfs_data as authoritative, so the config value is used only as the initial value when a new data row is created) | **DB-authoritative**. A mismatch can corrupt data via inconsistent chunk-boundary interpretation |
+| `file_system.max_file_size` | `--max-file-size` | ❌ | ✅ | 1099511627776 (1 TiB) | long | `Api.StatFs` (`f_blocks`) and others | **DB-authoritative** |
 
 ## 6. `database.*`
 
@@ -72,18 +72,26 @@ Related: [docs/Mkfs.md](Mkfs.md) (the mkfs.pgfs CLI list) / [docs/Mount.md](Moun
 | `database.super_connection` | `-su` `--su` `--super` `--super-connection` `--super-connection-string` `--super-user` `--super-user-connection` `--super-user-connection-string` | ❌ | ❌ | `Host=localhost;...Username=postgres;Password=postgres;Database=template1;...` | same | mkfs `Initializer`'s DB / ROLE / EXTENSION creation | `SaveTo=None` writes to neither file nor DB (credential safety). **When `--super` is not specified, it inherits the Host/Port/SslMode of `database.connection`**, so super and user point at the same server (preventing the accident where the user points at a remote but super DROP/CREATEs a different localhost DB). The super credentials / maintenance DB stay at their defaults (postgres / template1). When specified, that value is fully respected |
 | `database.schema` | **`-s`** `--schema` `--schema-name` | ✅ | ❌ | `public` | string | qualification of all SQL in `Api` | the short form `-s` is **valid only in direct execution** (in helper context it is silently swallowed as `mount(8)`'s `--sloppy` — [docs/fstab-support.md §Short-form collisions](fstab-support.md#short-form-collisions)) |
 | `database.prefix` | **`-x`** `--prefix` `--table-prefix` `--table-name-prefix` | ✅ | ❌ | `pgfs_` | string | table-name generation (`pgfs_inode` etc.) | the trailing `_` is normalized via `Database.GetPrefix()` |
-| `database.tablespace` | `--tablespace` `--tablespace-name` | ✅ | ❌ | `pg_default` | string | mkfs `Initializer.CreateTablespace` | |
-| `database.tablespace_path` | `--tablespace-path` | ✅ | ❌ | `""` | string | mkfs `Initializer.CreateTablespace` | empty string means do not create a new one |
+| `database.tablespace` | `--tablespace` `--tablespace-name` | ❌ | ✅ | `pg_default` | string | mkfs `Initializer.EnsureTablespaceAsync` (coordinator + every worker) | **Custom allowed even on Citus**. Drops the per-table clause and inherits via `CREATE DATABASE WITH TABLESPACE`. **DB-authoritative** (fs-identifying info not to be overridden via config file; not in the generated toml) |
+| `database.tablespace_path` | `--tablespace-path` | ❌ | ✅ | `""` | string | mkfs `Initializer.EnsureTablespaceAsync` | empty string means do not create a new one. When given, plperlu auto-mkdir (owned by postgres 0700) if `app.plperlu` is allowed. **DB-authoritative** |
 | `database.retry_max_attempts` | `--retry-max-attempts` | ✅ | ❌ | 5 | int | `Retry.Configure` in the `Api` ctor | retries only on connection open (not during query execution) |
 | `database.retry_initial_delay_ms` | `--retry-initial-delay-ms` | ✅ | ❌ | 200 | int | same | the initial value of the exponential backoff |
 | `database.retry_max_delay_ms` | `--retry-max-delay-ms` | ✅ | ❌ | 2000 | int | same | the backoff ceiling |
 | `database.notify_enabled` | `--notify` `--notify-enabled` | ✅ | ❌ | `false` | bool | starts `NotifyChannel` in the `Api` ctor | notify other clients of changes (LISTEN/NOTIFY). Recommended OFF for single-client use. Details in [docs/Mount.md](Mount.md) / [docs/Assign.md](Assign.md) |
+| `database.citus` | **`--citus`** | ❌ | ✅ | `false` | bool | whether mkfs `Initializer` registers the PGFS tables as Citus distributed tables | **DB-authoritative** (SaveTo=Db). A bool to check after the fact that "this FS is Citus-ified". mount/assign do not branch on it. Details in [docs/support_for_citus.md](support_for_citus.md) |
 
 ## 8. `audit.*` — audit log
 
 | Key | CLI | TOML | DB | Default | Type | Read timing | Notes |
 |---|---|---|---|---|---|---|---|
 | `audit.enabled` | **`--audit`** | ❌ | ✅ | `false` | bool | mkfs stores it into `pgfs_settings` → the `Api` ctor reads it and enables the hook on each mutating operation | records metadata changes into `{prefix}audit`. The same "frozen at mkfs, stored in DB" item as `mount.fallback_*`. Details in [docs/audit-log.md](audit-log.md) |
+
+## 9. `app.*` — application behavior (df mode / plperlu gate)
+
+| Key | CLI | TOML | DB | Default | Type | Read timing | Notes |
+|---|---|---|---|---|---|---|---|
+| `app.statfs` | **`--statfs`** `--statfs-mode` | ❌ | ✅ | `auto` | string (`auto`/`require`/`nominal`) | used by mkfs to branch on creating/dropping `{prefix}statfs()` (plperlu) + stored in `pgfs_settings`. `Api.GetStatFs` skips the server query when `nominal` | C# reference is `Schema.Statfs.Mode`. The mode in which `df` reports real disk free space. `auto`=measure if plperlu present / nominal otherwise, `require`=plperlu required (mkfs fails if absent), `nominal`=always nominal capacity. `app.plperlu` is the upper gate for whether plperlu may be used. See [docs/df-support.md](df-support.md) / [docs/settings-and-plperlu.md](settings-and-plperlu.md) |
+| `app.plperlu` | **`--plperlu [true\|false]`** `--allow-plperlu` (bare) / `--deny-plperlu` (bare, negated) | ❌ | ✅ | `true` | bool | the upper gate for whether mkfs may use plperlu for the statfs measuring functions / tablespace auto-mkdir | permission for untrusted plperlu. `require`+`deny` is a contradiction → mkfs error. auto+deny is equivalent to nominal. The matrix is in [docs/settings-and-plperlu.md](settings-and-plperlu.md) |
 
 ---
 
@@ -98,6 +106,10 @@ Related: [docs/Mkfs.md](Mkfs.md) (the mkfs.pgfs CLI list) / [docs/Mount.md](Moun
 - `file_system.max_file_size`
 - `database.tablespace` / `database.tablespace_path` / `database.prefix` / `database.schema`
 - `audit.enabled` (stored in DB, `--audit`; a management tool to toggle it is planned)
+- `app.statfs` (stored in DB, `--statfs`; freezes at mkfs whether the `{prefix}statfs()` functions exist)
+- `database.citus` (stored in DB, `--citus`)
+- `app.plperlu` (stored in DB, `--plperlu`/`--allow-plperlu`/`--deny-plperlu`; the plperlu permission gate)
+- **DB-authoritative FS size keys**: `file_system.cluster_size` / `default_chunk_size` / `max_file_size` are also DB-stored (see §5 above; not written to the generated toml)
 
 Even if rewritten after mkfs, a subsequent mount is not guaranteed to follow them (especially when a DB-side column such as `pgfs_data.chunk_size` is authoritative).
 

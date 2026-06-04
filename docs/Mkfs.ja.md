@@ -67,14 +67,16 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 |---|---|---|
 | `-s`, `--schema`, `--schema-name` | スキーマ名 | `public` |
 | `-x`, `--prefix`, `--table-prefix`, `--table-name-prefix` | テーブル名プレフィックス。末尾 `_` がなければ自動付与 | `pgfs_` |
-| `--tablespace`, `--tablespace-name` | テーブルスペース名 | `pg_default` |
-| `--tablespace-path` | 新規テーブルスペース作成時のディレクトリパス | （空） |
+| `--tablespace`, `--tablespace-name` | テーブルスペース名 (Citus でもカスタム可。`CREATE DATABASE WITH TABLESPACE` 継承方式) | `pg_default` |
+| `--tablespace-path` | 新規テーブルスペース作成時のディレクトリパス。`--allow-plperlu` (既定) なら mkfs が plperlu で dir を postgres 所有 0700 で自動作成 | （空） |
 | `--citus` | テーブルを Citus 分散テーブルとして登録する。詳細は [docs/support_for_citus.md](support_for_citus.md) | `false` |
 | `-w`, `--worker`, `--workers` | Citus worker ノードのカンマ区切り `host[:port]`（例: `--worker "w1:5432,w2:5432"`）。空なら 1 ノード構成（coordinator のみ）。`--citus` と併用。 | （空） |
 
-### ファイルシステム設定
+### ファイルシステム設定 (DB 保管、全クライアント共通)
 
-これらは `pgfs_settings` テーブルにも保存されます（`SaveTo=File` も持つので `pgfs.toml` にも書き出されます）。
+これらは fs 識別情報なので **`pgfs_settings` に保存** (SaveTo=Db) され、**生成 `pgfs.toml` には書き出しません**。
+特に `cluster_size` / `default_chunk_size` はクライアント間で値がズレるとデータ破損しうるため DB 一元が正です
+(詳細 [settings-and-plperlu.ja.md](settings-and-plperlu.ja.md))。
 
 | オプション | 内容 | 既定 |
 |---|---|---|
@@ -83,6 +85,16 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 | `--default-chunk-size` | bytea チャンクサイズ（バイト） | `1048576` (1 MiB) |
 | `--max-file-size` | 最大ファイルサイズ（バイト、`-1` で無制限） | `1099511627776` (1 TiB) |
 | `--version` | ファイルシステムバージョン | `1.0.0` |
+
+### 機能フラグ (DB 保管、全クライアント共通)
+
+これらは `pgfs_settings` に保存され、mount / assign が起動時に DB から読みます (TOML には書きません)。
+
+| オプション | 内容 | 既定 |
+|---|---|---|
+| `--audit` | メタデータ変更の監査ログを `{prefix}audit` に記録する。詳細は [docs/audit-log.ja.md](audit-log.ja.md) | `false` |
+| `--statfs`, `--statfs-mode` | `df` (statfs) の実空き容量レポートのモード。`auto` (plperlu あれば実測 / 無ければ公称) / `require` (plperlu 必須、無ければ mkfs 失敗) / `nominal` (常に公称容量、関数を作らない)。保存キーは `app.statfs`。詳細は [docs/df-support.ja.md](df-support.ja.md) | `auto` |
+| `--plperlu` `[true\|false]` / `--allow-plperlu` / `--deny-plperlu` | untrusted plperlu の使用許可 (上位ゲート、`app.plperlu`)。`require`+deny は矛盾でエラー、auto+deny は nominal 相当。tablespace auto-mkdir もこのゲート下。詳細 [settings-and-plperlu.ja.md](settings-and-plperlu.ja.md) | `true` (allow) |
 
 ### マウント設定
 
@@ -160,7 +172,8 @@ logging.level = "warning"
 | `link_target` | `TEXT` | NULL | |
 | `is_junction` | `BOOLEAN` | NOT NULL | `FALSE` |
 | `data_id` | `BIGINT` | NULL | |
-| `xattrs` | `JSONB` | NOT NULL | `'{}'::JSONB` |
+| `xattr_names` | `TEXT[]` | NOT NULL | `'{}'::TEXT[]` |
+| `xattr_values` | `BYTEA[]` | NOT NULL | `'{}'::BYTEA[]` |
 | `created_at` | `TIMESTAMP` | NOT NULL | `current_timestamp` |
 | `created_by` | `TEXT` | NOT NULL | |
 | `updated_at` | `TIMESTAMP` | NOT NULL | `current_timestamp` |
@@ -246,7 +259,7 @@ mkfs.pgfs --clean --citus \
 
 ### 制約
 
-- `--citus` × `--tablespace ≠ pg_default` は両立不可（pre-flight で拒否）。
+- `--citus` × カスタム `--tablespace` は **両立可能**。`CREATE DATABASE WITH TABLESPACE` 継承方式で、tablespace は coordinator + 全 worker に作成される。LOCATION dir は `--allow-plperlu` (既定 allow) なら plperlu が postgres 所有 0700 で自動作成 (`--tablespace-path` 指定時)。詳細 [settings-and-plperlu.ja.md](settings-and-plperlu.ja.md)。
 - `--clean --citus` で worker DB を DROP するのは **`--worker` で指定された worker のみ**。worker を構成から外す場合はその worker 上の pgfs DB を手動で DROP する必要あり。
 - 多ノード構成では worker 側の PG にも `shared_preload_libraries = 'citus'` が設定済みである必要あり。
 

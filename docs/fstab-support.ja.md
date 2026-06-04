@@ -376,9 +376,20 @@ upstream に PR が取り込まれれば downstream パッチは外せる。
 
 ## 既知の制約
 
-### 起動時マウント (`/etc/fstab` 行 + 再起動) は未検証
+### 起動時マウント (`/etc/fstab` 行 + 再起動) — 検証済み
 
-`sudo mount -t pgfs ...` (手動マウント) は通っているが、システム起動時の `mount -a` で fstab 行が処理される経路はまだ手で踏んでいない。`_netdev` 付きで PG リモートを待たせる挙動の確認も含めて、ユーザー側で実機検証する形にしている。
+`linux_client` に fstab 行を入れて**再起動**するだけで、追加コマンドなしに `/mnt/pgfs` が自動マウントされることを実機確認済み:
+
+```text
+$ findmnt | grep pgfs
+└─/mnt/pgfs   /dev/fuse   fuse   rw,nosuid,nodev,relatime,user_id=0,group_id=0,default_permissions,allow_other
+```
+
+- `default_permissions,allow_other` が `findmnt` に出ている = fstab 4 列目の `-o` オプションが起動時にも正しく展開された
+- 一般ユーザーから `ls -al /mnt/pgfs` でエントリが読める = `allow_other` + `/etc/fuse.conf` の `user_allow_other` が効いている
+- 子プロセス分離 (方式 B) が systemd 起動シーケンス上でも `mount(8)` に成功を返している
+
+これで fstab 対応のコア + 検証はすべてクローズ。
 
 ---
 

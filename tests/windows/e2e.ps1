@@ -533,6 +533,26 @@ function test_volume_info {
 	Pass
 }
 
+function test_disk_free_space {
+	# GetDiskFreeSpace (docs/df-support.md): measured if the server-side statfs() exists, nominal capacity otherwise.
+	# DriveInfo goes through Win32 GetDiskFreeSpaceEx, which hits the driver's GetDiskFreeSpace.
+	# Confirm total>0 / 0<=avail<=total (this inequality should hold whether measured or nominal).
+	$driveLetter = $MountRoot.Substring(0, 1)
+	$di = New-Object System.IO.DriveInfo($driveLetter)
+	$total = $di.TotalSize
+	$avail = $di.AvailableFreeSpace
+	Write-Host "      ($driveLetter`: total=$total avail=$avail)" -ForegroundColor DarkGray
+	if ($total -le 0) {
+		Fail "TotalSize not positive: $total"
+		return
+	}
+	if ($avail -lt 0 -or $avail -gt $total) {
+		Fail "AvailableFreeSpace out of range: avail=$avail total=$total"
+		return
+	}
+	Pass
+}
+
 function test_getfilesecurity_projection {
 	# GetFileSecurity: project the inode's uname/gname/mode onto a Windows security descriptor.
 	# Confirm Get-Acl returns (a) owner = the POSIX owner name (= the current user) and (b) a non-empty DACL.
@@ -735,6 +755,7 @@ try {
 
 	# volume / pattern
 	Invoke-Test test_volume_info
+	Invoke-Test test_disk_free_space
 	Invoke-Test test_getfilesecurity_projection
 	Invoke-Test test_setfilesecurity_roundtrip
 	Invoke-Test test_wildcard_pattern

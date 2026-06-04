@@ -75,6 +75,7 @@ What pgfs.assign uses in particular:
 | `mount.mount_point` | `-m`, `--mount-point` | Windows: `P:` |
 | `mount.cache_max_entries` | `--cache-max-entries` | `1024` |
 | `logging.level` | `--log-level` | `warning` |
+| `database.notify_enabled` | `--notify` | `false` (recommended on when multiple clients mount the same FS; assign redraws Explorer via `DokanInstance.NotifyUpdate`) |
 
 ## Implemented Dokan operations
 
@@ -84,7 +85,7 @@ What pgfs.assign uses in particular:
 |---|---|---|
 | `Mounted` / `Unmounted` | done | Logs mount completion / release. |
 | `GetVolumeInformation` | done | Volume label, `FileSystemFeatures`. |
-| `GetDiskFreeSpace` | done | Uses `pg_database_size` as the actual usage. |
+| `GetDiskFreeSpace` | done | Via `Api.GetStatFs`. If mkfs `--statfs` created `{prefix}statfs()` (plperlu), the server-side **real disk free space**; otherwise the nominal capacity (`max_file_size` − `pg_database_size`). See [df-support.md](df-support.md). |
 | `CreateFile` | done | Handles all `FileMode` values: `CreateNew` / `Create` / `Open` / `OpenOrCreate` / `Truncate` / `Append`. |
 | `Cleanup` | done | Follows the Windows convention of actually deleting when `info.DeletePending`. |
 | `CloseFile` | done | Clears `info.Context`. |
@@ -151,7 +152,7 @@ Owner / group / principal names are normalized **on store, on match, and on call
 
 ### `Hidden` / `System` / `Archive` attributes
 
-There is no Linux-side equivalent, so they are stored in the `user.win.attrs` key of `pgfs_inode.xattrs` JSONB as JSON `{hidden,system,archive}` (bool). Being in the `user.` namespace, it is also visible from Linux `getfattr`. `compressed` is future work. Even when all OFF, **the xattr is not deleted; the JSON is written**.
+There is no Linux-side equivalent, so they are stored as a JSON `{hidden,system,archive}` (bool) byte string in the xattr `user.win.attrs` (`pgfs_inode`'s `xattr_names`/`xattr_values` parallel arrays; the value is bytea; [xattr-bytea.md](xattr-bytea.md)). Being in the `user.` namespace, it is also visible from Linux `getfattr`. `compressed` is future work. Even when all OFF, **the xattr is not deleted; the JSON is written**.
 
 The decision in `GetFileInformation` / `FindFiles` is two-valued:
 - **xattr present** (even if the value is 0) = the Windows side has touched `SetFileAttributes` at least once -> trust the xattr value as-is.

@@ -75,6 +75,7 @@ pgfs.assign が特に使うのは:
 | `mount.mount_point` | `-m`, `--mount-point` | Windows: `P:` |
 | `mount.cache_max_entries` | `--cache-max-entries` | `1024` |
 | `logging.level` | `--log-level` | `warning` |
+| `database.notify_enabled` | `--notify` | `false` (複数クライアントで同じ FS を mount するとき有効化推奨。assign は `DokanInstance.NotifyUpdate` で Explorer を再描画する) |
 
 ## 実装している Dokan 操作
 
@@ -84,7 +85,7 @@ pgfs.assign が特に使うのは:
 |---|---|---|
 | `Mounted` / `Unmounted` | ✅ | マウント完了／解除をログに残す |
 | `GetVolumeInformation` | ✅ | ボリュームラベル、`FileSystemFeatures` |
-| `GetDiskFreeSpace` | ✅ | `pg_database_size` を実使用量に |
+| `GetDiskFreeSpace` | ✅ | `Api.GetStatFs` 経由。mkfs `--statfs` で `{prefix}statfs()` (plperlu) を作っていればサーバ側の**実ディスク空き**、無ければ公称容量 (`max_file_size` − `pg_database_size`)。詳細 [df-support.ja.md](df-support.ja.md) |
 | `CreateFile` | ✅ | `FileMode` の `CreateNew` / `Create` / `Open` / `OpenOrCreate` / `Truncate` / `Append` をすべて処理 |
 | `Cleanup` | ✅ | `info.DeletePending` のとき実削除する Windows のお作法に準拠 |
 | `CloseFile` | ✅ | `info.Context` をクリア |
@@ -153,7 +154,7 @@ owner / group / principal 名は **保存時・照合時・呼び出し元名の
 
 ### `Hidden` / `System` / `Archive` 属性
 
-Linux 側に対応する概念が無いため、`pgfs_inode.xattrs` JSONB の `user.win.attrs` キーに JSON `{hidden,system,archive}` (bool) で保存する。`user.` 名前空間なので Linux の `getfattr` からも見える。`compressed` は将来対応。空 (全 OFF) でも **xattr は削除せず JSON を書き込む**。
+Linux 側に対応する概念が無いため、xattr `user.win.attrs` に JSON `{hidden,system,archive}` (bool) のバイト列を保存する (`pgfs_inode` の `xattr_names`/`xattr_values` 並行配列。値は bytea。[xattr-bytea.ja.md](xattr-bytea.ja.md))。`user.` 名前空間なので Linux の `getfattr` からも見える。`compressed` は将来対応。空 (全 OFF) でも **xattr は削除せず JSON を書き込む**。
 
 `GetFileInformation` / `FindFiles` 系での判定は二値:
 - **xattr 有り** (値が 0 でも) = Windows 側で `SetFileAttributes` を一度でも触ったことがある → xattr 値をそのまま信頼

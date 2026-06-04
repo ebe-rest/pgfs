@@ -126,11 +126,11 @@ What mount.pgfs uses in particular:
 | `Release` | done | no-op. |
 | `Read` | done | `Api.ReadData` (via bytea chunks; holes are zero-filled). |
 | `Write` | done | `Api.WriteData` (via bytea chunks; creates the data row on first write). |
-| `StatFS` | done | Uses `pg_database_size` as the actual usage. |
-| `GetXAttr` | done | Reads from `pgfs_inode.xattrs` JSONB via `->>`, decoding the value from Base64. `system.posix_acl_access` is special-cased (see ACL below). |
-| `SetXAttr` | done | Merges JSONB with `||`, honoring `XATTR_CREATE` / `XATTR_REPLACE` flags. `system.posix_acl_access` is special-cased. |
-| `ListXAttr` | done | Enumerates with `jsonb_object_keys`, returns in NUL-terminated form. |
-| `RemoveXAttr` | done | Deletes from JSONB with the `-` operator. For `system.posix_acl_access` it clears the named entries (equivalent to `setfacl -b`). |
+| `StatFS` | done | Via `Api.GetStatFs`. If mkfs `--statfs` created `{prefix}statfs()` (plperlu), the tablespace's **real disk free space**; otherwise the nominal capacity (`max_file_size` − `pg_database_size`). See [docs/df-support.md](df-support.md). |
+| `GetXAttr` | done | Reads from the `xattr_names`/`xattr_values` parallel arrays (in-memory search on the cache; on the DB `xattr_values[array_position(xattr_names,@name)]`). Values are bytea-transparent. `system.posix_acl_access` is special-cased (see ACL below). |
+| `SetXAttr` | done | A single UPDATE replaces the existing index or appends at the end (`array_position`+slice, atomic), honoring `XATTR_CREATE` / `XATTR_REPLACE` flags. `system.posix_acl_access` is special-cased. |
+| `ListXAttr` | done | Enumerates `xattr_names` as-is, returns in NUL-terminated form. |
+| `RemoveXAttr` | done | A single UPDATE removes the name's index from both arrays (slice concatenation, atomic). For `system.posix_acl_access` it clears the named entries (equivalent to `setfacl -b`). |
 | POSIX ACL (`system.posix_acl_access`) | done | Round-trips with setfacl/getfacl. `st_mode`'s 3 base classes + canonical ACL (`user.pgfs_acl` named entries) <-> ACL binary. The mask is auto-computed; no named entries returns ENODATA. Shares the same canonical store as the Windows DACL (see ACL below / [permission-interop.md](permission-interop.md)). |
 | `SymLink` | done | `Api.CreateSymlink` (`S_IFLNK | 0777`, stored in the `link_target` column). |
 | `ReadLink` | done | Returns `inode.LinkTarget`, NUL-terminated. |
@@ -216,7 +216,7 @@ The PGFS data body is split into `pgfs_data` + `pgfs_data_chunk` (one row = one 
 
 All implemented:
 
-- Extended attributes are stored Base64-encoded in `pgfs_inode.xattrs` JSONB (`Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`). `GetXAttr` / `ListXAttr` parse the cached `Inode.Xattrs` JSON locally (to mitigate SELinux's frequent `security.selinux` probes).
+- Extended attributes are stored in the `pgfs_inode.xattr_names TEXT[]` + `xattr_values BYTEA[]` parallel arrays (`Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`; values held faithfully as bytea). `GetXAttr` / `ListXAttr` do an in-memory search of the cached `Inode.xattr_names`/`xattr_values` (to mitigate SELinux's frequent `security.selinux` probes). See [xattr-bytea.md](xattr-bytea.md) for the design.
 - Symbolic links are stored in the `link_target` column (`Api.CreateSymlink`). `ReadLink` returns NUL-terminated.
 - Hard links create multiple inodes sharing the same `data_id` (`Api.CreateHardLink`). `st_nlink` is updated consistently across all links.
 
@@ -236,9 +236,28 @@ converting between the ACL binary and **`st_mode`'s 3 base classes + the canonic
 
 Requirement: the last-access time is not stored, and the same value as `st_mtime` is returned. The implementation matches (`s.st_atim = mtime.ToTimespec()` in `FillStat`).
 
-### Mount options
+### Mount options (`-o key=val,flag,...`)
 
-The default FUSE options are `attr_timeout=0` (disables the kernel attr cache so a `stat` right after `ln` sees the fresh `st_nlink`) plus any flags received via fstab `-o ...`. Last-wins applies, so a user `-o` override of the same key takes effect.
+`-o` is accepted via `mount -t pgfs` / fstab / direct launch. Parsing is done by
+[ConfigLoader.ParseDashOOptions](../src/lib/src/Config/ConfigLoader.cs), which classifies each key into exactly
+one of the following **classes** (this method is the source of truth for the compatibility map). For the
+`mount(8)` helper calling convention, the fstab entry format, and boot-time auto-mount details, see
+[fstab-support.md](fstab-support.md).
+
+| Class | Examples | Handling |
+|---|---|---|
+| **(1) FUSE passthrough** | `allow_other` `allow_root` `default_permissions` `ro` `auto_unmount` `kernel_cache` `auto_cache` / with value: `umask=022` `uid=` `gid=` `max_read=` `fsname=` `subtype=` `max_write=` `max_readahead=` `entry_timeout=` `attr_timeout=` | forwarded verbatim to libfuse ([Program.RunFuseMountAsync](../src/mount/src/Program.cs) appends after `attr_timeout=0`; last-wins overridable) |
+| **(2) accept and ignore** | `rw` `nonempty` `direct_io` `defaults` `nofail` `noauto` `_netdev` `user(s)` `owner` `group` `noatime` family `nostrictatime` `lazytime`/`nolazytime` `mand`/`nomand` `iversion`/`noiversion` `comment=` `nosuid`/`nodev`/`noexec`/`exec` `async`/`sync` etc. | kernel mount layer / fstab convention. **Not passed** to FUSE (silently accepted) |
+| **(2′) userspace prefix** | `x-systemd.automount` `x-systemd.requires=` `x-gvfs-show` `x-mount.mkdir` | the `x-` prefix is ignored wholesale, same as (2) (fstab extensions interpreted by systemd / gvfs etc.) |
+| **(3) pgfs setting** | `-o schema=foo` `-o cache-max-entries=2048` | normalize `-`/`_` and feed into the setting [Field](../src/lib/src/Config/Field.cs) (matched by `Scope.Key` / dash-o name) |
+| **(4) unknown** | `-o allwo_other` (typo) | emit a **Warning log** and ignore (so you notice at startup) |
+| **(5) unsupported mount operation** | `remount` `bind` `rbind` `move` | emit a **dedicated Warning** ("unsupported in pgfs") and ignore. Distinguished from a typo (4) to avoid the "I thought I remounted" misunderstanding |
+
+Points:
+- `-o ro` makes the kernel mark the mount `MS_RDONLY` via libfuse, and the kernel rejects writes (no FS-layer change needed). `rw` is the default, so it is ignored.
+- Only options **valid in libfuse3** are placed in (1). Because `fuse_new` fails on an unknown option, values like `nonempty` (removed in libfuse3) / `direct_io` (moved in libfuse3 from mount-wide to per-file `fi->direct_io`) are swallowed in (2), not (1). **The value-bearing keys placed in (1) (`fsname=` `subtype=` `max_write=` `max_readahead=`) were verified on real hardware to have their option tokens compiled into the libfuse 3.14.0 `.so`** (`direct_io` was moved to (2) because its token was absent).
+- `defaults` / `nofail` / `x-systemd.*` are the staples you hit in a real fstab. They are swallowed by (2)/(2′), so no warning is emitted.
+- `Tmds.Fuse.MountOptions` itself has only `SingleThread`, currently fixed to `false` (multi-threaded).
 
 ### Shutdown
 
@@ -251,18 +270,18 @@ On `Ctrl+C` it attempts `LazyUnmount` (equivalent to `fusermount3 -uz`). If the 
 | Data I/O (Read/Write) | done | `Api.ReadData` / `Api.WriteData` implemented over `pgfs_data_chunk` `bytea` chunks. |
 | Bidirectional `uid/gid` <-> `uname/gname` resolution | done | libc P/Invoke in [src/mount/src/UserResolver.cs](../src/mount/src/UserResolver.cs). |
 | `Chown` applying uname/gname | done | Calls `Api.UpdateOwner`. Honors the `uid == -1` = do-not-change convention. |
-| Extended attributes (xattr) | done | `Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`. Values stored Base64 in JSONB. |
+| Extended attributes (xattr) | done | `Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`. Values held faithfully as bytea in the **`xattr_names TEXT[]` + `xattr_values BYTEA[]` parallel arrays** (any byte string, including NUL, round-trips unmodified). See [xattr-bytea.md](xattr-bytea.md) for the design. |
 | Symbolic links | done | `Api.CreateSymlink` / `ReadLink`. |
 | Hard links | done | `Api.CreateHardLink`. `Unlink` updates `st_nlink` on the remaining inodes. |
 | Chunk reduction on Truncate | done | `Api.TruncateData` deletes whole `bytea` chunk rows beyond the new size and trims the tail chunk with `substring` / `overlay`. |
 | POSIX ACL (setfacl/getfacl) | done | `system.posix_acl_access` <-> `st_mode` + canonical ACL (`user.pgfs_acl`). Shares the same canonical store as the Windows DACL. See "POSIX ACL" above / [permission-interop.md](permission-interop.md). Strict named-ACL enforcement is pending requirements. |
 | macOS verification | not done | Depends on Tmds.Fuse's macOS support. Requires macFUSE. |
 | Access check (`Access`) | not done | For now, passing `default_permissions` at mount time lets the kernel decide. |
-| Mount option `-o` | partial | Flags received via fstab `-o ...` are forwarded; a curated set is still being expanded. |
+| Mount option `-o` | done | Classifies `-o key=val,flag,...` (FUSE passthrough / accept-and-ignore + `x-` prefix / pgfs setting / unknown=Warning / unsupported mount operation=explicit Warning). See "Mount options" above. Implemented in [ConfigLoader.ParseDashOOptions](../src/lib/src/Config/ConfigLoader.cs). |
 | Reconnection on connection failure | done | Wraps `Pg.OpenConnection`-family calls with [Retry](../src/lib/src/Utility/Retry.cs). Exponential backoff, tuned by `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. Exceptions mid-query are not retried because of idempotency concerns. |
 | Fallback for uname / gname absent on the OS | done | On `getpwnam` / `getgrnam` failure, returns the uid/gid resolved from `mount.fallback_uname` / `mount.fallback_gname` (stored in the DB; defaults `nobody` / `nogroup`). If the fallback name itself cannot be resolved, hardcodes uid=65534 (the NFS nobody convention) and logs a warning. Implemented in [src/mount/src/UserResolver.cs](../src/mount/src/UserResolver.cs). |
 | Read/Write streaming | partial | Currently each chunk is upserted/read independently. For heavy I/O there is room to batch multiple chunks per round-trip. |
-| Binary xattr values | partial | Stored Base64 in JSONB (a JSON string cannot carry raw bytes). Transparent through the OS getxattr/setxattr, but reading it directly in SQL shows the Base64 form. |
+| Binary xattr values | done | **Raw byte strings held faithfully** in `xattr_values BYTEA[]` (migrated from the old Base64+JSONB). Any byte string including NUL round-trips unmodified, and it is directly visible as bytea in SQL. Design & verification in [xattr-bytea.md](xattr-bytea.md). |
 
 ## Verification scenario (Linux)
 
