@@ -1,0 +1,12 @@
+# docker build context trimming. The mount image only needs source to publish
+# mount.pgfs / mkfs.pgfs (+ vendor/Tmds.Fuse). Tests are bind-mounted at runtime,
+# docs / other-OS tests / build outputs are never needed in the image.
+.git/
+.vs/
+**/bin/
+**/obj/
+docs/
+tests/
+*.user
+*.log
+pgfs.toml

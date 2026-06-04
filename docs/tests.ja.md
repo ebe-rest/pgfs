@@ -11,6 +11,7 @@ pgfs の全テストの **ハブドキュメント**。「どんなテストが�
 | スイート | 件数 | 何を見るか | 場所 | 詳細 README |
 |---|---|---|---|---|
 | **Linux e2e** | 35 | mount.pgfs (FUSE) の全オペレーションを実 FS 操作で確認 (POSIX ACL setfacl/getfacl 含む) | [tests/linux/e2e.sh](../tests/linux/e2e.sh) | [tests/linux/README.ja.md](../tests/linux/README.ja.md) |
+| **Linux e2e (full docker)** | 35 | 上記 Linux e2e を **単一 PG + mount コンテナ**で完結 (ssh linux_client / ホスト dotnet 非依存) | [tests/docker/run.sh](../tests/docker/run.sh) | [tests/docker/README.ja.md](../tests/docker/README.ja.md) |
 | **Windows e2e** | 26 | pgfs.assign (Dokan) の全オペレーションを実 FS 操作で確認 (ACL 投影 Get/SetFileSecurity 含む) | [tests/windows/e2e.ps1](../tests/windows/e2e.ps1) | [tests/windows/README.ja.md](../tests/windows/README.ja.md) |
 | **Citus mkfs マトリックス** | 18 | `mkfs --citus / --worker / --clean` の組合せ挙動 (新規 / 既存維持 / 再構築) | [tests/citus/test_matrix.sh](../tests/citus/test_matrix.sh) | [tests/citus/README.ja.md](../tests/citus/README.ja.md) |
 | **Citus multinode probe** | 13 セクション | Citus 仕様の挙動確認 (auto-sync / DDL 伝搬 / shard 配置 等) の one-off probe | [tests/citus/multinode_probe.sh](../tests/citus/multinode_probe.sh) | [tests/citus/README.ja.md](../tests/citus/README.ja.md) |
@@ -31,6 +32,7 @@ pgfs の全テストの **ハブドキュメント**。「どんなテストが�
 | スイート | 結果 | 検証環境 |
 |---|---|---|
 | Linux e2e | **35/35 ALL PASSED** | 単 PG / 1 ノード Citus (pgsql_server) / 多ノード Citus (docker) いずれも |
+| Linux e2e (full docker) | **35/35 ALL PASSED** | 単一 PG (postgres:17) + mount コンテナ、linux_client 上で実機検証 |
 | Windows e2e | **26/26 ALL PASSED** | 単 PG / 1 ノード Citus (pgsql_server) |
 | Citus mkfs マトリックス | **18/18 PASS** | Citus 14.0.0 docker on linux_client |
 | Citus race multinode | **4/4 PASS** | Citus 14.0.0 docker on linux_client |
@@ -139,21 +141,23 @@ tests\citus\verify.cmd
 
 ## docker 統合の検討
 
-> 「すべて docker にした方がやりやすいのでは」という動機に対する現状分析。**未着手** ([docs/next.md](next.md) の運用項目に紐づく)。
+> 「すべて docker にした方がやりやすいのでは」という動機に対する現状分析。**単一 PG 構成は実装済み** ([tests/docker/](../tests/docker/README.ja.md))。残りは [docs/next.md](next.md) の運用項目に紐づく。
 
 ### 既に docker 化されている部分
 
 Citus 系の DB は既に docker (`citusdata/citus:latest` を `--network host` で coord/worker 起動)。`race_multinode.sh` は **DB を docker + mount をホスト** のハイブリッド。
 
-### Linux 側はフル docker 化できる
+### Linux 側はフル docker 化できる → **単一 PG 構成は実装済み** ([tests/docker/](../tests/docker/README.ja.md))
 
-`race_multinode.sh` の mount をホストではなくコンテナに移せば、Linux e2e は **PG/Citus コンテナ + mount.pgfs コンテナ** で完結する。必要なもの:
+`race_multinode.sh` の mount をホストではなくコンテナに移せば、Linux e2e は **PG コンテナ + mount.pgfs コンテナ** で完結する。**単一 PG (非 Citus) 構成を [tests/docker/](../tests/docker/README.ja.md) として実装** (multi-stage SDK ビルド + docker-compose):
 
-- mount.pgfs コンテナ: `--cap-add SYS_ADMIN --device /dev/fuse --security-opt apparmor:unconfined` で FUSE をコンテナ内マウント。dotnet runtime + fuse3 入りイメージをビルド (or `dotnet publish` 済み self-contained バイナリを COPY)。
-- ネットワーク: DB コンテナと同じ docker network、または `--network host`。
-- 検証用のマウントポイントをホストに bind mount すれば、コンテナ外から e2e.sh を流せる。
+- **mount.pgfs コンテナ** ([Dockerfile.mount](../tests/docker/Dockerfile.mount)): `cap_add SYS_ADMIN` / `devices /dev/fuse` / `security_opt apparmor:unconfined` で FUSE をコンテナ内マウント。多段ビルドで `mount.pgfs`/`mkfs.pgfs` を self-contained publish → fuse3 + attr/acl/psql 入り debian-slim に COPY。
+- **e2e はコンテナ内で実行**: FUSE マウントをホストに見せる方式 (mount namespace 伝播) は脆いので、`e2e.sh` を mount コンテナ内で走らせる (マウントポイントもコンテナ内)。`tests/linux/` は read-only bind mount で持ち込み (テスト編集時の再ビルド不要)。
+- **fallback テスト**: `PGFS_TEST_PG_EXEC="psql -h coord ..."` を [run.sh](../tests/docker/run.sh) が渡し、compose network 越しの psql で DB 直接操作。
 
-これにより **ssh linux_client 依存と symlink race 回避策が不要** になり、CI でも再現可能になる。
+単一 PG 構成では **ssh linux_client 依存と symlink race 回避策が不要** になった。残るは多ノード Citus + race + audit のフル docker 化 ([docs/next.md](next.md) #9、雛形は `race_multinode.sh`)。
+
+> **gotcha (runtime base の固定)**: `debian:stable-slim` は現在 Debian 13 (trixie) を指し、libfuse 3.17 が SONAME を `libfuse3.so.4` に bump している。Tmds.Fuse は `libfuse3.so.3` を dlopen するため trixie ベースだと `CheckDependencies` が「libfuse 未検出」で落ちる。[Dockerfile.mount](../tests/docker/Dockerfile.mount) は **`debian:bookworm-slim` (Debian 12, libfuse 3.14 = `libfuse3.so.3`) に固定**して回避している。
 
 ### Windows 側は docker 化できない
 
@@ -161,7 +165,7 @@ Dokan は **Windows カーネルドライバ** で、Windows コンテナでも 
 
 ### 当面のおすすめ
 
-1. Linux e2e + Citus 系を 1 つの docker-compose (or スクリプト) に統合し、`tests/docker/` 等に置く。`race_multinode.sh` がほぼ雛形になる。
+1. ~~Linux e2e を `tests/docker/` に置く~~ → **単一 PG 構成は実装済み** ([tests/docker/](../tests/docker/README.ja.md))。次は Citus 多ノード + race + audit を同じ枠に拡張 (`race_multinode.sh` が雛形)。
 2. `verify` の pgsql_server ハードコードも docker Citus に向けられるよう env オーバライド化 (Linux e2e の `PGFS_TEST_PG_EXEC` と同じ手口)。
 3. Windows e2e はホスト前提のまま、docker 化のスコープ外と明記。
 

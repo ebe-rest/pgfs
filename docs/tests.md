@@ -11,6 +11,7 @@ The **hub document** for all pgfs tests. It collects "what tests exist / how to 
 | Suite | Count | What it checks | Location | Detailed README |
 |---|---|---|---|---|
 | **Linux e2e** | 35 | every mount.pgfs (FUSE) operation, via real FS operations (incl. POSIX ACL setfacl/getfacl) | [tests/linux/e2e.sh](../tests/linux/e2e.sh) | [tests/linux/README.md](../tests/linux/README.md) |
+| **Linux e2e (full docker)** | 35 | the Linux e2e above, run end-to-end in a **single PG + mount container** (no ssh linux_client / host dotnet dependency) | [tests/docker/run.sh](../tests/docker/run.sh) | [tests/docker/README.md](../tests/docker/README.md) |
 | **Windows e2e** | 26 | every pgfs.assign (Dokan) operation, via real FS operations (incl. ACL projection Get/SetFileSecurity) | [tests/windows/e2e.ps1](../tests/windows/e2e.ps1) | [tests/windows/README.md](../tests/windows/README.md) |
 | **Citus mkfs matrix** | 18 | the combined behavior of `mkfs --citus / --worker / --clean` (new / keep-existing / rebuild) | [tests/citus/test_matrix.sh](../tests/citus/test_matrix.sh) | [tests/citus/README.md](../tests/citus/README.md) |
 | **Citus multinode probe** | 13 sections | a one-off probe of Citus behavior (auto-sync / DDL propagation / shard placement etc.) | [tests/citus/multinode_probe.sh](../tests/citus/multinode_probe.sh) | [tests/citus/README.md](../tests/citus/README.md) |
@@ -31,6 +32,7 @@ Directory operations / basic file operations / data I/O (bytea) / truncate / ren
 | Suite | Result | Verified on |
 |---|---|---|
 | Linux e2e | **35/35 ALL PASSED** | single PG / 1-node Citus (pgsql_server) / multi-node Citus (docker), all of them |
+| Linux e2e (full docker) | **35/35 ALL PASSED** | single PG (postgres:17) + mount container, verified on linux_client |
 | Windows e2e | **26/26 ALL PASSED** | single PG / 1-node Citus (pgsql_server) |
 | Citus mkfs matrix | **18/18 PASS** | Citus 14.0.0 docker on linux_client |
 | Citus race multinode | **4/4 PASS** | Citus 14.0.0 docker on linux_client |
@@ -139,21 +141,23 @@ The full variable list for each suite is in its directory README.
 
 ## docker integration
 
-> Current analysis of the motivation "wouldn't it be easier if everything were on docker". **Not yet started** (tied to the operational items in [docs/next.md](next.md)).
+> Current analysis of the motivation "wouldn't it be easier if everything were on docker". The **single-PG configuration is implemented** ([tests/docker/](../tests/docker/README.md)); the rest is tied to the operational items in [docs/next.md](next.md).
 
 ### Already on docker
 
 The DB for the Citus suites is already docker (`citusdata/citus:latest` started as coord/worker with `--network host`). `race_multinode.sh` is a hybrid of **DB on docker + mount on the host**.
 
-### The Linux side can be fully dockerized
+### The Linux side can be fully dockerized → **single-PG configuration is implemented** ([tests/docker/](../tests/docker/README.md))
 
-If the mount in `race_multinode.sh` is moved from the host into a container, the Linux e2e becomes self-contained as a **PG/Citus container + mount.pgfs container**. What is needed:
+If the mount in `race_multinode.sh` is moved from the host into a container, the Linux e2e becomes self-contained as a **PG container + mount.pgfs container**. The **single-PG (non-Citus) configuration is implemented under [tests/docker/](../tests/docker/README.md)** (multi-stage SDK build + docker-compose):
 
-- mount.pgfs container: mount FUSE inside the container with `--cap-add SYS_ADMIN --device /dev/fuse --security-opt apparmor:unconfined`. Build an image with the dotnet runtime + fuse3 (or COPY a self-contained `dotnet publish` binary).
-- network: the same docker network as the DB container, or `--network host`.
-- bind-mount the verification mount point onto the host so e2e.sh can run against it from outside the container.
+- **mount.pgfs container** ([Dockerfile.mount](../tests/docker/Dockerfile.mount)): mounts FUSE inside the container with `cap_add SYS_ADMIN` / `devices /dev/fuse` / `security_opt apparmor:unconfined`. The multi-stage build publishes `mount.pgfs`/`mkfs.pgfs` self-contained, then COPYs them into a debian-slim with fuse3 + attr/acl/psql.
+- **e2e runs in-container**: exposing the FUSE mount to the host (mount-namespace propagation) is fragile, so `e2e.sh` runs inside the mount container (mount point also in-container). `tests/linux/` is brought in as a read-only bind mount (no rebuild when editing tests).
+- **the fallback test**: [run.sh](../tests/docker/run.sh) passes `PGFS_TEST_PG_EXEC="psql -h coord ..."`, poking the DB directly with psql over the compose network.
 
-This removes the **ssh linux_client dependency and the symlink-race workaround**, and makes it reproducible in CI.
+For the single-PG configuration this removes the **ssh linux_client dependency and the symlink-race workaround**. What remains is full-docker for multi-node Citus + race + audit ([docs/next.md](next.md) #9; the template is `race_multinode.sh`).
+
+> **gotcha (pinning the runtime base)**: `debian:stable-slim` currently points at Debian 13 (trixie), whose libfuse 3.17 bumped its SONAME to `libfuse3.so.4`. Tmds.Fuse dlopens `libfuse3.so.3`, so a trixie base makes `CheckDependencies` fail with "libfuse not found". [Dockerfile.mount](../tests/docker/Dockerfile.mount) pins **`debian:bookworm-slim` (Debian 12, libfuse 3.14 = `libfuse3.so.3`)** to avoid it.
 
 ### The Windows side cannot be dockerized
 
@@ -161,7 +165,7 @@ Dokan is a **Windows kernel driver** and cannot provide a FUSE-equivalent mount 
 
 ### Recommendation for now
 
-1. Consolidate the Linux e2e + Citus suites into one docker-compose (or script) under `tests/docker/` etc. `race_multinode.sh` is nearly a template.
+1. ~~Put the Linux e2e under `tests/docker/`~~ → **the single-PG configuration is implemented** ([tests/docker/](../tests/docker/README.md)). Next, extend multi-node Citus + race + audit into the same frame (`race_multinode.sh` is the template).
 2. Make `verify`'s pgsql_server hardcoding overridable too, so it can point at docker Citus (the same trick as Linux e2e's `PGFS_TEST_PG_EXEC`).
 3. Keep the Windows e2e host-based, and note it is out of scope for docker.
 

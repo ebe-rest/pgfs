@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1
+#
+# A container that runs mount.pgfs with FUSE. A test image for running the
+# Linux e2e suite entirely in-container (not for production deployment).
+#
+# Multi-stage build:
+#   build  : publish mount.pgfs / mkfs.pgfs self-contained (linux-x64) with the .NET SDK
+#   runtime: debian-slim + fuse3 + the external tools the e2e uses + the published binaries
+#
+# It does not depend on the host's dotnet or any symlink-race workaround; everything is
+# self-contained from build to image (= the primary goal of docker integration = reproducibility).
+#
+# Note: the build context is the **repository root** (compose.yml's build.context = ../..).
+#       The vendor/Tmds.Fuse (submodule) source must be present in it too
+#       (i.e. git submodule update --init --recursive must have run).
+
+# Pin RUNTIME_BASE to bookworm (Debian 12). libfuse 3.17 on trixie (Debian 13) and later
+# bumped its SONAME to libfuse3.so.4, so the libfuse3.so.3 that Tmds.Fuse looks for no longer
+# exists (= CheckDependencies fails with "libfuse not found"). bookworm's fuse3 ships
+# libfuse 3.14 (= libfuse3.so.3), so it works.
+ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0
+ARG RUNTIME_BASE=debian:bookworm-slim
+
+FROM ${SDK_IMAGE} AS build
+WORKDIR /src
+COPY . .
+# Publish only the two: mount / mkfs (assign is Windows-only, so it is excluded).
+# Emit both into the same /out: the shared dlls (Lib.dll etc.) are identical, so they do not clash.
+RUN dotnet publish src/mount/Mount.csproj -c Release -r linux-x64 --self-contained true \
+        -p:RestoreDisableParallel=true -o /out \
+ && dotnet publish src/mkfs/Mkfs.csproj  -c Release -r linux-x64 --self-contained true \
+        -p:RestoreDisableParallel=true -o /out
+
+FROM ${RUNTIME_BASE}
+# fuse3        : the FUSE mount itself (includes fusermount3)
+# attr / acl   : the e2e's xattr (getfattr/setfattr) / POSIX ACL (getfacl/setfacl)
+# postgresql-client : the path where the fallback test pokes the DB directly with psql -h coord
+# coreutils / util-linux are in the base (md5sum / stat / dd / truncate / ln etc.)
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        fuse3 attr acl postgresql-client ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && echo "user_allow_other" >> /etc/fuse.conf
+COPY --from=build /out /app
+ENV PATH="/app:${PATH}"
+WORKDIR /app
+# Keep it resident, since the test driver (run.sh) reaches it with exec.
+CMD ["sleep", "infinity"]

@@ -1,0 +1,44 @@
+# Full-docker Linux e2e: a single PG (non-Citus) + a mount.pgfs container.
+#
+#   coord : PostgreSQL (mkfs creates the DB/role here)
+#   mount : mount.pgfs + mkfs.pgfs + the e2e tooling. Mounts FUSE inside the
+#           container and runs tests/linux/e2e.sh in-container.
+#
+# Intended to be driven through tests/docker/run.sh (up -> mkfs -> mount -> e2e -> down).
+# Everything is overridable via environment variables (${VAR:-default}).
+
+name: pgfs-e2e
+
+services:
+  coord:
+    image: ${PGFS_DOCKER_PG_IMAGE:-postgres:17}
+    environment:
+      POSTGRES_PASSWORD: ${SUPER_PASSWORD:-postgres}
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SUPER_USER:-postgres}"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mount:
+    build:
+      context: ../..
+      dockerfile: tests/docker/Dockerfile.mount
+      args:
+        SDK_IMAGE: ${PGFS_DOCKER_SDK_IMAGE:-mcr.microsoft.com/dotnet/sdk:10.0}
+    image: pgfs-mount:local
+    depends_on:
+      coord:
+        condition: service_healthy
+    # Minimal privileges needed to mount FUSE inside the container.
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - "/dev/fuse:/dev/fuse"
+    security_opt:
+      - apparmor:unconfined
+    # Bring the e2e scripts in as a read-only bind mount (edits take effect without an image rebuild).
+    volumes:
+      - ../linux:/tests/linux:ro
+    command: ["sleep", "infinity"]
