@@ -255,9 +255,8 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 		out long totalNumberOfFreeBytes,
 		ref DokanFileInfo info
 	) {
-		var capacity = this.api.GetCapacityBytes();
-		var used = this.api.GetTotalUsedBytes();
-		var free = Math.Max(0, capacity - used);
+		// df's capacity/free use the real measurement if the server-side statfs() (plperlu) exists, else the nominal capacity (docs/df-support.md).
+		var (capacity, free) = this.api.GetStatFs();
 		freeBytesAvailable = free;
 		totalNumberOfBytes = capacity;
 		totalNumberOfFreeBytes = free;

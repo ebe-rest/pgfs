@@ -19,7 +19,11 @@ public class Inode : Base
 	public string? link_target { get; set; }
 	public bool is_junction { get; set; }
 	public long? data_id { get; set; }
-	public string xattrs { get; set; } = "";
+
+	// Extended attributes (xattr) are held as two parallel arrays (the same index is a pair). Values are kept
+	// faithfully as bytea (migrated from the old JSONB + Base64. Design of record: docs/xattr-bytea.md).
+	public string[] xattr_names { get; set; } = System.Array.Empty<string>();
+	public byte[][] xattr_values { get; set; } = System.Array.Empty<byte[]>();
 
 	public long ParentId { get { return this.parent_id; } set { this.parent_id = value; } }
 	public string Name { get { return this.name; } set { this.name = value; } }
@@ -33,7 +37,15 @@ public class Inode : Base
 	public string? LinkTarget { get { return this.link_target; } set { this.link_target = value; } }
 	public bool IsJunction { get { return this.is_junction; } set { this.is_junction = value; } }
 	public long? DataId { get { return this.data_id; } set { this.data_id = value; } }
-	public string Xattrs { get { return this.xattrs; } set { this.xattrs = value; } }
+
+	/// <summary>Looks up a value by xattr name (in-memory). Null if absent. A parallel-array index search.</summary>
+	public byte[]? GetXattr(string name) {
+		var i = System.Array.IndexOf(this.xattr_names, name);
+		if (i < 0) {
+			return null;
+		}
+		return this.xattr_values[i];
+	}
 
 	public bool IsDirectory { get { return Lib.Api.Mode.IsDirectory(this.Mode); } }
 	public bool IsFile { get { return Lib.Api.Mode.IsFile(this.Mode); } }

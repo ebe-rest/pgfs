@@ -20,6 +20,10 @@ using static Tmds.Linux.LibC;
 /// only works on Linux/macOS. The Windows counterpart lives in <c>Pgfs.Assign</c>.
 ///
 /// Places that could be shared with Windows are marked with a `// Windows-shareable:` comment.
+///
+/// Data I/O (Open/Read/Write/Truncate, the <c>pgfs_data_chunk</c> bytea chunks), SymLink/Link/ReadLink,
+/// extended attributes (xattr), and statfs are all implemented (verified by e2e).
+/// Access permission checks (<c>Access</c>) are delegated to the kernel via <c>default_permissions</c> at mount time.
 /// </summary>
 public sealed class FileSystem : FuseFileSystemBase
 {
@@ -186,6 +190,10 @@ public sealed class FileSystem : FuseFileSystemBase
 		s.st_nlink = (ulong)Math.Max(1, inode.NLink);
 		s.st_uid = uid;
 		s.st_gid = gid;
+		// A directory's st_size stays 0 (Size stays at the DB default 0). It is not set to the entry count or 4096:
+		// no standard tool interprets st_size as a count (du reads st_blocks); computing COUNT on read would trash the
+		// InodeCache with a DB round-trip per getattr, and maintaining it on write would intrude on every mutating op.
+		// Not worth it for cosmetics, so it stays 0. See docs/database.md (pgfs_inode note).
 		s.st_size = inode.Size;
 		s.st_blocks = (inode.Size + 511) / 512;
 		s.st_blksize = 4096L;
@@ -581,12 +589,8 @@ public sealed class FileSystem : FuseFileSystemBase
 
 	public override int StatFS(ReadOnlySpan<byte> path, ref statvfs statfs) {
 		try {
-			var capacity = this.api.GetCapacityBytes();
-			var used = this.api.GetTotalUsedBytes();
-			var free = capacity - used;
-			if (free < 0) {
-				free = 0;
-			}
+			// df's capacity/free use the real measurement if the server-side statfs() (plperlu) exists, else the nominal capacity (docs/df-support.md).
+			var (capacity, free) = this.api.GetStatFs();
 
 			var blockSize = (uint)4096;
 			// f_bsize / f_frsize / f_namemax are ulong_t; implicit cast accepts uint32 only.

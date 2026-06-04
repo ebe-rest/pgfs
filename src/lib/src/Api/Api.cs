@@ -13,8 +13,6 @@ using System.Text.Json;
 /// A shared layer used from both Mount (Linux/macOS, Tmds.Fuse) and Assign (Windows, DokanNet).
 /// OS-specific concepts (uid/gid resolution, xattr details, symlinks, etc.) are intentionally left to the
 /// caller; here it handles only DB read/write and inode cache management.
-///
-/// Unimplemented methods throw <see cref="NotImplementedException"/> (planned for the future).
 /// </summary>
 public class Api : System.IDisposable
 {
@@ -249,7 +247,7 @@ public class Api : System.IDisposable
 		}
 		var sql = $@"
 			SELECT id, parent_id, name, uname, gname, st_mode, st_nlink, st_size,
-			       st_mtime, st_ctime, link_target, is_junction, data_id, xattrs,
+			       st_mtime, st_ctime, link_target, is_junction, data_id, xattr_names, xattr_values,
 			       created_at, created_by, updated_at, updated_by
 			FROM {this.QualifiedTable("inode")}
 			WHERE parent_id = @parent_id AND id <> 0
@@ -294,7 +292,7 @@ public class Api : System.IDisposable
 			)
 			ON CONFLICT (parent_id, name) DO NOTHING
 			RETURNING id, parent_id, name, uname, gname, st_mode, st_nlink, st_size,
-			          st_mtime, st_ctime, link_target, is_junction, data_id, xattrs,
+			          st_mtime, st_ctime, link_target, is_junction, data_id, xattr_names, xattr_values,
 			          created_at, created_by, updated_at, updated_by
 		";
 		try {
@@ -583,7 +581,7 @@ public class Api : System.IDisposable
 		// On the DELETE+INSERT path, this value is fed straight into the new row.
 		var old = conn.QueryFirstOrDefault<Pgfs.Lib.Models.Inode>(
 			$@"SELECT id, parent_id, name, uname, gname, st_mode, st_nlink, st_size,
-			          st_mtime, st_ctime, link_target, is_junction, data_id, xattrs,
+			          st_mtime, st_ctime, link_target, is_junction, data_id, xattr_names, xattr_values,
 			          created_at, created_by, updated_at, updated_by
 			   FROM {inodeTable} WHERE parent_id = @parent_id AND id = @id FOR UPDATE",
 			new { parent_id = hintParentId.Value, id }, tx
@@ -610,11 +608,11 @@ public class Api : System.IDisposable
 			rows = conn.Execute(
 				$@"INSERT INTO {inodeTable}
 				   (id, parent_id, name, uname, gname, st_mode, st_nlink, st_size,
-				    st_mtime, st_ctime, link_target, is_junction, data_id, xattrs,
+				    st_mtime, st_ctime, link_target, is_junction, data_id, xattr_names, xattr_values,
 				    created_at, created_by, updated_at, updated_by)
 				   OVERRIDING SYSTEM VALUE
 				   VALUES (@id, @parent_id, @name, @uname, @gname, @st_mode, @st_nlink, @st_size,
-				           @st_mtime, current_timestamp, @link_target, @is_junction, @data_id, @xattrs::jsonb,
+				           @st_mtime, current_timestamp, @link_target, @is_junction, @data_id, @xattr_names, @xattr_values,
 				           @created_at, @created_by, current_timestamp, @updated_by)",
 				new {
 					id,
@@ -629,7 +627,8 @@ public class Api : System.IDisposable
 					link_target = old.LinkTarget,
 					is_junction = old.IsJunction,
 					data_id = old.DataId,
-					xattrs = string.IsNullOrEmpty(old.Xattrs) ? "{}" : old.Xattrs,
+					xattr_names = old.xattr_names,
+				xattr_values = old.xattr_values,
 					created_at = old.created_at,
 					created_by = old.created_by,
 					updated_by = old.updated_by,
@@ -671,69 +670,32 @@ public class Api : System.IDisposable
 	// Extended attributes (xattr)
 	// ------------------------------------------------------------------
 	//
-	// pgfs_inode.xattrs holds, as JSONB, an associative array of {name: Base64 of the byte sequence}.
-	// To carry a byte sequence in JSON, it is Base64-encoded (provisional. The OS-side xattr allows arbitrary
-	// byte sequences, which a JSON string cannot hold directly).
-
-	private static string EncodeXattrValue(ReadOnlySpan<byte> value) {
-		return Convert.ToBase64String(value);
-	}
-
-	private static byte[] DecodeXattrValue(string? base64) {
-		if (string.IsNullOrEmpty(base64)) {
-			return Array.Empty<byte>();
-		}
-		try {
-			return Convert.FromBase64String(base64);
-		} catch {
-			// For old data etc. that is not Base64, treat it as UTF-8 as-is
-			return System.Text.Encoding.UTF8.GetBytes(base64);
-		}
-	}
+	// pgfs_inode holds xattr as two parallel arrays: xattr_names TEXT[] and xattr_values BYTEA[]
+	// (the same index is a pair). Values are kept faithfully as bytea (migrated from the old JSONB + Base64;
+	// any byte sequence including NUL round-trips unmodified. Design of record: docs/xattr-bytea.md).
+	// The mutators keep both arrays atomically with a "single UPDATE statement, no subquery" (array_position + array slicing).
 
 	/// <summary>Gets the value of the given attribute. null if it does not exist.</summary>
 	public byte[]? GetXAttr(long inodeId, string name) {
 		// SELinux etc. query xattr very frequently, so always use the cache.
-		// inode.Xattrs already has the full JSONB contents fetched at load time.
+		// The inode's two arrays were fetched at load time.
 		var inode = this.inodeCache.Get(inodeId);
 		if (inode != null) {
-			return ParseXAttrFromJson(inode.Xattrs, name);
+			return inode.GetXattr(name);
 		}
+		// array_position returning NULL (= absent) makes the subscript NULL too → the value is NULL.
 		var sql = $@"
-			SELECT xattrs ->> @name
+			SELECT xattr_values[array_position(xattr_names, @name)]
 			FROM {this.QualifiedTable("inode")}
 			WHERE id = @id
 		";
-		var s = Pg.Query<string?>(this.connectionString, sql, new { id = inodeId, name }).FirstOrDefault();
-		if (s == null) {
-			return null;
-		}
-		return DecodeXattrValue(s);
-	}
-
-	private static byte[]? ParseXAttrFromJson(string? xattrsJson, string name) {
-		if (string.IsNullOrEmpty(xattrsJson) || xattrsJson == "{}") {
-			return null;
-		}
-		try {
-			using var doc = System.Text.Json.JsonDocument.Parse(xattrsJson);
-			if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) {
-				return null;
-			}
-			if (!doc.RootElement.TryGetProperty(name, out var v)) {
-				return null;
-			}
-			var s = v.GetString();
-			return s == null ? null : DecodeXattrValue(s);
-		} catch {
-			return null;
-		}
+		return Pg.Query<byte[]?>(this.connectionString, sql, new { id = inodeId, name }).FirstOrDefault();
 	}
 
 	/// <summary>Sets / updates an attribute. `replaceOnly` fails if it does not exist; `createOnly` fails if it exists.</summary>
 	public bool SetXAttr(long inodeId, string name, ReadOnlySpan<byte> value, bool createOnly, bool replaceOnly) {
-		// existence check
-		var existsSql = $"SELECT xattrs ? @name FROM {this.QualifiedTable("inode")} WHERE id = @id";
+		// existence check (for the createOnly/replaceOnly decision). null if the inode is absent.
+		var existsSql = $"SELECT array_position(xattr_names, @name) IS NOT NULL FROM {this.QualifiedTable("inode")} WHERE id = @id";
 		var existing = Pg.Query<bool?>(this.connectionString, existsSql, new { id = inodeId, name }).FirstOrDefault();
 		if (existing == null) {
 			return false; // no such inode
@@ -745,14 +707,22 @@ public class Api : System.IDisposable
 			return false;
 		}
 
-		var encoded = EncodeXattrValue(value);
+		// A single UPDATE (atomic): replace the value at the same index if it exists, else append at the end.
+		// The array slice arr[1:i-1] || elem || arr[i+1:] replaces the i-th element (the RHS evaluates against the pre-update row).
+		var bytes = value.ToArray();
 		var sql = $@"
 			UPDATE {this.QualifiedTable("inode")}
-			SET xattrs = xattrs || jsonb_build_object(@name, @value::text),
+			SET xattr_names = CASE WHEN array_position(xattr_names, @name) IS NULL
+			                       THEN array_append(xattr_names, @name) ELSE xattr_names END,
+			    xattr_values = CASE WHEN array_position(xattr_names, @name) IS NULL
+			                        THEN array_append(xattr_values, @value)
+			                        ELSE xattr_values[1:array_position(xattr_names, @name)-1]
+			                             || @value
+			                             || xattr_values[array_position(xattr_names, @name)+1:] END,
 			    updated_at = current_timestamp
 			WHERE id = @id
 		";
-		var rows = Pg.Execute(this.connectionString, sql, new { id = inodeId, name, value = encoded });
+		var rows = Pg.Execute(this.connectionString, sql, new { id = inodeId, name, value = bytes });
 		if (rows > 0) {
 			this.inodeCache.Invalidate(inodeId, path: null);
 			this.Notify(inodeIds: [inodeId]);
@@ -762,44 +732,30 @@ public class Api : System.IDisposable
 
 	/// <summary>Enumerates all xattr names.</summary>
 	public IReadOnlyList<string> ListXAttr(long inodeId) {
-		// Parse the JSON via the cache (avoids a DB hit)
+		// Return the name array directly via the cache (avoids a DB hit).
 		var inode = this.inodeCache.Get(inodeId);
 		if (inode != null) {
-			return ListXAttrNamesFromJson(inode.Xattrs);
+			return inode.xattr_names.ToList();
 		}
-		var sql = $@"
-			SELECT key FROM jsonb_object_keys((
-				SELECT xattrs FROM {this.QualifiedTable("inode")} WHERE id = @id
-			)) AS key
-		";
-		return Pg.Query<string>(this.connectionString, sql, new { id = inodeId }).ToList();
-	}
-
-	private static IReadOnlyList<string> ListXAttrNamesFromJson(string? xattrsJson) {
-		if (string.IsNullOrEmpty(xattrsJson) || xattrsJson == "{}") {
+		var sql = $"SELECT xattr_names FROM {this.QualifiedTable("inode")} WHERE id = @id";
+		var names = Pg.Query<string[]>(this.connectionString, sql, new { id = inodeId }).FirstOrDefault();
+		if (names == null) {
 			return Array.Empty<string>();
 		}
-		try {
-			using var doc = System.Text.Json.JsonDocument.Parse(xattrsJson);
-			if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) {
-				return Array.Empty<string>();
-			}
-			var names = new List<string>();
-			foreach (var p in doc.RootElement.EnumerateObject()) {
-				names.Add(p.Name);
-			}
-			return names;
-		} catch {
-			return Array.Empty<string>();
-		}
+		return names;
 	}
 
 	/// <summary>Removes an attribute.</summary>
 	public bool RemoveXAttr(long inodeId, string name) {
+		// A single UPDATE (atomic) that removes the name's index from both arrays at once. The RHS evaluates against the pre-update row.
 		var sql = $@"
 			UPDATE {this.QualifiedTable("inode")}
-			SET xattrs = xattrs - @name, updated_at = current_timestamp
-			WHERE id = @id AND xattrs ? @name
+			SET xattr_names  = xattr_names[1:array_position(xattr_names, @name)-1]
+			                 || xattr_names[array_position(xattr_names, @name)+1:],
+			    xattr_values = xattr_values[1:array_position(xattr_names, @name)-1]
+			                 || xattr_values[array_position(xattr_names, @name)+1:],
+			    updated_at = current_timestamp
+			WHERE id = @id AND array_position(xattr_names, @name) IS NOT NULL
 		";
 		var rows = Pg.Execute(this.connectionString, sql, new { id = inodeId, name });
 		if (rows > 0) {
@@ -843,15 +799,15 @@ public class Api : System.IDisposable
 
 		var sql = $@"
 			INSERT INTO {this.QualifiedTable("inode")} (
-				parent_id, name, uname, gname, st_mode, st_nlink, st_size, data_id, xattrs,
+				parent_id, name, uname, gname, st_mode, st_nlink, st_size, data_id, xattr_names, xattr_values,
 				created_by, updated_by
 			) VALUES (
-				@parent_id, @name, @uname, @gname, @st_mode, 1, @st_size, @data_id, @xattrs::jsonb,
+				@parent_id, @name, @uname, @gname, @st_mode, 1, @st_size, @data_id, @xattr_names, @xattr_values,
 				@uname, @uname
 			)
 			ON CONFLICT (parent_id, name) DO NOTHING
 			RETURNING id, parent_id, name, uname, gname, st_mode, st_nlink, st_size,
-			          st_mtime, st_ctime, link_target, is_junction, data_id, xattrs,
+			          st_mtime, st_ctime, link_target, is_junction, data_id, xattr_names, xattr_values,
 			          created_at, created_by, updated_at, updated_by
 		";
 		var newInode = conn.QueryFirstOrDefault<Inode>(sql, new {
@@ -862,7 +818,8 @@ public class Api : System.IDisposable
 			st_mode = source.Mode,
 			st_size = source.Size,
 			data_id = source.DataId,
-			xattrs = source.Xattrs,
+			xattr_names = source.xattr_names,
+			xattr_values = source.xattr_values,
 		}, tx);
 		if (Logger.IsTraceEnabled) { Logger.Trace("INSERT inode (hardlink) parent_id:", newParentId, " name:", newName, " = ", newInode?.Id); }
 
@@ -950,6 +907,58 @@ public class Api : System.IDisposable
 			return 1L << 50;
 		}
 		return max;
+	}
+
+	// Caches the statfs() result for a few seconds (df is hammered by tools, so avoid an all-node Citus round-trip each time).
+	private (long Total, long Avail, System.DateTime At)? statFsCache;
+	private static readonly System.TimeSpan StatFsCacheTtl = System.TimeSpan.FromSeconds(5);
+
+	/// <summary>
+	/// The (total, available) bytes for df / statvfs. If the server-side <c>{prefix}statfs()</c> (plperlu, mkfs `--statfs`)
+	/// exists, use its real measurement; otherwise fall back to the nominal capacity
+	/// (<see cref="GetCapacityBytes"/> − <see cref="GetTotalUsedBytes"/>). Cached for a few seconds. Design of record: docs/df-support.md.
+	/// </summary>
+	public (long Total, long Avail) GetStatFs() {
+		var now = System.DateTime.UtcNow;
+		if (this.statFsCache is { } c && (now - c.At) < StatFsCacheTtl) {
+			return (c.Total, c.Avail);
+		}
+		if (!this.TryGetStatFsFromServer(out var total, out var avail)) {
+			total = this.GetCapacityBytes();
+			avail = System.Math.Max(0, total - this.GetTotalUsedBytes());
+		}
+		this.statFsCache = (total, avail, now);
+		return (total, avail);
+	}
+
+	/// <summary>Calls the server-side <c>{prefix}statfs()</c>. Returns false (= fall back) when the function is absent / fails / NULL.</summary>
+	private bool TryGetStatFsFromServer(out long total, out long avail) {
+		total = 0;
+		avail = 0;
+		// nominal mode contracts not to create the server-side function, so avoid a wasteful query + exception and fall back immediately.
+		if (this.config.Statfs.Mode == "nominal") {
+			return false;
+		}
+		try {
+			var row = Pg.Query<dynamic>(
+				this.connectionString,
+				$"SELECT total, avail FROM {this.QualifiedTable("statfs")}()"
+			).FirstOrDefault();
+			if (row == null) {
+				return false;
+			}
+			object? tv = row.total;
+			object? av = row.avail;
+			if (tv is not long t || av is not long a || t <= 0) {
+				return false;
+			}
+			total = t;
+			avail = a;
+			return true;
+		} catch (System.Exception ex) {
+			if (Logger.IsTraceEnabled) { Logger.Trace("statfs() unavailable, falling back to the nominal capacity: ", ex.Message); }
+			return false;
+		}
 	}
 
 	// ------------------------------------------------------------------
