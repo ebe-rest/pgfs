@@ -29,7 +29,10 @@ CREATE TABLE pgfs.pgfs_inode
 	link_target TEXT      NULL,
 	is_junction BOOLEAN   NOT NULL DEFAULT FALSE,
 	data_id     BIGINT    NULL,
-	xattrs      JSONB     NOT NULL DEFAULT '{}'::JSONB,
+	-- Extended attributes (xattr): parallel arrays pairing names TEXT[] and values BYTEA[] at the same index.
+	-- Values are kept faithfully as bytea (any byte sequence including NUL round-trips unmodified). Design: ../xattr-bytea.md.
+	xattr_names  TEXT[]   NOT NULL DEFAULT '{}'::TEXT[],
+	xattr_values BYTEA[]  NOT NULL DEFAULT '{}'::BYTEA[],
 	created_at  TIMESTAMP NOT NULL DEFAULT current_timestamp,
 	created_by  TEXT      NOT NULL,
 	updated_at  TIMESTAMP NOT NULL DEFAULT current_timestamp,
@@ -58,7 +61,8 @@ INSERT INTO pgfs.pgfs_inode (
 	st_nlink,
 	st_size,
 	is_junction,
-	xattrs,
+	xattr_names,
+	xattr_values,
 	created_by,
 	updated_by
 )
@@ -72,7 +76,8 @@ VALUES (
 	1, -- st_nlink
 	0, -- st_size
 	FALSE, -- is_junction
-	'{}'::JSONB, -- xattrs
+	'{}'::TEXT[], -- xattr_names
+	'{}'::BYTEA[], -- xattr_values
 	'pgfs', -- created_by
 	'pgfs' -- updated_by
 )

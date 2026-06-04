@@ -62,6 +62,7 @@ public class Initializer
 		await this.CreateLockTableAsync(prefix);
 		await this.CreateSettingsTableAsync(prefix);
 		await this.CreateAuditTableAsync(prefix);
+		await this.CreateStatfsFunctionsAsync(prefix);
 
 		await this.InsertRootInodeAsync(prefix);
 		this.PopulateSettingsRows();
@@ -69,19 +70,23 @@ public class Initializer
 
 	/// <summary>
 	/// Validates the combination of settings early (fail-fast before any destructive operation).
-	/// Current check: with <c>--citus</c>, <c>--tablespace</c> cannot be anything but pg_default
-	/// (Citus shard placement fails unless a tablespace of the same name exists on every worker, so we
-	/// do not support combining the two).
+	/// The ban on <c>--citus</c> + a custom <c>--tablespace</c> was removed: CREATE DATABASE WITH TABLESPACE is now
+	/// the default (the per-table TABLESPACE clause was dropped) and the tablespace is created on the coordinator + every
+	/// worker, so the two can be combined (design in docs/settings-and-plperlu.md).
 	/// </summary>
 	private void ValidateConfigCombinations() {
-		if (this.config.Database.Citus) {
-			var ts = this.config.Database.TablespaceName;
-			if (!string.IsNullOrEmpty(ts) && ts != "pg_default") {
-				throw new InvalidOperationException(
-					$"--citus and --tablespace='{ts}' cannot be combined. Under Citus the tablespace is forced to pg_default " +
-					"(see docs/support_for_citus.md)."
-				);
-			}
+		var statfsMode = this.config.Statfs.Mode;
+		if (statfsMode != "auto" && statfsMode != "require" && statfsMode != "nominal") {
+			throw new InvalidOperationException(
+				$"--statfs='{statfsMode}' is invalid. Specify one of auto / require / nominal (see docs/df-support.md)."
+			);
+		}
+		// require needs plperlu. Combining it with plperlu denied (--deny-plperlu) is contradictory, so fail fast.
+		if (statfsMode == "require" && !this.config.App.Plperlu) {
+			throw new InvalidOperationException(
+				"--statfs=require and plperlu denied (--deny-plperlu) cannot be combined " +
+				"(require needs plperlu; docs/settings-and-plperlu.md)."
+			);
 		}
 	}
 
@@ -231,43 +236,79 @@ public class Initializer
 			return;
 		}
 
+		// A tablespace is node-local (Citus does not propagate CREATE TABLESPACE). Create it on the coordinator + every worker.
+		// CREATE DATABASE WITH TABLESPACE requires this name, so it must precede the DB creation (EnsureDatabaseAsync)
+		// (InitializeAsync's call order guarantees that). Tables carry no per-table TABLESPACE clause and inherit the DB default
+		// (shards inherit the worker DB default too). Design: docs/settings-and-plperlu.md.
+		var tablespacePath = this.config.Database.TablespacePath;
+		await this.EnsureTablespaceOnNodeAsync("coordinator", this.superConnectionString, tablespaceName, tablespacePath);
+		if (this.config.Database.Citus) {
+			foreach (var worker in this.config.Database.Workers) {
+				var label = $"worker {worker.Host}:{worker.Port}";
+				await this.EnsureTablespaceOnNodeAsync(label, this.WorkerSuperConnectionString(worker), tablespaceName, tablespacePath);
+			}
+		}
+	}
+
+	/// <summary>
+	/// Ensures the tablespace on the given node. Skips if it already exists. When the LOCATION dir is missing and
+	/// <see cref="Schema.App.Plperlu"/> is allowed, the dir is created with plperlu (running as the postgres OS user)
+	/// via <c>File::Path::make_path</c> + <c>chmod 0700</c> before <c>CREATE TABLESPACE</c> would fail (the created dir
+	/// is postgres-owned 0700 = matches CREATE TABLESPACE's requirement). When denied, the dir is not created and, if
+	/// absent, CREATE TABLESPACE rejects it.
+	/// </summary>
+	private async Task EnsureTablespaceOnNodeAsync(string label, string superConn, string tablespaceName, string tablespacePath) {
 		var exists = (await Pg.QueryAsync<uint>(
-			this.superConnectionString,
+			superConn,
 			"SELECT oid FROM pg_tablespace WHERE spcname = @name",
 			new { name = tablespaceName }
 		)).Any();
-
 		if (exists) {
-			Logger.Information($"  tablespace '{tablespaceName}' already exists");
+			Logger.Information($"  [{label}] tablespace '{tablespaceName}' already exists");
 			return;
 		}
-
-		var tablespacePath = this.config.Database.TablespacePath;
-
 		if (string.IsNullOrWhiteSpace(tablespacePath)) {
 			throw new InvalidOperationException(
-				$"tablespace '{tablespaceName}' does not exist and --tablespace-path was not given."
+				$"[{label}] tablespace '{tablespaceName}' does not exist and --tablespace-path was not given " +
+				"(with --allow-plperlu, mkfs can create the dir automatically)."
 			);
 		}
 
-		// --- Linux-specific ---
-		// The tablespace directory must be owned by and writable for the postgres user. You normally need
-		// to run the following **before** mkfs:
-		//     sudo mkdir -p <tablespacePath>
-		//     sudo chown postgres:postgres <tablespacePath>
-		//     sudo chmod 0700 <tablespacePath>
-		// On macOS the postgres uid/gid may differ.
-		// On Windows you need to configure NTFS ACLs (this tool does not handle that yet).
-		// -----------------------
+		// Create the LOCATION dir with plperlu (only when allowed, best-effort). On failure, defer to CREATE TABLESPACE's error.
+		if (this.config.App.Plperlu) {
+			await TryMakeTablespaceDirAsync(label, superConn, tablespacePath);
+		}
 
 		var userName = this.config.Database.Connection.Username ?? "pgfs";
-		Logger.Information($"  creating tablespace '{tablespaceName}' at {tablespacePath}");
+		Logger.Information($"  [{label}] creating tablespace '{tablespaceName}' at {tablespacePath}");
 		await Pg.ExecuteAsync(
-			this.superConnectionString,
+			superConn,
 			$"CREATE TABLESPACE {Pg.QuoteIdentifier(tablespaceName)} " +
 			$"OWNER {Pg.QuoteIdentifier(userName)} " +
 			$"LOCATION {Pg.QuoteLiteral(tablespacePath)}"
 		);
+	}
+
+	/// <summary>
+	/// Creates the tablespace LOCATION dir with plperlu's <c>File::Path::make_path</c> (recursive) + <c>chmod 0700</c>.
+	/// It runs with the postgres OS user's privileges, so the created dir ends up postgres-owned 0700. A failure is left
+	/// as a warning, deferring to the explicit error of the subsequent CREATE TABLESPACE.
+	/// </summary>
+	private static async Task TryMakeTablespaceDirAsync(string label, string superConn, string tablespacePath) {
+		// Escape \ and ' for a Perl single-quoted literal.
+		var perlPath = tablespacePath.Replace("\\", "\\\\").Replace("'", "\\'");
+		try {
+			await Pg.ExecuteAsync(superConn, "CREATE EXTENSION IF NOT EXISTS plperlu");
+			var doSql =
+				"DO LANGUAGE plperlu $PL$ " +
+				"use File::Path qw(make_path); " +
+				$"my $d = '{perlPath}'; make_path($d); chmod 0700, $d; " +
+				"$PL$";
+			await Pg.ExecuteAsync(superConn, doSql);
+			Logger.Information($"  [{label}] created the LOCATION dir with plperlu (postgres-owned 0700): {tablespacePath}");
+		} catch (System.Exception ex) {
+			Logger.Warning($"  [{label}] failed to create the dir via plperlu (deferring to CREATE TABLESPACE's decision): " + ex.Message);
+		}
 	}
 
 	// ----------------------------------------------------------------------
@@ -577,7 +618,10 @@ public class Initializer
 				new ColumnInfo("link_target", "TEXT", "NULL"),
 				new ColumnInfo("is_junction", "BOOLEAN", "NOT NULL DEFAULT FALSE"),
 				new ColumnInfo("data_id", "BIGINT", "NULL"),
-				new ColumnInfo("xattrs", "JSONB", "NOT NULL DEFAULT '{}'::JSONB"),
+				// Extended attributes (xattr): parallel arrays pairing names TEXT[] and values BYTEA[] at the same index
+				// (migrated from the old JSONB + Base64; values kept faithfully as bytea. Design: docs/xattr-bytea.md).
+				new ColumnInfo("xattr_names", "TEXT[]", "NOT NULL DEFAULT '{}'::TEXT[]"),
+				new ColumnInfo("xattr_values", "BYTEA[]", "NOT NULL DEFAULT '{}'::BYTEA[]"),
 				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
 				new ColumnInfo("created_by", "TEXT", "NOT NULL"),
 				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
@@ -768,6 +812,180 @@ public class Initializer
 	}
 
 	// ----------------------------------------------------------------------
+	// 5.5 Server-side functions for df (statfs) (plperlu) — design of record: docs/df-support.md
+	// ----------------------------------------------------------------------
+
+	/// <summary>
+	/// Creates the function set that lets `df` return the real free space of the tablespace. With a superuser connection:
+	///   <c>{prefix}statvfs(dir)</c> (plperlu: Filesys::Df → df fallback) /
+	///   <c>{prefix}fs_free(ts)</c> (plpgsql: node-local dir resolution) /
+	///   <c>{prefix}statfs()</c> (the entry point. Citus aggregates over workers, non-Citus is local).
+	/// When <c>statfs.mode</c> is <c>nominal</c>, do nothing (the client falls back to the nominal capacity).
+	/// With <c>require</c>, fail mkfs if plperlu cannot be enabled.
+	/// </summary>
+	private async Task CreateStatfsFunctionsAsync(string prefix) {
+		var mode = this.config.Statfs.Mode;
+		if (mode == "nominal") {
+			Logger.Information("statfs.mode=nominal: dropping the df functions (if any); the client falls back to the nominal capacity");
+			await this.DropStatfsFunctionsAsync(prefix);
+			return;
+		}
+
+		// The plperlu gate (app.plperlu). When denied, do not use plperlu at all.
+		// require + deny is already fail-fast'd in ValidateConfigCombinations, but branch defensively.
+		// auto + deny behaves like nominal (no functions created, fall back to the nominal capacity). Design: docs/settings-and-plperlu.md.
+		if (!this.config.App.Plperlu) {
+			if (mode == "require") {
+				throw new InvalidOperationException(
+					"--statfs=require and plperlu denied (--deny-plperlu) cannot be combined (docs/settings-and-plperlu.md)."
+				);
+			}
+			Logger.Information("app.plperlu=false: not using plperlu, so no df functions are created (nominal-capacity fallback)");
+			await this.DropStatfsFunctionsAsync(prefix);
+			return;
+		}
+
+		var schemaQ = Pg.QuoteIdentifier(this.SchemaNameOrDefault());
+		var qStatvfs = $"{schemaQ}.{Pg.QuoteIdentifier(prefix + "statvfs")}";
+		var qFsFree = $"{schemaQ}.{Pg.QuoteIdentifier(prefix + "fs_free")}";
+		var qStatfs = $"{schemaQ}.{Pg.QuoteIdentifier(prefix + "statfs")}";
+		var ts = this.config.Database.TablespaceName;
+		if (string.IsNullOrEmpty(ts)) { ts = "pg_default"; }
+		var tsLit = Pg.QuoteLiteral(ts);
+		var userQ = Pg.QuoteIdentifier(this.config.Database.Connection.Username ?? "pgfs");
+		var coordSuperPgfs = this.CoordinatorSuperPgfsConnectionString();
+		var citus = this.config.Database.Citus;
+
+		// Ensure plperlu (coordinator). Citus auto-syncs CREATE EXTENSION to workers.
+		// If it cannot be enabled: fail-fast with require, fall back to nominal and return with auto.
+		Logger.Information("statfs: CREATE EXTENSION IF NOT EXISTS plperlu");
+		try {
+			await Pg.ExecuteAsync(coordSuperPgfs, "CREATE EXTENSION IF NOT EXISTS plperlu");
+		} catch (System.Exception ex) {
+			if (mode == "require") {
+				throw new InvalidOperationException(
+					"--statfs=require but plperlu cannot be enabled: " + ex.Message +
+					" (check that plperlu is available; docs/df-support.md)."
+				);
+			}
+			Logger.Warning("plperlu unavailable. statfs will fall back to the nominal capacity: " + ex.Message);
+			return;
+		}
+
+		var statvfsSql = $$"""
+			CREATE OR REPLACE FUNCTION {{qStatvfs}}(dir text)
+			RETURNS TABLE(total bigint, avail bigint)
+			LANGUAGE plperlu AS $PL$
+			  my $dir = $_[0];
+			  my $r = eval { require Filesys::Df; my $d = Filesys::Df::df($dir, 1);
+			                 return [int($d->{blocks}), int($d->{bavail})]; };
+			  if ($r && defined $r->[0]) { return [{ total => $r->[0], avail => $r->[1] }]; }
+			  my @o = `df -B1 --output=size,avail "$dir" 2>/dev/null`;
+			  if (@o >= 2 && $o[1] =~ /(\d+)\s+(\d+)/) { return [{ total => $1+0, avail => $2+0 }]; }
+			  return [{ total => undef, avail => undef }];
+			$PL$
+			""";
+		var fsFreeSql = $$"""
+			CREATE OR REPLACE FUNCTION {{qFsFree}}(tablespace text DEFAULT 'pg_default')
+			RETURNS TABLE(total bigint, avail bigint)
+			LANGUAGE plpgsql SECURITY DEFINER AS $FF$
+			DECLARE d text; ts_oid oid;
+			BEGIN
+			  IF tablespace IS NULL OR tablespace IN ('', 'pg_default', 'pg_global') THEN
+			    d := current_setting('data_directory');
+			  ELSE
+			    SELECT t.oid INTO ts_oid FROM pg_tablespace t WHERE t.spcname = tablespace;
+			    d := pg_tablespace_location(ts_oid);
+			    IF d IS NULL OR d = '' THEN d := current_setting('data_directory'); END IF;
+			  END IF;
+			  RETURN QUERY SELECT s.total, s.avail FROM {{qStatvfs}}(d) s;
+			END;
+			$FF$
+			""";
+
+		// statvfs / fs_free are needed on every node (the worker aggregation calls each worker's fs_free).
+		await this.DeployFnAsync(coordSuperPgfs, citus, statvfsSql);
+		await this.DeployFnAsync(coordSuperPgfs, citus, fsFreeSql);
+
+		// The entry-point statfs() is coordinator-only (clients connect to the coordinator).
+		var statfsSql = StatfsEntrySql(citus, qStatfs, qFsFree, tsLit);
+		await Pg.ExecuteAsync(coordSuperPgfs, statfsSql);
+
+		// The functions access the OS with definer (postgres) privileges. The caller is the pgfs user, so GRANT EXECUTE.
+		await Pg.ExecuteAsync(coordSuperPgfs, $"GRANT EXECUTE ON FUNCTION {qStatfs}() TO {userQ}");
+		Logger.Information($"statfs: created {qStatfs}() (mode={mode}, citus={citus})");
+	}
+
+	/// <summary>
+	/// Drops the df functions (nominal mode). So nominal is authoritative even if functions created earlier by
+	/// `require`/`auto` remain. Idempotent via `IF EXISTS`. Drops in dependency order statfs → fs_free → statvfs.
+	/// Under Citus, also remove them from every node (statfs is coordinator-only, but IF EXISTS makes it a no-op on workers).
+	/// </summary>
+	private async Task DropStatfsFunctionsAsync(string prefix) {
+		var schemaQ = Pg.QuoteIdentifier(this.SchemaNameOrDefault());
+		var coordSuperPgfs = this.CoordinatorSuperPgfsConnectionString();
+		var drops = new[] {
+			$"DROP FUNCTION IF EXISTS {schemaQ}.{Pg.QuoteIdentifier(prefix + "statfs")}()",
+			$"DROP FUNCTION IF EXISTS {schemaQ}.{Pg.QuoteIdentifier(prefix + "fs_free")}(text)",
+			$"DROP FUNCTION IF EXISTS {schemaQ}.{Pg.QuoteIdentifier(prefix + "statvfs")}(text)",
+		};
+		foreach (var d in drops) {
+			await Pg.ExecuteAsync(coordSuperPgfs, d);
+			if (this.config.Database.Citus) {
+				await Pg.ExecuteAsync(coordSuperPgfs, $"SELECT run_command_on_all_nodes($RC${d}$RC$)");
+			}
+		}
+	}
+
+	/// <summary>Deploys a function-definition SQL. Citus uses run_command_on_all_nodes (every node); non-Citus runs locally.</summary>
+	private async Task DeployFnAsync(string coordSuperPgfs, bool citus, string createFnSql) {
+		if (citus) {
+			await Pg.ExecuteAsync(coordSuperPgfs, $"SELECT run_command_on_all_nodes($RC${createFnSql}$RC$)");
+			return;
+		}
+		await Pg.ExecuteAsync(coordSuperPgfs, createFnSql);
+	}
+
+	/// <summary>The definition SQL of the entry-point <c>{prefix}statfs()</c>. Non-Citus uses local fs_free; Citus aggregates over workers.</summary>
+	private static string StatfsEntrySql(bool citus, string qStatfs, string qFsFree, string tsLit) {
+		if (!citus) {
+			return $$"""
+				CREATE OR REPLACE FUNCTION {{qStatfs}}()
+				RETURNS TABLE(total bigint, avail bigint)
+				LANGUAGE sql SECURITY DEFINER AS $ST$
+				  SELECT total, avail FROM {{qFsFree}}({{tsLit}});
+				$ST$
+				""";
+		}
+		// Citus: if there are workers holding shards, aggregate over workers (avoids double-counting the coordinator);
+		// with 0 workers (a 1-node Citus = the coordinator holds shards) use local fs_free.
+		return $$"""
+			CREATE OR REPLACE FUNCTION {{qStatfs}}()
+			RETURNS TABLE(total bigint, avail bigint)
+			LANGUAGE plpgsql SECURITY DEFINER AS $ST$
+			DECLARE nworkers int;
+			BEGIN
+			  SELECT count(*) INTO nworkers FROM pg_dist_node
+			    WHERE groupid <> 0 AND isactive AND shouldhaveshards;
+			  IF nworkers = 0 THEN
+			    RETURN QUERY SELECT f.total, f.avail FROM {{qFsFree}}({{tsLit}}) f;
+			  ELSE
+			    -- sum() over bigint returns numeric, so cast explicitly to the declared type (bigint).
+			    -- Omitting this fails at runtime with "structure of query does not match function result type"
+			    -- (this aggregation branch only runs on a multi-worker Citus, so it was discovered late).
+			    RETURN QUERY
+			      SELECT sum(split_part(r.result, ',', 1)::bigint)::bigint,
+			             sum(split_part(r.result, ',', 2)::bigint)::bigint
+			      FROM run_command_on_workers(
+			        $cmd$ SELECT total||','||avail FROM {{qFsFree}}({{tsLit}}) $cmd$) r
+			      WHERE r.success AND r.result ~ '^[0-9]+,[0-9]+$';
+			  END IF;
+			END;
+			$ST$
+			""";
+	}
+
+	// ----------------------------------------------------------------------
 	// 6. Root inode insertion
 	// ----------------------------------------------------------------------
 
@@ -814,10 +1032,24 @@ public class Initializer
 		);
 		store.Save(Schema.Mount.FallbackUname, this.config.Mount.FallbackUname);
 		store.Save(Schema.Mount.FallbackGname, this.config.Mount.FallbackGname);
+		// The tablespace settings are also FS identity, so DB-authoritative (2026-06-03; not overridable via the settings file).
+		store.Save(Schema.Database.TablespaceName, this.config.Database.TablespaceName);
+		store.Save(Schema.Database.TablespacePath, this.config.Database.TablespacePath);
 		store.Save(Schema.FileSystem.Version, this.config.FileSystem.Version);
 		store.Save(Schema.FileSystem.VolumeLabel, this.config.FileSystem.VolumeLabel);
+		// The FS sizes are FS identity, so DB-authoritative (changed from SaveTo=File on 2026-06-03).
+		// A value mismatch across clients could corrupt data via inconsistent chunk-boundary interpretation (docs/settings-and-plperlu.md).
+		store.Save(Schema.FileSystem.ClusterSize, this.config.FileSystem.ClusterSize);
+		store.Save(Schema.FileSystem.DefaultChunkSize, this.config.FileSystem.DefaultChunkSize);
+		store.Save(Schema.FileSystem.MaxFileSize, this.config.FileSystem.MaxFileSize);
 		// Audit log on/off (--audit). mount/assign read this row from the DB to enable their hooks.
 		store.Save(Schema.Audit.Enabled, this.config.Audit.Enabled);
+		// df (statfs) mode (--statfs, the app.statfs key). Recorded as an FS property common to all clients.
+		store.Save(Schema.Statfs.Mode, this.config.Statfs.Mode);
+		// Whether this FS is Citus-enabled (--citus, the database.citus key, made SaveTo=Db on 2026-06-03). For after-the-fact confirmation.
+		store.Save(Schema.Database.Citus, this.config.Database.Citus);
+		// The plperlu allow gate (app.plperlu). For reuse on a mkfs re-run + a record.
+		store.Save(Schema.App.Plperlu, this.config.App.Plperlu);
 	}
 
 	private string SchemaNameOrDefault() {
@@ -869,15 +1101,13 @@ public class Initializer
 			return false;
 		}
 
-		var tablespaceName = this.config.Database.TablespaceName;
-		var tablespaceClause = string.IsNullOrEmpty(tablespaceName) || tablespaceName == "pg_default"
-			? ""
-			: $" TABLESPACE {Pg.QuoteIdentifier(tablespaceName)}";
-
+		// No per-table TABLESPACE clause (2026-06-03). The pgfs DB has a default tablespace from CREATE DATABASE WITH
+		// TABLESPACE, so tables inherit it (Citus shards inherit the worker DB default too).
+		// This is what lets --citus + a custom tablespace coexist (design in docs/settings-and-plperlu.md).
 		var columnDefs = string.Join(",\n\t",
 			columns.Select(c => $"{Pg.QuoteIdentifier(c.Name)} {c.Type} {c.Constraints}")
 		);
-		// For a RANGE-partitioned table (the audit log), add a PARTITION BY clause. Place it before TABLESPACE.
+		// For a RANGE-partitioned table (the audit log), add a PARTITION BY clause.
 		var partitionClause = "";
 		if (!string.IsNullOrEmpty(partitionBy)) {
 			partitionClause = $" PARTITION BY RANGE ({Pg.QuoteIdentifier(partitionBy)})";
@@ -885,7 +1115,7 @@ public class Initializer
 		Logger.Information($"  creating table '{tableName}'");
 		await Pg.ExecuteAsync(
 			this.connectionString,
-			$"CREATE TABLE {schemaQ}.{tableQ} (\n\t{columnDefs}\n){partitionClause}{tablespaceClause}"
+			$"CREATE TABLE {schemaQ}.{tableQ} (\n\t{columnDefs}\n){partitionClause}"
 		);
 
 		if (primary is { Count: > 0 }) {
