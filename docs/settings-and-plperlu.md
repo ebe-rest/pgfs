@@ -1,7 +1,7 @@
 # Settings-scope rework + plperlu gate + tablespace auto-mkdir (design)
 
 Design for a set of configuration-model changes and the Citus custom-tablespace support that follows from
-them. **The configuration model is the area [the CLAUDE guidance] flags as "handle carefully"**, so settle the
+them. **The configuration model is the area the project guidance flags as "handle carefully"**, so settle the
 design here before implementing. The source of truth for settings is
 [Schema.cs](../src/lib/src/Config/Schema.cs) / [settings-matrix.md](settings-matrix.md).
 

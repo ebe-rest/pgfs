@@ -1032,12 +1032,12 @@ public class Initializer
 		);
 		store.Save(Schema.Mount.FallbackUname, this.config.Mount.FallbackUname);
 		store.Save(Schema.Mount.FallbackGname, this.config.Mount.FallbackGname);
-		// The tablespace settings are also FS identity, so DB-authoritative (2026-06-03; not overridable via the settings file).
+		// The tablespace settings are also FS identity, so DB-authoritative (not overridable via the settings file).
 		store.Save(Schema.Database.TablespaceName, this.config.Database.TablespaceName);
 		store.Save(Schema.Database.TablespacePath, this.config.Database.TablespacePath);
 		store.Save(Schema.FileSystem.Version, this.config.FileSystem.Version);
 		store.Save(Schema.FileSystem.VolumeLabel, this.config.FileSystem.VolumeLabel);
-		// The FS sizes are FS identity, so DB-authoritative (changed from SaveTo=File on 2026-06-03).
+		// The FS sizes are FS identity, so DB-authoritative.
 		// A value mismatch across clients could corrupt data via inconsistent chunk-boundary interpretation (docs/settings-and-plperlu.md).
 		store.Save(Schema.FileSystem.ClusterSize, this.config.FileSystem.ClusterSize);
 		store.Save(Schema.FileSystem.DefaultChunkSize, this.config.FileSystem.DefaultChunkSize);
@@ -1046,7 +1046,7 @@ public class Initializer
 		store.Save(Schema.Audit.Enabled, this.config.Audit.Enabled);
 		// df (statfs) mode (--statfs, the app.statfs key). Recorded as an FS property common to all clients.
 		store.Save(Schema.Statfs.Mode, this.config.Statfs.Mode);
-		// Whether this FS is Citus-enabled (--citus, the database.citus key, made SaveTo=Db on 2026-06-03). For after-the-fact confirmation.
+		// Whether this FS is Citus-enabled (--citus, the database.citus key, SaveTo=Db). For after-the-fact confirmation.
 		store.Save(Schema.Database.Citus, this.config.Database.Citus);
 		// The plperlu allow gate (app.plperlu). For reuse on a mkfs re-run + a record.
 		store.Save(Schema.App.Plperlu, this.config.App.Plperlu);
@@ -1101,7 +1101,7 @@ public class Initializer
 			return false;
 		}
 
-		// No per-table TABLESPACE clause (2026-06-03). The pgfs DB has a default tablespace from CREATE DATABASE WITH
+		// No per-table TABLESPACE clause. The pgfs DB has a default tablespace from CREATE DATABASE WITH
 		// TABLESPACE, so tables inherit it (Citus shards inherit the worker DB default too).
 		// This is what lets --citus + a custom tablespace coexist (design in docs/settings-and-plperlu.md).
 		var columnDefs = string.Join(",\n\t",

@@ -1,7 +1,7 @@
 # 設定スコープ再編 + plperlu ゲート + tablespace auto-mkdir (設計)
 
 一連の設定モデル変更と、それに連なる Citus カスタム tablespace 対応の設計。**設定モデルは
-[CLAUDE 指針] が「慎重に」と指定する領域**なので、本書で設計を固めてから実装する。設定項目の正は
+プロジェクト指針が「慎重に」と指定する領域**なので、本書で設計を固めてから実装する。設定項目の正は
 [Schema.cs](../src/lib/src/Config/Schema.cs) / [settings-matrix.md](settings-matrix.md)。
 
 英語版は [settings-and-plperlu.md](settings-and-plperlu.md) を参照してください。

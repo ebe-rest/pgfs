@@ -291,7 +291,7 @@ public static class Schema
 		/// </list>
 		/// Default <c>false</c> (opt-in). Ignored if received on mount/assign (= the Api is written so the same SQL runs whether the
 		/// target is Citus or not; a cross-shard rename always switches to the INSERT+DELETE path that preserves id, only when the parent changes).
-		/// It is **saved to the DB** (<see cref="SaveTarget.Db"/>, changed from File on 2026-06-03), but only for after-the-fact
+		/// It is **saved to the DB** (<see cref="SaveTarget.Db"/>), but only for after-the-fact
 		/// confirmation that "this DB is Citus-enabled" (mount/assign do not branch on it).
 		/// </summary>
 		public static readonly BoolField Citus = new() {

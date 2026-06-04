@@ -9,7 +9,7 @@ using Pgfs.Lib.Models;
 /// <para>
 /// The file name is formed by replacing <c>*</c> in <c>pattern</c> with a date stamp at the cycle granularity:
 /// hourly → <c>yyyyMMddHH</c> / daily → <c>yyyyMMdd</c> / monthly → <c>yyyyMM</c> / none → empty string.
-/// e.g. <c>daily:~/pgfs/log/pgfs-*.log</c> → <c>~/pgfs/log/pgfs-20260527.log</c>.
+/// e.g. <c>daily:~/pgfs/log/pgfs-*.log</c> → <c>~/pgfs/log/pgfs-YYYYMMDD.log</c>.
 /// <c>~</c> expands to the home directory. If a write crosses a date boundary, the file is reopened.
 /// </para>
 ///

@@ -57,6 +57,6 @@ CREATE INDEX ix_pgfs_audit_target ON pgfs.pgfs_audit (target_id)
 
 -- Example month partition (normally the application creates these automatically before INSERT; no DEFAULT
 -- is created on purpose).
--- CREATE TABLE pgfs.pgfs_audit_2026_05 PARTITION OF pgfs.pgfs_audit
--- 	FOR VALUES FROM ('2026-05-01') TO ('2026-06-01')
+-- CREATE TABLE pgfs.pgfs_audit_YYYY_MM PARTITION OF pgfs.pgfs_audit
+-- 	FOR VALUES FROM ('YYYY-MM-01') TO ('<next month>-01')
 -- ;
