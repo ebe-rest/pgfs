@@ -16,6 +16,8 @@ public sealed class RootConfig
 	public required MountConfig Mount { get; init; }
 	public required FileSystemConfig FileSystem { get; init; }
 	public required AuditConfig Audit { get; init; }
+	public required StatfsConfig Statfs { get; init; }
+	public required AppConfig App { get; init; }
 
 	/// <summary>true with `-?` / `-h` / `--help`. A signal for the receiver to <c>ShowHelp()</c> → exit.</summary>
 	public bool Help { get; set; }

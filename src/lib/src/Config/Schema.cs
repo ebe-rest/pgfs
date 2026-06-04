@@ -10,8 +10,9 @@ using System.Reflection;
 /// This class is the single source of truth for settings.
 /// It expresses the table in [docs/settings-matrix.md](../../../../docs/settings-matrix.md) as code.
 /// To add a new setting, sync three places: add one <see cref="Field{T}"/> here, add one property on the corresponding POCO,
-/// and add one line to the assembly logic in <see cref="ConfigLoader"/>. A reflection-based check is planned for the future
-/// so that "declared in <see cref="Schema"/> yet never referenced from <see cref="ConfigLoader"/>" can be detected at startup.
+/// and add one line to the assembly logic in <see cref="ConfigLoader"/>. Forgetting the third makes
+/// <see cref="ConfigLoader.UnresolvedFields"/> (the `Field` self-check) emit a warning at startup
+/// (the diff of the <see cref="AllFields"/> reflection enumeration against what <see cref="ConfigLoader.BuildRootConfig"/> resolved).
 /// </para>
 /// </summary>
 public static class Schema
@@ -72,6 +73,7 @@ public static class Schema
 			Key = "clean",
 			CliOptions = ["--clean"],
 			SaveTo = SaveTarget.None,
+			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => false,
 			Comment = "Re-create from scratch: ignore existing pgfs.toml and DROP DATABASE before re-init (mkfs only)",
 		};
@@ -84,6 +86,8 @@ public static class Schema
 			Key = "mount_point",
 			CliOptions = ["-m", "--mount-point"],
 			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			ArgName = "<path>",
 			DefaultFn = () => System.OperatingSystem.IsWindows() ? "P:" : "/mnt/pgfs",
 			Comment = "Specifies the mount point",
 		};
@@ -93,6 +97,7 @@ public static class Schema
 			Key = "cache_max_entries",
 			CliOptions = ["--cache-max-entries"],
 			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
 			DefaultFn = () => 1024,
 			Comment = "Specifies the number of entries to cache in memory",
 		};
@@ -107,6 +112,8 @@ public static class Schema
 			Key = "fallback_uname",
 			CliOptions = ["--fallback-uname"],
 			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			ArgName = "<name>",
 			DefaultFn = () => "nobody",
 			Comment = "Username returned when an inode's uname cannot be resolved by the OS",
 		};
@@ -116,6 +123,8 @@ public static class Schema
 			Key = "fallback_gname",
 			CliOptions = ["--fallback-gname"],
 			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			ArgName = "<name>",
 			DefaultFn = () => "nogroup",
 			Comment = "Group name returned when an inode's gname cannot be resolved by the OS",
 		};
@@ -129,6 +138,7 @@ public static class Schema
 			Key = "foreground",
 			CliOptions = ["--foreground"],
 			SaveTo = SaveTarget.None,
+			AppliesTo = Tool.Mount,
 			DefaultFn = () => false,
 			Comment = "Run in foreground (do not daemonize)",
 		};
@@ -169,6 +179,7 @@ public static class Schema
 				"--super-user-connection", "--super-user-connection-string",
 			],
 			SaveTo = SaveTarget.None,
+			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => new Npgsql.NpgsqlConnectionStringBuilder {
 				Username = "postgres",
 				Password = "postgres",
@@ -185,6 +196,7 @@ public static class Schema
 			Key = "schema",
 			CliOptions = ["-s", "--schema", "--schema-name"],
 			SaveTo = SaveTarget.File,
+			ArgName = "<name>",
 			DefaultFn = () => "public",
 			Comment = "Database schema name",
 		};
@@ -194,6 +206,7 @@ public static class Schema
 			Key = "prefix",
 			CliOptions = ["-x", "--prefix", "--table-prefix", "--table-name-prefix"],
 			SaveTo = SaveTarget.File,
+			ArgName = "<prefix>",
 			DefaultFn = () => "pgfs_",
 			Comment = "Table name prefix",
 		};
@@ -202,7 +215,9 @@ public static class Schema
 			Scope = "database",
 			Key = "tablespace",
 			CliOptions = ["--tablespace", "--tablespace-name"],
-			SaveTo = SaveTarget.File,
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			ArgName = "<name>",
 			DefaultFn = () => "pg_default",
 			Comment = "Database tablespace name",
 		};
@@ -211,7 +226,9 @@ public static class Schema
 			Scope = "database",
 			Key = "tablespace_path",
 			CliOptions = ["--tablespace-path"],
-			SaveTo = SaveTarget.File,
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			ArgName = "<path>",
 			DefaultFn = () => "",
 			Comment = "Database tablespace path (empty: do not create a new one)",
 		};
@@ -258,6 +275,7 @@ public static class Schema
 			Key = "notify_enabled",
 			CliOptions = ["--notify", "--notify-enabled"],
 			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
 			DefaultFn = () => false,
 			Comment = "Enable cross-client change notifications via PostgreSQL LISTEN/NOTIFY",
 		};
@@ -273,13 +291,15 @@ public static class Schema
 		/// </list>
 		/// Default <c>false</c> (opt-in). Ignored if received on mount/assign (= the Api is written so the same SQL runs whether the
 		/// target is Citus or not; a cross-shard rename always switches to the INSERT+DELETE path that preserves id, only when the parent changes).
-		/// It is saved to TOML, but only for after-the-fact confirmation that "this DB is Citus-enabled" (mount/assign do not branch on it).
+		/// It is **saved to the DB** (<see cref="SaveTarget.Db"/>, changed from File on 2026-06-03), but only for after-the-fact
+		/// confirmation that "this DB is Citus-enabled" (mount/assign do not branch on it).
 		/// </summary>
 		public static readonly BoolField Citus = new() {
 			Scope = "database",
 			Key = "citus",
 			CliOptions = ["--citus"],
-			SaveTo = SaveTarget.File,
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => false,
 			Comment = "Initialize the DB as Citus distributed tables (mkfs only)",
 		};
@@ -295,6 +315,8 @@ public static class Schema
 			Key = "workers",
 			CliOptions = ["-w", "--worker", "--workers"],
 			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mkfs,
+			ArgName = "<host[:port],...>",
 			DefaultFn = () => new List<string>(),
 			Comment = "Citus worker nodes as comma-separated 'host[:port]' entries (mkfs only)",
 		};
@@ -372,6 +394,7 @@ public static class Schema
 			Key = "version",
 			CliOptions = ["--version"],
 			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => "1.0.0",
 			Comment = "Specifies the PGFS version, currently only 1.0.0 is allowed",
 		};
@@ -381,6 +404,8 @@ public static class Schema
 			Key = "volume_label",
 			CliOptions = ["--volume-label"],
 			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			ArgName = "<label>",
 			DefaultFn = () => "pgfs",
 			Comment = "Specifies the volume label for the file system",
 		};
@@ -389,7 +414,9 @@ public static class Schema
 			Scope = "file_system",
 			Key = "cluster_size",
 			CliOptions = ["--cluster-size"],
-			SaveTo = SaveTarget.File,
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			ArgName = "<bytes>",
 			DefaultFn = () => 4096L,
 			Comment = "Specifies the cluster size for the file system",
 		};
@@ -398,7 +425,9 @@ public static class Schema
 			Scope = "file_system",
 			Key = "default_chunk_size",
 			CliOptions = ["--default-chunk-size"],
-			SaveTo = SaveTarget.File,
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			ArgName = "<bytes>",
 			DefaultFn = () => 1048576L,
 			Comment = "Specifies the file system chunk size",
 		};
@@ -407,7 +436,9 @@ public static class Schema
 			Scope = "file_system",
 			Key = "max_file_size",
 			CliOptions = ["--max-file-size"],
-			SaveTo = SaveTarget.File,
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			ArgName = "<bytes>",
 			DefaultFn = () => 1099511627776L,
 			Comment = "Specifies the maximum file size for the file system",
 		};
@@ -429,8 +460,57 @@ public static class Schema
 			Key = "enabled",
 			CliOptions = ["--audit"],
 			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => false,
 			Comment = "Enable audit logging of metadata changes to the {prefix}audit table (mkfs sets it)",
+		};
+	}
+
+	/// <summary>
+	/// The descriptor for the statfs (df) mode. scope/key is <c>app.statfs</c> (app behavior = the same scope as <see cref="App"/>).
+	/// It is the same for every client, so <see cref="SaveTarget.Db"/> is authoritative. The C# class name stays <c>Statfs</c>
+	/// (class name != persistence key; same scope as <see cref="App.Plperlu"/> but kept as a separate C# class).
+	/// </summary>
+	public static class Statfs
+	{
+		/// <summary>
+		/// The mode for whether `df` (statfs) returns the real free space of the underlying tablespace. It decides whether mkfs
+		/// creates the <c>{prefix}statfs()</c> (plperlu) function. Values: <c>auto</c> / <c>require</c> / <c>nominal</c>.
+		/// Whether plperlu may be used is gated higher by <see cref="App.Plperlu"/> (the matrix is in settings-and-plperlu.md).
+		/// The authoritative design is [docs/df-support.md](../../../../docs/df-support.md).
+		/// </summary>
+		public static readonly StringField Mode = new() {
+			Scope = "app",
+			Key = "statfs",
+			CliOptions = ["--statfs", "--statfs-mode"],
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			ArgName = "<auto|require|nominal>",
+			DefaultFn = () => "auto",
+			Comment = "Real free-space reporting for statfs/df: auto (plperlu if available else nominal), require (fail mkfs without plperlu), nominal (always nominal capacity)",
+		};
+	}
+
+	/// <summary>Application-behavior settings.</summary>
+	public static class App
+	{
+		/// <summary>
+		/// Whether to allow plperlu (untrusted Perl). The **top-level gate** for whether mkfs may use plperlu for the
+		/// real-measurement statfs function / tablespace auto-mkdir. Default <c>true</c> (allow). Persisted to
+		/// <see cref="SaveTarget.Db"/> (reuse on a mkfs re-run + a record). CLI: <c>--plperlu [true|false]</c>
+		/// (canonical, bare=true) / <c>--allow-plperlu</c> (bare=allow) / <c>--deny-plperlu</c> (bare=deny).
+		/// The matrix is in [docs/settings-and-plperlu.md](../../../../docs/settings-and-plperlu.md).
+		/// </summary>
+		public static readonly BoolField Plperlu = new() {
+			Scope = "app",
+			Key = "plperlu",
+			CliOptions = ["--plperlu", "--allow-plperlu"],
+			NegatedCliOptions = ["--deny-plperlu"],
+			AcceptsInlineBool = true,
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			DefaultFn = () => true,
+			Comment = "Allow untrusted plperlu (real statfs free-space + tablespace auto-mkdir). --plperlu [true|false] / --allow-plperlu / --deny-plperlu",
 		};
 	}
 }

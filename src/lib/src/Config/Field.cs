@@ -26,6 +26,19 @@ public abstract record Field
 	public required string[] CliOptions { get; init; }
 
 	/// <summary>
+	/// bool-only: negated CLI aliases that set this value to <c>false</c> (e.g. <c>--deny-plperlu</c>). Bare-only (takes no value).
+	/// Empty by default. <see cref="CliOptions"/> is the positive (true) side; this is the negative (false) side.
+	/// </summary>
+	public string[] NegatedCliOptions { get; init; } = [];
+
+	/// <summary>
+	/// bool-only: whether the positive CLI alias may optionally take a following bool literal (<c>true</c>/<c>false</c>/...) as its value.
+	/// Default <c>false</c> (= existing flags stay bare=true and do not consume the next token).
+	/// When <c>true</c>, <c>--flag true</c> / <c>--flag false</c> are accepted (if the next token is not a bool literal, it is bare=true).
+	/// </summary>
+	public bool AcceptsInlineBool { get; init; } = false;
+
+	/// <summary>
 	/// The key name used when received via fstab's `-o key=val,flag,...`. If null, <see cref="EffectiveDashOName"/>
 	/// automatically uses <see cref="Key"/> with `_` replaced by `-`. Matches the fstab convention.
 	/// </summary>
@@ -36,6 +49,19 @@ public abstract record Field
 
 	/// <summary>Description text (for auto-generated help / TOML comments).</summary>
 	public string Comment { get; init; } = "";
+
+	/// <summary>
+	/// The set of tools whose <c>--help</c> this setting appears in. Default is <see cref="Tool.All"/> (shown in every tool).
+	/// A filter for <see cref="HelpText"/> to split mkfs-only (<c>--clean</c> / <c>--citus</c> etc.) vs mount/assign-only
+	/// (<c>--mount-point</c> etc.). It does not affect CLI parsing (see <see cref="Tool"/>).
+	/// </summary>
+	public Tool AppliesTo { get; init; } = Tool.All;
+
+	/// <summary>
+	/// The value placeholder in <c>--help</c> (e.g. <c>"&lt;path&gt;"</c> / <c>"&lt;bytes&gt;"</c>). If null,
+	/// <see cref="HelpText"/> derives one from the type (Int/Long → <c>&lt;n&gt;</c>, Connection → <c>&lt;connstr&gt;</c>, etc.).
+	/// </summary>
+	public string? ArgName { get; init; }
 
 	/// <summary>The `scope.key` concatenation. Used in error messages / log identification / the `pgfs_settings.(scope,key)` key.</summary>
 	public string FullKey {
@@ -57,6 +83,12 @@ public abstract record Field
 
 	/// <summary>Converts a string (the raw representation coming from CLI / TOML / DB) into the internal value and returns the raw representation; also serves as a validation hook. Throws on failure.</summary>
 	internal abstract string NormalizeRaw(string raw);
+
+	/// <summary>
+	/// The display string of the default value shown in <c>--help</c>. Null means not shown (a connection string to keep
+	/// secret, or a default not worth displaying). Stringified via the value type's <see cref="Field{T}.Format"/>.
+	/// </summary>
+	internal abstract string? HelpDefaultRaw();
 }
 
 /// <summary>
@@ -81,6 +113,15 @@ public abstract record Field<T> : Field
 	internal override string NormalizeRaw(string raw) {
 		var parsed = this.Parse(raw);
 		return this.Format(parsed);
+	}
+
+	/// <summary>Default implementation: stringify <see cref="DefaultFn"/> via <see cref="Format"/>. Null when empty (not shown).</summary>
+	internal override string? HelpDefaultRaw() {
+		var s = this.Format(this.DefaultFn());
+		if (string.IsNullOrEmpty(s)) {
+			return null;
+		}
+		return s;
 	}
 
 	/// <summary>
@@ -168,6 +209,10 @@ public sealed record ConnectionField : Field<NpgsqlConnectionStringBuilder>
 	}
 	public override string Format(NpgsqlConnectionStringBuilder value) {
 		return value.ConnectionString;
+	}
+	/// <summary>The connection string default contains a password, so it is not shown in --help.</summary>
+	internal override string? HelpDefaultRaw() {
+		return null;
 	}
 }
 
@@ -287,5 +332,9 @@ public sealed record BoolField : Field<bool>
 	}
 	internal override string FormatJson(bool value) {
 		return this.Format(value);
+	}
+	/// <summary>A flag's default (false unless set) is self-evident, so it is not shown in --help.</summary>
+	internal override string? HelpDefaultRaw() {
+		return null;
 	}
 }

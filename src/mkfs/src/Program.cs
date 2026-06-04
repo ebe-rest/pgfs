@@ -66,7 +66,7 @@ public static class Program
 			if (string.IsNullOrEmpty(tomlPath)) {
 				tomlPath = "pgfs.toml";
 			}
-			WriteTomlFile(tomlPath, config);
+			WriteTomlFile(tomlPath, config, loader);
 			Logger.Information($"wrote the settings file: {tomlPath}");
 			Logger.Information("");
 			Logger.Information("filesystem creation complete.");
@@ -87,25 +87,41 @@ public static class Program
 	/// Numbers / bools / strings use native TOML types; everything else (connection string, LogLevel,
 	/// LoggingOutput, StringList) is stringified via <see cref="Field{T}.Format"/>.
 	/// </summary>
-	private static void WriteTomlFile(string path, RootConfig config) {
+	private static void WriteTomlFile(string path, RootConfig config, ConfigLoader loader) {
 		var doc = new TomlTable();
 		AddField(doc, Schema.Mount.MountPoint, config.Mount.MountPoint);
 		AddField(doc, Schema.Mount.CacheMaxEntries, config.Mount.CacheMaxEntries);
 		AddField(doc, Schema.Database.Connection, config.Database.Connection);
 		AddField(doc, Schema.Database.SchemaName, config.Database.SchemaName);
 		AddField(doc, Schema.Database.Prefix, config.Database.Prefix);
-		AddField(doc, Schema.Database.TablespaceName, config.Database.TablespaceName);
-		AddField(doc, Schema.Database.TablespacePath, config.Database.TablespacePath);
+		// tablespace / tablespace_path became SaveTo=Db, so they are not written to the generated toml (AddField rejects non-File).
 		AddField(doc, Schema.Database.RetryMaxAttempts, config.Database.RetryMaxAttempts);
 		AddField(doc, Schema.Database.RetryInitialDelayMs, config.Database.RetryInitialDelayMs);
 		AddField(doc, Schema.Database.RetryMaxDelayMs, config.Database.RetryMaxDelayMs);
 		AddField(doc, Schema.Logging.MinLevel, config.Logging.MinLevel);
 		AddField(doc, Schema.Logging.Output, config.Logging.Output);
-		AddField(doc, Schema.FileSystem.ClusterSize, config.FileSystem.ClusterSize);
-		AddField(doc, Schema.FileSystem.DefaultChunkSize, config.FileSystem.DefaultChunkSize);
-		AddField(doc, Schema.FileSystem.MaxFileSize, config.FileSystem.MaxFileSize);
+		// The file_system sizes (cluster_size / default_chunk_size / max_file_size) became SaveTo=Db, so they are not written
+		// to the generated toml (AddField rejects non-File). FS identity is DB-authoritative (docs/settings-and-plperlu.md).
 
-		File.WriteAllText(path, Toml.FromModel(doc));
+		// For reference when distributing to other clients, keep the mkfs parameters that built this FS as a leading comment.
+		// SaveTo=None items (--clean / --super / setting-file selection etc.) are excluded; the connection-string Password is masked.
+		var body = Toml.FromModel(doc);
+		var header = BuildRedistributionComment(loader);
+		File.WriteAllText(path, header + body);
+	}
+
+	/// <summary>Builds the mkfs command for redistribution reference as comment lines (leading `#`). Empty if loader is null.</summary>
+	private static string BuildRedistributionComment(ConfigLoader? loader) {
+		if (loader == null) {
+			return "";
+		}
+		var cmd = loader.DescribeMkfsCommandLine();
+		var sb = new System.Text.StringBuilder();
+		sb.Append("# The mkfs parameters that created this filesystem (reference for distribution to other clients).\n");
+		sb.Append("# --clean / --super (super-user-connection) are excluded; the connection-string Password is masked.\n");
+		sb.Append("#   ").Append(cmd).Append('\n');
+		sb.Append('\n');
+		return sb.ToString();
 	}
 
 	private static void AddField<T>(TomlTable doc, Field<T> f, T value) {
@@ -137,37 +153,12 @@ public static class Program
 	}
 
 	private static void ShowHelp() {
-		Console.WriteLine("""
+		const string intro = """
+			mkfs.pgfs — initialize a PGFS filesystem on PostgreSQL
+
 			Usage: mkfs.pgfs [options]
-
-			Initializes a PGFS filesystem on PostgreSQL.
-
-			Common options:
-			  -?, -h, --help                Show help.
-			  -f, --setting-file <path>     Settings file (TOML) path. Default: pgfs.toml
-			  --clean                       Ignore the existing pgfs.toml and DROP DATABASE -> recreate.
-			                                The tablespace and role are preserved (no short form).
-
-			Database (PGFS user) connection:
-			  -c, --connection <connstr>    Connection string for the target DB as the PGFS user.
-
-			Database (superuser) connection:
-			  --su, --super, --super-connection <connstr>
-			                                Connection string for the maintenance DB as a superuser.
-
-			Schema / table:
-			  -s, --schema <name>           Schema name (default: public).
-			  -x, --prefix <prefix>         Table name prefix (default: pgfs_).
-			  --tablespace <name>           Tablespace name (default: pg_default).
-			  --tablespace-path <path>      Path for a new tablespace (when needed).
-
-			Filesystem parameters:
-			  --volume-label <label>        Volume label (default: pgfs).
-			  --cluster-size <bytes>        Cluster size (default: 4096).
-			  --default-chunk-size <bytes>  Chunk split size (default: 1048576).
-			  --max-file-size <bytes>       Maximum file size (default: 1099511627776).
-
-			See docs/Mkfs.md for details.
-			""");
+			""";
+		const string footer = "See docs/Mkfs.md for details.";
+		Console.Write(HelpText.Build(Tool.Mkfs, intro, footer));
 	}
 }

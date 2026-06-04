@@ -73,18 +73,16 @@ public static class Program
 	/// Builds a <see cref="RootConfig"/> via <see cref="ConfigLoader"/>. See the same-named function in mount.pgfs for details.
 	/// </summary>
 	private static RootConfig BuildRootConfig(string[] args, out ConfigLoader loader) {
-		// (1) Determine database.* with a lite Loader.
-		var lite = new ConfigLoader(args, Schema.AllFields, null);
-		var liteDb = lite.BuildDatabaseConfig();
-		// (2) Full Loader: build a ConfigStore and load again.
+		// (1) Build a Loader and determine database.* (CLI / TOML are parsed once here).
+		loader = new ConfigLoader(args, Schema.AllFields, null);
+		var db = loader.BuildDatabaseConfig();
+		// (2) Build a ConfigStore from that connection and attach the DB source to the same Loader.
 		var store = new ConfigStore(
-			liteDb.Connection.ConnectionString,
-			liteDb.SchemaName,
-			liteDb.GetPrefix()
+			db.Connection.ConnectionString,
+			db.SchemaName,
+			db.GetPrefix()
 		);
-		var full = new ConfigLoader(args, Schema.AllFields, store);
-		loader = full;
-		return full.BuildRootConfig();
+		return loader.WithStore(store).BuildRootConfig();
 	}
 
 	[MethodImpl(MethodImplOptions.NoInlining)]
@@ -118,27 +116,17 @@ public static class Program
 	}
 
 	private static void ShowHelp() {
-		Console.WriteLine("""
+		const string intro = """
+			pgfs.assign — mount a PostgreSQL-backed filesystem via DokanNet (Windows)
+
 			Usage: pgfs.assign [options]
+			""";
+		const string footer = """
+			The mount point may be a drive letter ("P:") or a directory path
+			("C:\mnt\pgfs").
 
-			Mounts a PostgreSQL-backed filesystem via DokanNet (Windows).
-
-			Common options:
-			  -?, -h, --help                Show help.
-			  -f, --setting-file <path>     Settings file (TOML) path. Default: pgfs.toml
-
-			Database (PGFS user) connection:
-			  -c, --connection <connstr>    Connection string for the target DB as the PGFS user.
-
-			Mount:
-			  -m, --mount-point <path>      Mount point (default: P:).
-			                                A drive letter ("P:") or a directory path ("C:\\mnt\\pgfs").
-
-			Logging:
-			  --log-level <level>           Minimum log level (default: warning).
-
-			pgfs.assign is not available outside Windows. Use mount.pgfs (the Tmds.Fuse version).
-			See docs/Assign.md for details.
-			""");
+			On non-Windows platforms use mount.pgfs (Tmds.Fuse). See docs/Assign.md.
+			""";
+		Console.Write(HelpText.Build(Tool.Assign, intro, footer));
 	}
 }

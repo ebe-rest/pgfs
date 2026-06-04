@@ -23,12 +23,18 @@ public sealed class ConfigLoader
 	// Resolved bool flags (a CLI flag given alone with no value). A bool with a value goes into rawByFullKey as true/false.
 	private readonly HashSet<string> cliBoolFlags = new();
 
+	// The FullKeys of Fields that Resolve() actually touched. Used by the `Field` self-check (UnresolvedFields) to detect
+	// dead config "declared in Schema but never referenced from the BuildRootConfig path".
+	private readonly HashSet<string> resolvedFullKeys = new();
+
 	/// <summary>Warnings collected during parsing. Accumulated here instead of `Console.Error.WriteLine`.</summary>
 	public List<string> Warnings { get; } = new();
 
 	/// <summary>
-	/// Accumulation of FUSE flags from `-o key=val,flag,...` such as `allow_other` / `default_permissions` / `ro` / `rw` /
-	/// `nonempty` / `auto_unmount` / `suid`. Copied into <see cref="MountConfig.FuseFlags"/>.
+	/// Accumulation of the FUSE options from `-o key=val,flag,...` that are forwarded verbatim to libfuse
+	/// (`allow_other` / `default_permissions` / `ro` etc.). Copied into <see cref="MountConfig.FuseFlags"/>.
+	/// What is forwarded / ignored / routed to a pgfs Field is classified by the compatibility map in
+	/// <see cref="ParseDashOOptions"/> (the design is docs/Mount.md §mount options).
 	/// </summary>
 	public List<string> FuseFlags { get; } = new();
 
@@ -40,6 +46,9 @@ public sealed class ConfigLoader
 
 	/// <summary>Reverse lookup from a CLI flag to its Field (expands all CliOptions flags, case-insensitive).</summary>
 	private readonly Dictionary<string, Field> fieldByCliFlag;
+
+	/// <summary>Reverse lookup from a negated bool alias (NegatedCliOptions) to its Field. On a match, the bool is set to false.</summary>
+	private readonly Dictionary<string, Field> fieldByNegatedCliFlag;
 
 	/// <summary>Reverse lookup from a normalized `-o key` (`_` → `-`) to its Field.</summary>
 	private readonly Dictionary<string, Field> fieldByDashOName;
@@ -69,6 +78,12 @@ public sealed class ConfigLoader
 				this.fieldByCliFlag[opt] = f;
 			}
 		}
+		this.fieldByNegatedCliFlag = new(System.StringComparer.OrdinalIgnoreCase);
+		foreach (var f in fields) {
+			foreach (var opt in f.NegatedCliOptions) {
+				this.fieldByNegatedCliFlag[opt] = f;
+			}
+		}
 		this.fieldByDashOName = new(System.StringComparer.OrdinalIgnoreCase);
 		foreach (var f in fields) {
 			this.fieldByDashOName[f.EffectiveDashOName] = f;
@@ -93,21 +108,44 @@ public sealed class ConfigLoader
 			}
 		}
 
-		// Phase 3: DB (lowest priority).
+		// Phase 3: DB (lowest priority). Pulled in here if a store was given. Attach it later via WithStore.
 		if (store != null) {
-			var dbFields = fields.Where(f => f.SaveTo == SaveTarget.Db).ToList();
-			if (dbFields.Count > 0) {
-				try {
-					foreach (var kv in store.LoadAll(dbFields)) {
-						// Do not overwrite if a higher-priority source (CLI / TOML) has already set it.
-						if (!this.rawByFullKey.ContainsKey(kv.Key)) {
-							this.rawByFullKey[kv.Key] = kv.Value;
-						}
-					}
-				} catch (System.Exception ex) {
-					this.Warnings.Add($"failed to read settings from the DB (using Default values): {ex.Message}");
+			this.ApplyStoreFields(store);
+		}
+	}
+
+	/// <summary>
+	/// A fluent API to apply the DB source (Phase 3) afterward to a Loader that has already parsed CLI / TOML.
+	/// Reads the <see cref="SaveTarget.Db"/> Fields from <paramref name="store"/> and fills only the keys not set by
+	/// CLI / TOML (the higher-priority precedence is unchanged). Returns <c>this</c> so it can be chained.
+	///
+	/// <para>
+	/// In the two-stage build (a lite Loader resolves <c>database.*</c> → build a <see cref="ConfigStore"/> from that connection),
+	/// calling this instead of discarding the lite Loader and rebuilding lets the CLI parse / TOML read happen only once
+	/// (mount / assign's <c>BuildRootConfig</c>). It is not idempotent (applying the same store twice yields the same result
+	/// but is wasteful, so call it once).
+	/// </para>
+	/// </summary>
+	public ConfigLoader WithStore(ConfigStore store) {
+		this.ApplyStoreFields(store);
+		return this;
+	}
+
+	/// <summary>The body of Phase 3 (DB). Reads the <see cref="SaveTarget.Db"/> Fields and fills only the unset keys.</summary>
+	private void ApplyStoreFields(ConfigStore store) {
+		var dbFields = this.fields.Where(f => f.SaveTo == SaveTarget.Db).ToList();
+		if (dbFields.Count == 0) {
+			return;
+		}
+		try {
+			foreach (var kv in store.LoadAll(dbFields)) {
+				// Do not overwrite if a higher-priority source (CLI / TOML) has already set it.
+				if (!this.rawByFullKey.ContainsKey(kv.Key)) {
+					this.rawByFullKey[kv.Key] = kv.Value;
 				}
 			}
+		} catch (System.Exception ex) {
+			this.Warnings.Add($"failed to read settings from the DB (using Default values): {ex.Message}");
 		}
 	}
 
@@ -149,6 +187,7 @@ public sealed class ConfigLoader
 
 	/// <summary>Resolves and returns the field's value in the order CLI / TOML / DB / Default.</summary>
 	public T Resolve<T>(Field<T> field) {
+		this.resolvedFullKeys.Add(field.FullKey);
 		if (this.rawByFullKey.TryGetValue(field.FullKey, out var raw)) {
 			return field.Parse(raw);
 		}
@@ -204,6 +243,47 @@ public sealed class ConfigLoader
 			return value;
 		}
 		return System.Text.RegularExpressions.Regex.Replace(value, "(?i)(password\\s*=)[^;]*", "$1***");
+	}
+
+	/// <summary>
+	/// Reconstructs the settings given from CLI/TOML/DB into a single mkfs-style command line (a reference for distribution to
+	/// other clients). Excludes <see cref="SaveTarget.None"/> items (`--clean` / `--super` / `setting.file` etc.) and masks the
+	/// Password in a connection string. mkfs embeds it in the leading comment of the generated TOML.
+	/// </summary>
+	public string DescribeMkfsCommandLine() {
+		var parts = new List<string> { "mkfs.pgfs" };
+		foreach (var kv in this.rawByFullKey.OrderBy(k => k.Key)) {
+			if (!this.fieldByFullKey.TryGetValue(kv.Key, out var f)) {
+				continue;
+			}
+			if (f.SaveTo == SaveTarget.None) {
+				continue;
+			}
+			var flag = PreferredFlag(f);
+			if (f.IsBool) {
+				if (kv.Value == "true") {
+					parts.Add(flag);
+					continue;
+				}
+				parts.Add($"{flag} false");
+				continue;
+			}
+			parts.Add($"{flag} \"{MaskSecret(kv.Key, kv.Value)}\"");
+		}
+		return string.Join(" ", parts);
+	}
+
+	/// <summary>The preferred display flag of a Field (the first long form `--xxx`, else the first, else the FullKey).</summary>
+	private static string PreferredFlag(Field f) {
+		foreach (var o in f.CliOptions) {
+			if (o.StartsWith("--", System.StringComparison.Ordinal)) {
+				return o;
+			}
+		}
+		if (f.CliOptions.Length > 0) {
+			return f.CliOptions[0];
+		}
+		return f.FullKey;
 	}
 
 	/// <summary>Aligns <paramref name="target"/>'s server (Host/Port/SslMode) to <paramref name="source"/>.</summary>
@@ -279,6 +359,20 @@ public sealed class ConfigLoader
 		};
 	}
 
+	/// <summary>Builds and returns the resolved StatfsConfig POCO.</summary>
+	public StatfsConfig BuildStatfsConfig() {
+		return new StatfsConfig {
+			Mode = this.Resolve(Schema.Statfs.Mode),
+		};
+	}
+
+	/// <summary>Builds and returns the resolved AppConfig POCO.</summary>
+	public AppConfig BuildAppConfig() {
+		return new AppConfig {
+			Plperlu = this.Resolve(Schema.App.Plperlu),
+		};
+	}
+
 	/// <summary>Builds and returns the resolved SettingFileConfig POCO.</summary>
 	public SettingFileConfig BuildSettingFileConfig() {
 		return new SettingFileConfig {
@@ -290,16 +384,33 @@ public sealed class ConfigLoader
 
 	/// <summary>Builds the <see cref="RootConfig"/> aggregating the sub-Configs in a single call.</summary>
 	public RootConfig BuildRootConfig() {
-		return new RootConfig {
+		var config = new RootConfig {
 			Setting = this.BuildSettingFileConfig(),
 			Logging = this.BuildLoggingConfig(),
 			Database = this.BuildDatabaseConfig(),
 			Mount = this.BuildMountConfig(),
 			FileSystem = this.BuildFileSystemConfig(),
 			Audit = this.BuildAuditConfig(),
+			Statfs = this.BuildStatfsConfig(),
+			App = this.BuildAppConfig(),
 			Help = this.Resolve(Schema.Root.Help),
 			Clean = this.Resolve(Schema.Root.Clean),
 		};
+		// Having built every sub-Config = we have gone through the resolution path common to all tools. Any Field still
+		// unresolved here is dead config "declared in Schema but not wired into BuildRootConfig", so warn about it (#13).
+		foreach (var f in this.UnresolvedFields()) {
+			this.Warnings.Add($"config self-check: '{f.FullKey}' is declared in Schema but is not referenced from ConfigLoader (possibly not wired into BuildRootConfig).");
+		}
+		return config;
+	}
+
+	/// <summary>
+	/// Returns the <see cref="Schema.AllFields"/> Fields not yet touched by <see cref="Resolve{T}"/>.
+	/// Called after <see cref="BuildRootConfig"/>, it lists dead config "declared in Schema yet never referenced from any
+	/// Build*Config" (the body of the `Field` self-check: the diff of Schema's reflection enumeration against the Resolve record).
+	/// </summary>
+	public IReadOnlyList<Field> UnresolvedFields() {
+		return Schema.AllFields.Where(f => !this.resolvedFullKeys.Contains(f.FullKey)).ToList();
 	}
 
 	// ------------------------------------------------------------------
@@ -379,12 +490,70 @@ public sealed class ConfigLoader
 		"-N", "-t",
 	};
 
-	private static readonly HashSet<string> FstabIgnoredFlags = new(System.StringComparer.Ordinal) {
+	// ------------------------------------------------------------------
+	// -o option compatibility map (design of record: docs/Mount.md §mount options)
+	//
+	// Each -o key is classified into exactly one of (ParseDashOOptions):
+	//   (1)  FUSE passthrough        — forwarded verbatim to libfuse (FusePassthroughFlags / FusePassthroughKv)
+	//   (2)  accepted but ignored    — kernel mount layer / fstab conventions (IgnoredMountHints). Not passed to FUSE
+	//   (2') userspace prefix        — x-systemd.* / x-gvfs-* etc. (UserspaceOptionPrefix). Ignored like (2)
+	//   (3)  pgfs Field map          — routed to a setting Field, e.g. `-o schema=foo`
+	//   (4)  unknown                 — Warning (typo detection)
+	//   (5)  unsupported mount ops   — remount/bind/rbind/move (UnsupportedMountOps). An explicit Warning
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// **valueless** FUSE options valid in libfuse3. Forwarded verbatim.
+	/// Carelessly forwarding a "fuse-looking" key not listed here makes <c>fuse_new</c> fail the mount with
+	/// "unknown option" (e.g. <c>nonempty</c>, removed in libfuse3, is not put here but ignored in (2)).
+	/// </summary>
+	private static readonly HashSet<string> FusePassthroughFlags = new(System.StringComparer.Ordinal) {
+		"allow_other", "allow_root", "default_permissions", "ro", "auto_unmount",
+		"kernel_cache", "auto_cache",
+	};
+
+	/// <summary>**valued** FUSE options valid in libfuse3. Forwarded only in the <c>key=value</c> form.</summary>
+	private static readonly HashSet<string> FusePassthroughKv = new(System.StringComparer.Ordinal) {
+		"umask", "uid", "gid", "max_read", "entry_timeout", "attr_timeout",
+		"fsname", "subtype", "max_write", "max_readahead",
+	};
+
+	/// <summary>
+	/// mount(8) / fstab / kernel hints that are accepted but ignored. Not passed to FUSE (the kernel mount layer handles
+	/// them, or they are irrelevant to pgfs). <c>rw</c> is the default; <c>nonempty</c> is the default behavior in libfuse3.
+	/// </summary>
+	private static readonly HashSet<string> IgnoredMountHints = new(System.StringComparer.Ordinal) {
 		"_netdev", "noauto", "auto", "user", "users", "owner", "group",
-		"atime", "relatime", "noatime", "strictatime",
+		"atime", "relatime", "noatime", "strictatime", "nostrictatime",
 		"nosuid", "nodev", "noexec", "exec", "suid", "dev",
 		"async", "sync", "dirsync",
+		// nonempty/direct_io were removed as mount-wide -o options in libfuse3 (the former is the default behavior,
+		// the latter moved to the per-file fi->direct_io). Forwarding them verbatim makes fuse_new fail the whole mount
+		// with "unknown option", so they are not put in (1) but ignored. Verified on the real machine that libfuse 3.14.0's
+		// .so has no such option token.
+		"rw", "nonempty", "direct_io",
+		// mount(8)/fstab conventions (the staples seen in a real fstab). Irrelevant to FUSE, so silently accepted.
+		"defaults", "nofail", "lazytime", "nolazytime",
+		"mand", "nomand", "iversion", "noiversion",
+		// fstab userspace comment (`comment=...`). Matched by key only, so the value is dropped.
+		"comment",
 	};
+
+	/// <summary>
+	/// mount(8) mount-operation options. They cannot apply to pgfs (a fresh FUSE mount), so make "unsupported" explicit,
+	/// distinct from the (4) typo warning. Silently ignoring them would create the misunderstanding "I thought I remounted".
+	/// <c>bind</c>/<c>rbind</c>/<c>move</c> are normally handled by mount(8) itself without calling the helper, but are made
+	/// explicit too in case they are passed on a direct launch where they carry no meaning.
+	/// </summary>
+	private static readonly HashSet<string> UnsupportedMountOps = new(System.StringComparer.Ordinal) {
+		"remount", "bind", "rbind", "move",
+	};
+
+	/// <summary>
+	/// The prefix of fstab/systemd userspace-only options (<c>x-systemd.*</c> / <c>x-gvfs-*</c> / <c>x-mount.*</c> etc.).
+	/// The whole prefix is folded into (2) accepted-but-ignored.
+	/// </summary>
+	private const string UserspaceOptionPrefix = "x-";
 
 	private void ParseCli(string[] args) {
 		if (args.Length == 0) {
@@ -415,9 +584,22 @@ public sealed class ConfigLoader
 				continue;
 			}
 
+			// Negated bool alias (e.g. --deny-plperlu = false). Bare-only (takes no value).
+			if (this.fieldByNegatedCliFlag.TryGetValue(arg, out var negated)) {
+				this.cliBoolFlags.Remove(negated.FullKey);
+				this.rawByFullKey[negated.FullKey] = "false";
+				continue;
+			}
+
 			// CLI flag matching
 			if (this.fieldByCliFlag.TryGetValue(arg, out var matched)) {
 				if (matched.IsBool) {
+					// If AcceptsInlineBool, consume the next token as the value when it is a bool literal (true/false/...).
+					if (matched.AcceptsInlineBool && i + 1 < args.Length && TryBoolLiteral(args[i + 1], out var normalized)) {
+						this.rawByFullKey[matched.FullKey] = normalized;
+						++i;
+						continue;
+					}
 					this.cliBoolFlags.Add(matched.FullKey);
 					this.rawByFullKey[matched.FullKey] = "true";
 					continue;
@@ -442,6 +624,19 @@ public sealed class ConfigLoader
 		}
 	}
 
+	/// <summary>
+	/// If the string is a bool literal (true/false/1/0/yes/no/on/off, case-insensitive), outs the normalized string
+	/// ("true"/"false") and returns true. An empty string or non-bool returns false (= not consumed as a value).
+	/// </summary>
+	private static bool TryBoolLiteral(string s, out string normalized) {
+		switch (s.Trim().ToLowerInvariant()) {
+			case "true": case "1": case "yes": case "on": normalized = "true"; return true;
+			case "false": case "0": case "no": case "off": normalized = "false"; return true;
+		}
+		normalized = "";
+		return false;
+	}
+
 	private void ParseDashOOptions(string optsValue) {
 		foreach (var raw in optsValue.Split(',')) {
 			var entry = raw.Trim();
@@ -459,13 +654,21 @@ public sealed class ConfigLoader
 				val = entry[(eq + 1)..].Trim();
 			}
 
-			// ignore fstab / kernel hints
-			if (FstabIgnoredFlags.Contains(key)) {
+			// (2) mount(8)/fstab/kernel hints, accepted but ignored (not passed to FUSE).
+			if (IgnoredMountHints.Contains(key)) {
 				continue;
 			}
-			// FUSE flags (`allow_other` etc.) are buffered until they are copied into MountConfig.FuseFlags.
-			if (key is "allow_other" or "default_permissions" or "ro" or "rw"
-				or "nonempty" or "auto_unmount" or "suid") {
+			// (2') userspace-only prefix (x-systemd.* / x-gvfs-* / x-mount.* etc.) is also ignored wholesale.
+			if (key.StartsWith(UserspaceOptionPrefix, System.StringComparison.Ordinal)) {
+				continue;
+			}
+			// (5) mount-operation options that cannot apply to pgfs. Not a typo, so make it explicit with a dedicated message.
+			if (UnsupportedMountOps.Contains(key)) {
+				this.Warnings.Add($"-o '{key}' is unsupported in pgfs (cannot apply to a fresh FUSE mount). Ignored.");
+				continue;
+			}
+			// (1) valueless FUSE passthrough. If a val arrives, forward it as `key=val` (allowing a last-wins override).
+			if (FusePassthroughFlags.Contains(key)) {
 				if (val == null) {
 					this.FuseFlags.Add(key);
 					continue;
@@ -473,28 +676,39 @@ public sealed class ConfigLoader
 				this.FuseFlags.Add($"{key}={val}");
 				continue;
 			}
-
-			// normalize - and _ (fstab convention)
-			var normalized = key.Replace('-', '_');
-			if (!this.fieldByDashOName.TryGetValue(normalized.Replace('_', '-'), out var matched)
-				&& !this.fieldByFullKey.TryGetValue(normalized, out matched)) {
-				// may be a -o key for another scope (e.g. -o schema=foo): silent.
+			// (1') valued FUSE passthrough (`umask=022` etc.). Value required.
+			if (FusePassthroughKv.Contains(key)) {
+				if (val == null) {
+					this.Warnings.Add($"-o '{key}' requires a value (specify it as '{key}=value').");
+					continue;
+				}
+				this.FuseFlags.Add($"{key}={val}");
 				continue;
 			}
-			if (matched.IsBool) {
+
+			// (3) pgfs Field map. Normalize `-`/`_` (fstab convention) and match by dash-o name / full-key.
+			var normalized = key.Replace('-', '_');
+			if (this.fieldByDashOName.TryGetValue(normalized.Replace('_', '-'), out var matched)
+				|| this.fieldByFullKey.TryGetValue(normalized, out matched)) {
+				if (matched.IsBool) {
+					if (val == null) {
+						this.cliBoolFlags.Add(matched.FullKey);
+						this.rawByFullKey[matched.FullKey] = "true";
+						continue;
+					}
+					this.rawByFullKey[matched.FullKey] = val;
+					continue;
+				}
 				if (val == null) {
-					this.cliBoolFlags.Add(matched.FullKey);
-					this.rawByFullKey[matched.FullKey] = "true";
+					this.Warnings.Add($"-o '{key}' requires a value (specify it as '{key}=value').");
 					continue;
 				}
 				this.rawByFullKey[matched.FullKey] = val;
 				continue;
 			}
-			if (val == null) {
-				this.Warnings.Add($"-o '{key}' requires a value (specify it as '{key}=value').");
-				continue;
-			}
-			this.rawByFullKey[matched.FullKey] = val;
+
+			// (4) matches no class = unknown. Do not swallow it; add a Warning (typo detection).
+			this.Warnings.Add($"ignored unknown -o option '{key}' (possible typo).");
 		}
 	}
 

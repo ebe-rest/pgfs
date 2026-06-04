@@ -125,26 +125,23 @@ public static class Program
 	///
 	/// <para>
 	/// ConfigStore (the side that reads DB-sourced Config rows) needs the resolved <c>database.*</c> from
-	/// CLI / TOML, so this builds in two stages: (1) a lite Loader with store=null resolves CLI / TOML /
-	/// defaults -> obtains database.connection / schema / prefix; (2) a ConfigStore is built from that
-	/// connection info and a full Loader is built again to apply DB-saved Fields (mount.fallback_*, etc.).
-	/// The lite side (store=null) already resolves all of CLI/TOML/defaults, so stage (2) just overrides
-	/// stage (1) (some duplicated work, but the same result).
+	/// CLI / TOML, so it resolves in two stages: (1) build a Loader and resolve CLI / TOML / defaults to obtain
+	/// database.connection / schema / prefix; (2) build a ConfigStore from that connection info and attach Phase 3 (DB)
+	/// to the same Loader via <see cref="ConfigLoader.WithStore"/>. CLI parsing / TOML reading happen only once in (1),
+	/// and (2) feeds DB-saved Fields (mount.fallback_*, etc.) only into the unset keys (higher-priority precedence unchanged).
 	/// </para>
 	/// </summary>
 	private static RootConfig BuildRootConfig(string[] args, out ConfigLoader loader) {
-		// (1) Determine database.* with a lite Loader.
-		var lite = new ConfigLoader(args, Schema.AllFields, null);
-		var liteDb = lite.BuildDatabaseConfig();
-		// (2) Full Loader: build a ConfigStore and load again.
+		// (1) Build a Loader and determine database.* (CLI / TOML are parsed once here).
+		loader = new ConfigLoader(args, Schema.AllFields, null);
+		var db = loader.BuildDatabaseConfig();
+		// (2) Build a ConfigStore from that connection and attach the DB source to the same Loader.
 		var store = new ConfigStore(
-			liteDb.Connection.ConnectionString,
-			liteDb.SchemaName,
-			liteDb.GetPrefix()
+			db.Connection.ConnectionString,
+			db.SchemaName,
+			db.GetPrefix()
 		);
-		var full = new ConfigLoader(args, Schema.AllFields, store);
-		loader = full;
-		return full.BuildRootConfig();
+		return loader.WithStore(store).BuildRootConfig();
 	}
 
 	/// <summary>
@@ -293,52 +290,39 @@ public static class Program
 	}
 
 	private static void ShowHelp() {
-		Console.WriteLine("""
+		const string intro = """
+			mount.pgfs — mount a PostgreSQL-backed filesystem via FUSE (Linux/macOS)
+
 			Usage: mount.pgfs [options]
-			       mount.pgfs <source> <mountpoint> [-o opts]     (via fstab / mount(8))
+			       mount.pgfs <source> <mountpoint> [-o opts]   (via fstab / mount(8))
+			""";
+		const string footer = """
+			fstab / mount(8) invocation:
+			  positional 1 (source):
+			    starts with "postgresql:"  -> connection string (same as -c)
+			    otherwise                  -> setting file path (same as --setting-file)
+			  positional 2 (target)        -> mount point (same as -m)
+			  -o key=val,flag,...          fstab-style combined options, e.g.
+			    -o connection=postgresql://...,cache-max-entries=4096,allow_other,_netdev
+			  When invoked by mount(8) (stdout is a pipe), mount.pgfs daemonizes by
+			  forking a child. See docs/fstab-support.md (argument table / short-flag
+			  collisions are documented there).
 
-			Mounts a PostgreSQL-backed filesystem via FUSE (Linux/macOS).
+			Note: as a mount(8) helper, -f / -s mean --fake / --sloppy, so use the long
+			  forms --setting-file / --schema in that context.
 
-			Common options:
-			  -?, -h, --help                Show help.
-			  -f, --setting-file <path>     Settings file (TOML) path. Default: pgfs.toml
-			                                (the short form `-f` is only valid for direct invocation; via
-			                                 fstab/mount(8) it is silently swallowed as `--fake`, so use --setting-file)
+			Unmount:
+			  fusermount3 -u <mount-point>   normal unmount
+			  umount <mount-point>           symmetric command for an fstab mount
+			  Ctrl+C                         stop a running mount.pgfs (LazyUnmount)
 
-			Database (PGFS user) connection:
-			  -c, --connection <connstr>    Connection string for the target DB as the PGFS user.
+			If mount.pgfs is killed abnormally, a stale kernel mount may remain
+			("Transport endpoint is not connected"). Run
+			  fusermount3 -u <mount-point>   (or sudo umount <mount-point>)
+			before remounting.
 
-			Mount:
-			  -m, --mount-point <path>      Mount point (default: /mnt/pgfs).
-			  --cache-max-entries <n>       inode cache limit (default: 1024).
-			  --foreground                  Run in the foreground (do not daemonize). Via fstab/mount(8) it
-			                                 daemonizes by default, so add this for tests/manual use.
-
-			Logging:
-			  --log-level <level>           Minimum log level (default: warning).
-
-			Launching via fstab / mount(8):
-			  First positional argument (source) =
-			    starts with `postgresql:`  -> connection string (same as -c)
-			    otherwise                  -> settings file path (same as --setting-file)
-			  Second positional argument (target) = mount point (same as -m).
-			  -o key=val,flag,...          fstab-style bundled options.
-			    e.g. -o connection=postgresql://...,cache-max-entries=4096,allow_other,_netdev
-			  An fstab entry automatically daemonizes (detaches a child process) when stdout is a pipe
-			  (i.e. when invoked from mount(8)). See docs/fstab-support.md.
-			  (For the argument mapping / short-form collisions, see the relevant section of docs/fstab-support.md.)
-
-			mount.pgfs is not available on Windows. Use pgfs.assign (the DokanNet version).
-			See docs/Mount.md for details.
-
-			Unmounting:
-			  fusermount3 -u <mount-point>      Normal unmount.
-			  umount <mount-point>              The symmetric command when mounted via fstab.
-			  Ctrl+C                            Stop a running mount.pgfs (LazyUnmount).
-
-			Note: if mount.pgfs terminates abnormally (crash / kill / etc.), only the kernel-side mount entry
-			   is left behind and you get "Transport endpoint is not connected". In that case, manually run
-			   `fusermount3 -u <mount-point>` (or `sudo umount <mount-point>`) before remounting.
-			""");
+			On Windows use pgfs.assign (DokanNet). See docs/Mount.md.
+			""";
+		Console.Write(HelpText.Build(Tool.Mount, intro, footer));
 	}
 }
