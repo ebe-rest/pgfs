@@ -8,7 +8,7 @@ pgfs のソリューション構成・依存パッケージ・Lib 内部のフ�
 
 | プロジェクト | パス | 役割 | プラットフォーム |
 |---|---|---|---|
-| **Lib** | [src/lib/](../src/lib/) | コアライブラリ（Models / Api / Logging / Collections / Utility / Objects） | クロスプラットフォーム |
+| **Lib** | [src/core/](../src/core/) | コアライブラリ（Models / Api / Logging / Collections / Utility / Objects） | クロスプラットフォーム |
 | **Mkfs** | [src/mkfs/](../src/mkfs/) | PostgreSQL 側のテーブル等を初期化する CLI | クロスプラットフォーム |
 | **Mount** | [src/mount/](../src/mount/) | Linux / macOS 用マウントツール（Tmds.Fuse 使用） | Linux / macOS |
 | **Assign** | [src/assign/](../src/assign/) | Windows 用マウントツール（DokanNet 使用） | Windows |
@@ -18,7 +18,7 @@ pgfs のソリューション構成・依存パッケージ・Lib 内部のフ�
 ### 名前空間
 
 - ルート: `Pgfs.*`
-- ライブラリ: `Pgfs.Lib.{Api, Models, Logging, Collections, Objects, Utility}`
+- ライブラリ: `Pgfs.Core.{Api, Models, Logging, Collections, Objects, Utility}`
 - 実行ファイル: `Pgfs.Mkfs`, `Pgfs.Mount`, `Pgfs.Assign`
 
 ### 出力先
@@ -27,7 +27,7 @@ pgfs のソリューション構成・依存パッケージ・Lib 内部のフ�
 
 ### アセンブリ名
 
-namespace は `Pgfs.Lib`, `Pgfs.Mkfs` 等の PascalCase。出力アセンブリ名は **lowercase + ドット区切り** に統一: `lib.pgfs.dll`, `mkfs.pgfs.{dll,exe}`, `mount.pgfs.{dll,exe}`, `assign.pgfs.{dll,exe}`。これは `<AssemblyName>` で csproj に設定。
+namespace は `Pgfs.Core`, `Pgfs.Mkfs` 等の PascalCase。出力アセンブリ名は **lowercase + ドット区切り** に統一: `core.pgfs.dll`, `mkfs.pgfs.{dll,exe}`, `mount.pgfs.{dll,exe}`, `assign.pgfs.{dll,exe}`。これは `<AssemblyName>` で csproj に設定。
 
 ---
 
@@ -47,7 +47,7 @@ namespace は `Pgfs.Lib`, `Pgfs.Mkfs` 等の PascalCase。出力アセンブリ�
 
 ## ファイル構成（Lib）
 
-### Models（[src/lib/src/Models/](../src/lib/src/Models/)）
+### Models（[src/core/src/Models/](../src/core/src/Models/)）
 
 DB の 1 行に対応するエンティティ POCO を置く場所。設定モデル系は [Config](#config-srclibsrcconfig) にある。
 
@@ -61,9 +61,9 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 - `PosixAcl.cs` Linux `system.posix_acl_access` の xattr バイナリ codec (header + entry 配列の Parse/Build)。設計は [permission-interop.ja.md](permission-interop.ja.md)
 
 **LoggingOutput 関連の Enum 群**: `SettingLoggingKind.cs` (Flags: None/Stderr/Stdout/File), `SettingLoggingCycle.cs` (None/Hourly/Daily/Monthly), `SettingLoggingOutput.cs` (上 2 つを束ねた POCO)
-- [`LoggingOutputField`](../src/lib/src/Config/Field.cs) が型として参照するため Models に残置 (移動先候補としては `Pgfs.Lib.Logging` だが、本ファイルは「log のフォーマット記述」であって「log 出力本体」ではないので現状の置き場が無難)
+- [`LoggingOutputField`](../src/core/src/Config/Field.cs) が型として参照するため Models に残置 (移動先候補としては `Pgfs.Core.Logging` だが、本ファイルは「log のフォーマット記述」であって「log 出力本体」ではないので現状の置き場が無難)
 
-### Config（[src/lib/src/Config/](../src/lib/src/Config/)）
+### Config（[src/core/src/Config/](../src/core/src/Config/)）
 
 旧 `Settings` ツリーの後継。**静的 `Field<T>` 記述子 + mutable POCO + `ConfigLoader` (CLI/TOML/DB/Default 統合) + `ConfigStore` (DB I/O)** で構成。
 
@@ -76,7 +76,7 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 
 変更時の永続化規約: 呼び側が `config.X.Y = newValue;` した直後に `store.Save(Schema.X.Y, newValue)` を明示的に呼ぶ (setter フックは入れていない、Loader/Store 分離のため)。具体例は将来 `Api.SetVolumeLabel(string)` 等の薄いラッパに集約予定。
 
-### Api（[src/lib/src/Api/](../src/lib/src/Api/)）
+### Api（[src/core/src/Api/](../src/core/src/Api/)）
 
 - `Api.cs` ファイルシステム操作の公開 API（inode CRUD、データ I/O via bytea チャンク、xattr、symlink、hard link、ボリューム情報すべて実装済み）。`IDisposable`、`OsBridge` プロパティで OS 通知ブリッジを受ける。
 - **cross-client 排他制御**: `LockTargets` / `LockData(dataId)` / `LockInode(inodeId)` / `LockInodes(params long[])` のプライベートヘルパで `pgfs_lock` 上に `SELECT ... FOR UPDATE` 行ロックを取る。各 mutating メソッド (`WriteData` / `TruncateData` / `ReleaseData` / `Update{Mode,Owner,Size,Timestamps}` / `Rename` / `DeleteInode` / `CreateHardLink`) の冒頭で適切なロックを取り、tx 終了で自動解放。複数 lock 取得は target_id 昇順固定でデッドロック回避。詳細は [support_for_citus.ja.md §排他制御](support_for_citus.ja.md)。
@@ -86,14 +86,14 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 
 **データ I/O (bytea チャンク) の実装メモ**: 各 inode のデータ本体は `pgfs_data` 1 行 + `pgfs_data_chunk` 複数行 (1 行 = 1 bytea = 1 チャンク、デフォルト chunk_size = 1MB)。WriteData は 1 SQL/チャンクの upsert (`INSERT ... ON CONFLICT (data_id, chunk_index) DO UPDATE SET payload = CASE ... END`、CASE で「中央 overlay / 末尾上書き / 0 パディング + 連結」の 3 ケース) で完結、並行 WriteFile race は PG の行ロックで自動直列化。ReadData は `substring(payload from N for M)` で PG 13+ の partial TOAST detoast を活用。各チャンクの payload 長は「これまで書き込まれたバイト数」と等しい。0 パディングは `decode(repeat('00', N), 'hex')` (`repeat(bytea, integer)` は PG に存在しないため)。
 
-### Logging（[src/lib/src/Logging/](../src/lib/src/Logging/)）
+### Logging（[src/core/src/Logging/](../src/core/src/Logging/)）
 
 - 自前のロガー実装（`Microsoft.Extensions.Logging` ではなく独自）。
 - `Logger.Default` 経由の静的 API。`Level.Enum` は `All/Trace/Debug/Information/Warning/Error/Critical/None`。出力先は `Logger.Output` (`Action<string>`)、最低レベルは `Logger.MinLevel`。
-- **出力先の設定反映**: 各 Program.cs が起動時に `Logger.MinLevel = config.Logging.MinLevel` と `Logger.Output = LogSink.Create(config.Logging.Output)` を設定する。`logging.output` が `stdout`/`stderr`/`none` ならそれぞれの sink、`<cycle>:<dir>/<pattern>` 形なら [RotatingFileSink](../src/lib/src/Logging/RotatingFileSink.cs) (日付ローテーション + `~` ホーム展開 + `*`→日付スタンプ + ディレクトリ自動作成 + AutoFlush)。設定なしの既定は `stderr`。変換は [LogSink.Create](../src/lib/src/Logging/LogSink.cs)。
+- **出力先の設定反映**: 各 Program.cs が起動時に `Logger.MinLevel = config.Logging.MinLevel` と `Logger.Output = LogSink.Create(config.Logging.Output)` を設定する。`logging.output` が `stdout`/`stderr`/`none` ならそれぞれの sink、`<cycle>:<dir>/<pattern>` 形なら [RotatingFileSink](../src/core/src/Logging/RotatingFileSink.cs) (日付ローテーション + `~` ホーム展開 + `*`→日付スタンプ + ディレクトリ自動作成 + AutoFlush)。設定なしの既定は `stderr`。変換は [LogSink.Create](../src/core/src/Logging/LogSink.cs)。
 - **ホットパスではガード句必須**: `Logger.Trace(...)` は `params object?[]` で配列確保とボクシングが発生する。秒間 1000+ 呼ばれる箇所では必ず `if (Logger.IsTraceEnabled) { Logger.Trace(...); }` のように先に判定する。`IsTraceEnabled` / `IsDebugEnabled` / `IsEnabled(level)` を用意済み。
 
-### Utility（[src/lib/src/Utility/](../src/lib/src/Utility/)）
+### Utility（[src/core/src/Utility/](../src/core/src/Utility/)）
 
 - **`PathParser.cs`** パスをドライブ / ルート / 名前要素に分解し、別の区切り文字での再構築・ワイルドカード位置検出・前後への挿入が可能。`Lazy<>` で各部品を遅延評価。比較的しっかり書けているコンポーネント。**注意**: `PathParser.FromPath(path)` は OS デフォルトのセパレータ (`Path.DirectorySeparatorChar`) を使う。`Api` / `InodeCache` に流れるパスは常に `/` 区切りに正規化されているので、Lib 内部で呼び出すときは必ず `PathParser.FromPath(path, "/")` と明示すること。
 - **`Pg.cs`** Dapper + Npgsql のラッパ（`Query`, `QueryAsync`, `Execute`, `ExecuteAsync`）。`NpgsqlDataSource` を接続文字列ごとにキャッシュ (同じ接続文字列なら同じデータソースが返る。プールはデータソース内部で管理される)。`QuoteIdentifier` / `QuoteLiteral` でエスケープ。SQL は `Logger.Trace` に出る（`TraceQuery` 内で `Logger.IsTraceEnabled` の早期 return ガード済み、Trace 無効時は `Regex.Replace` / `JsonSerializer.Serialize` をスキップ）。`Pg.OpenConnection` + `using var tx = conn.BeginTransaction()` パターンと、`Pg.WithTransaction<T>` ヘルパも提供 (`Span<byte>` を扱うときは ref struct なので lambda にできず、直接 `OpenConnection` を使う)。
@@ -101,13 +101,13 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 - **`NameNormalizer.cs`** owner/group/principal 名の正規化 (全角 ASCII → 半角 + ドメイン除去 `\`・`@` + 小文字化)。保存名・照合・呼び出し元名すべてに適用し、両 OS で大小・全半角を同一視する ([permission-interop.ja.md](permission-interop.ja.md))。
 - `Indexer.cs` (`ReadOnlyIndexer<,>` / `ReadOnlyIndexer<,,>` を `PathParser`, `Pg` で使用), `Fn.cs`, `String.cs`, `Json.cs`, `Retry.cs` 各種ヘルパ。
 
-### Collections（[src/lib/src/Collections/](../src/lib/src/Collections/)）
+### Collections（[src/core/src/Collections/](../src/core/src/Collections/)）
 
 - `RichDictionary<K,V>` `Added` イベント・`GetOrAdd<W>` 派生型サポート付きの `Dictionary` 拡張
 - `FirstList<T>` `Memory<T>` セグメントの連結リストで構成される高度なリスト。`Inode.Children` で使用
 - `ComparerToEqualityComparer<T>` `FirstList` の内部で使用
 
-### Objects（[src/lib/src/Objects/](../src/lib/src/Objects/)）
+### Objects（[src/core/src/Objects/](../src/core/src/Objects/)）
 
 - `Extensions.cs` `object.To<T>()`, `As<T>()`, `Is<T>()` 等の拡張。**C# 14 (net10.0) の `extension` 構文**を使用。
 
@@ -115,7 +115,7 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 
 ## 設定ファイル
 
-[pgfs.toml.example](../pgfs.toml.example) がサンプル。TOML 形式で、セクション形式 (`[database]` / `[mount]` / `[logging]` / ...)。実行時の探索パスは [`Schema.Setting.SearchPath`](../src/lib/src/Config/Schema.cs) で定義 (上記 [§Config](#config-srclibsrcconfig) 参照)。
+[pgfs.toml.example](../pgfs.toml.example) がサンプル。TOML 形式で、セクション形式 (`[database]` / `[mount]` / `[logging]` / ...)。実行時の探索パスは [`Schema.Setting.SearchPath`](../src/core/src/Config/Schema.cs) で定義 (上記 [§Config](#config-srclibsrcconfig) 参照)。
 
 ---
 
@@ -127,7 +127,7 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 
 | コマンド | 出力先 | 内容 |
 |---|---|---|
-| `dotnet build -c Debug` | `bin/Debug/` | `lib.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + 依存 dll (framework-dependent) |
+| `dotnet build -c Debug` | `bin/Debug/` | `core.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + 依存 dll (framework-dependent) |
 | `dotnet build -c Release` | `bin/Release/` | 同上の Release 版 (`DebugType=embedded`, framework-dependent) |
 | `dotnet publish -c Release` | `bin/Publish/` | **single-file self-contained** な `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs` の 3 つの実行ファイル (ホスト OS の RID 自動、各 ~38 MB) |
 
@@ -138,7 +138,7 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 dotnet build pgfs.sln
 
 # 個別ビルド
-dotnet build src/lib/Lib.csproj
+dotnet build src/core/Core.csproj
 dotnet build src/mkfs/Mkfs.csproj
 
 # Release publish (ホスト OS 向け single-file)

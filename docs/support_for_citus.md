@@ -18,7 +18,7 @@ Citus support spans three areas, each useful on its own:
 
 ## Storage: `bytea` instead of Large Objects
 
-The data body lives in [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs)'s `ReadData` / `WriteData` / `TruncateData` / `ReleaseData` (plus helpers `ReadChunkSlice` / `WriteChunkSlice` / `TruncateChunk` / `DropAllChunks`). The DDL is [docs/ddl/pgfs_data_chunk.sql](ddl/pgfs_data_chunk.sql), the init code is `CreateDataChunkTableAsync` in [src/mkfs/src/Initializer.cs](../src/mkfs/src/Initializer.cs), and the model is [src/lib/src/Models/Chunk.cs](../src/lib/src/Models/Chunk.cs).
+The data body lives in [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs)'s `ReadData` / `WriteData` / `TruncateData` / `ReleaseData` (plus helpers `ReadChunkSlice` / `WriteChunkSlice` / `TruncateChunk` / `DropAllChunks`). The DDL is [docs/ddl/pgfs_data_chunk.sql](ddl/pgfs_data_chunk.sql), the init code is `CreateDataChunkTableAsync` in [src/mkfs/src/Initializer.cs](../src/mkfs/src/Initializer.cs), and the model is [src/core/src/Models/Chunk.cs](../src/core/src/Models/Chunk.cs).
 
 ### Why bytea
 
@@ -115,11 +115,11 @@ Plain bytea is the best choice.
 
 `mkfs --citus [--worker host[:port],...]` supports both single-node and multi-node setups. The implementation is spread across:
 
-- [Schema.Database.Citus](../src/lib/src/Config/Schema.cs) (BoolField) + [Schema.Database.Workers](../src/lib/src/Config/Schema.cs) (StringListField) — the CLI / TOML entry points.
-- [DatabaseConfig.Workers](../src/lib/src/Config/DatabaseConfig.cs) — normalized into `List<(string Host, int Port)>`.
+- [Schema.Database.Citus](../src/core/src/Config/Schema.cs) (BoolField) + [Schema.Database.Workers](../src/core/src/Config/Schema.cs) (StringListField) — the CLI / TOML entry points.
+- [DatabaseConfig.Workers](../src/core/src/Config/DatabaseConfig.cs) — normalized into `List<(string Host, int Port)>`.
 - [Initializer.InitializeAsync](../src/mkfs/src/Initializer.cs) facade + [Initializer.EnsureDatabaseAsync](../src/mkfs/src/Initializer.cs) — bundles worker bootstrap + coordinator DB ensure + Citus topology.
 - Each [CreateXxxTableAsync](../src/mkfs/src/Initializer.cs) — calls `create_distributed_table` / `citus_add_local_table_to_metadata` only when it freshly created the table (per-table responsibility).
-- Citus-compatibility on the Api side ([Api.Rename](../src/lib/src/Api/Api.cs) / [Api.EnsureDataRow](../src/lib/src/Api/Api.cs) / [Api.WriteChunkSlice](../src/lib/src/Api/Api.cs) / [ConfigStore.Save](../src/lib/src/Config/ConfigStore.cs)).
+- Citus-compatibility on the Api side ([Api.Rename](../src/core/src/Api/Api.cs) / [Api.EnsureDataRow](../src/core/src/Api/Api.cs) / [Api.WriteChunkSlice](../src/core/src/Api/Api.cs) / [ConfigStore.Save](../src/core/src/Config/ConfigStore.cs)).
 - DDL changes ([pgfs_inode.sql](ddl/pgfs_inode.sql) composite PK + [pgfs_lock.sql](ddl/pgfs_lock.sql)).
 
 Verification lives in [tests/citus/](../tests/citus/README.md): [multinode_probe.sh](../tests/citus/multinode_probe.sh) (a one-off probe of Citus behavior — auto-sync / DDL propagation / shard placement) and [test_matrix.sh](../tests/citus/test_matrix.sh) (the 18-case mkfs matrix: 3 initial x 6 target).
@@ -235,7 +235,7 @@ Resolving `/a/b/c` with `pgfs_inode` distributed by `parent_id`:
 
 At depth N, up to N cross-shard hops. In practice:
 
-- **When `InodeCache.byPath` hits, the 2nd time on is 0 hops** ([src/lib/src/Api/InodeCache.cs](../src/lib/src/Api/InodeCache.cs)).
+- **When `InodeCache.byPath` hits, the 2nd time on is 0 hops** ([src/core/src/Api/InodeCache.cs](../src/core/src/Api/InodeCache.cs)).
 - Only the first path resolution after a cold start (e.g. a process restart) is slow.
 - Directory depth is realistically 10–20 -> ~10–20 shard hops per request ≈ tens of ms (acceptable).
 
@@ -249,7 +249,7 @@ When `Rename(id, newParentId, newName)`'s newParentId is on a different shard, t
 
 ## Cross-client locking (`pgfs_lock`)
 
-The lock helpers live in [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) (`LockTargets` / `LockData` / `LockInode` / `LockInodes`). Each mutating Api method takes the appropriate lock at its start and releases it when the transaction ends (COMMIT/ROLLBACK). Multi-node Citus + 2-client concurrent races are covered by [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh).
+The lock helpers live in [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) (`LockTargets` / `LockData` / `LockInode` / `LockInodes`). Each mutating Api method takes the appropriate lock at its start and releases it when the transaction ends (COMMIT/ROLLBACK). Multi-node Citus + 2-client concurrent races are covered by [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh).
 
 ### Motivation
 
@@ -286,7 +286,7 @@ The consequence: **inode ids and data ids (both BIGSERIAL) can collide in the sa
 
 ### The collision avoidance: a sign-based namespace
 
-`data lock = target_id = data_id (positive)`, `inode lock = target_id = -inode_id (negative)` — the sign separates the namespace (see the `LockData` / `LockInode` helpers in [Api.cs](../src/lib/src/Api/Api.cs)). Unlike the 2-key form of `pg_advisory_xact_lock(ns, key)`, only a single-column PK is available, so the namespace must be expressed on the value side.
+`data lock = target_id = data_id (positive)`, `inode lock = target_id = -inode_id (negative)` — the sign separates the namespace (see the `LockData` / `LockInode` helpers in [Api.cs](../src/core/src/Api/Api.cs)). Unlike the 2-key form of `pg_advisory_xact_lock(ns, key)`, only a single-column PK is available, so the namespace must be expressed on the value side.
 
 An alternative is to split `pgfs_inode_lock` into a separate table, which would let inode locks be distributed by `parent_id` (a different colocation group from data) to cut inode-operation cross-shard hops, and keep operational stats separate. The operational pattern is not settled enough to justify an extra table, so we start with a single `pgfs_lock` + sign namespace, leaving room to re-organize into `pgfs_inode_lock` if inode-lock workload turns out to dominate.
 
@@ -353,7 +353,7 @@ Rows are only added via `INSERT ON CONFLICT DO NOTHING`, never `DELETE`d.
 
   Acceptable for now; if an inode-lock-dominant workload appears, splitting `pgfs_inode_lock` into a separate table distributed by `parent_id` + co-located with `pgfs_inode` resolves the asymmetry.
 - **Locks spanning multiple shards under Citus**: with `WHERE target_id IN (a, b)` where a and b are on different shards, acquisition order is non-deterministic and raises deadlock risk. Keep **1 SQL = 1 lock unit** (the helpers take them one at a time).
-- **Forgetting to lock**: writing `WriteData` etc. without calling `LockData` / `LockInode` causes a race. The discipline of checking every mutation path in review is required; the convention of calling `LockData` at the start of `Api.WriteData(...)` is also stated in [Api.cs](../src/lib/src/Api/Api.cs)'s class doc.
+- **Forgetting to lock**: writing `WriteData` etc. without calling `LockData` / `LockInode` causes a race. The discipline of checking every mutation path in review is required; the convention of calling `LockData` at the start of `Api.WriteData(...)` is also stated in [Api.cs](../src/core/src/Api/Api.cs)'s class doc.
 - **Application-side deadlock**: if one thread takes nested locks `LockData(A)` -> `LockData(B)` while another takes them in reverse, it hangs. **Ascending target_id order** is fixed as a project convention.
 
 ---
@@ -387,5 +387,5 @@ The [tests/citus/](../tests/citus/README.md) suite covers:
 - [Citus docs](https://docs.citusdata.com/) — distributed tables in general.
 - [docs/database.md](database.md) — the current schema.
 - [docs/history.md](history.md) — the Notify (cross-client change notification) design.
-- [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) — the data-access implementation.
+- [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) — the data-access implementation.
 - [docs/performance.md](performance.md) — InodeCache performance ideas (which ease the cross-shard hop).

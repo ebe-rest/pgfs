@@ -1,8 +1,8 @@
 namespace Pgfs.Mkfs;
 
-using Lib.Config;
-using Lib.Logging;
-using Lib.Utility;
+using Core.Config;
+using Core.Logging;
+using Core.Utility;
 using Npgsql;
 
 /// <summary>

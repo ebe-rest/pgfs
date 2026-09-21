@@ -1,6 +1,6 @@
 # Settings matrix
 
-> The authoritative declaration of each setting is collected in [src/lib/src/Config/Schema.cs](../src/lib/src/Config/Schema.cs) (the static `Field<T>` descriptor `Schema.<Scope>.<Key>`). This document is a cross-cutting overview of "CLI flag / TOML key / DB storage / default / read timing". **If it disagrees with the code, Schema is authoritative.** A future option is to replace this with generation from Schema.
+> The authoritative declaration of each setting is collected in [src/core/src/Config/Schema.cs](../src/core/src/Config/Schema.cs) (the static `Field<T>` descriptor `Schema.<Scope>.<Key>`). This document is a cross-cutting overview of "CLI flag / TOML key / DB storage / default / read timing". **If it disagrees with the code, Schema is authoritative.** A future option is to replace this with generation from Schema.
 
 Related: [docs/Mkfs.md](Mkfs.md) (the mkfs.pgfs CLI list) / [docs/Mount.md](Mount.md) / [docs/Assign.md](Assign.md) / [docs/fstab-support.md](fstab-support.md) (options via `-o key=val,...`)
 
@@ -19,7 +19,7 @@ Related: [docs/Mkfs.md](Mkfs.md) (the mkfs.pgfs CLI list) / [docs/Mount.md](Moun
 
 ## Precedence
 
-[`ConfigLoader`](../src/lib/src/Config/ConfigLoader.cs) unifies CLI / TOML / DB / Default in one pass. The precedence is CLI > TOML > DB > Default. The loading order runs `CLI → TOML → DB`, realized by the "skip if a higher source already set the value" approach. `AssignPositional` / `ParseDashOOptions` also "apply only when not yet loaded", so an explicit `-c` / `-m` / `-f` takes precedence over a positional.
+[`ConfigLoader`](../src/core/src/Config/ConfigLoader.cs) unifies CLI / TOML / DB / Default in one pass. The precedence is CLI > TOML > DB > Default. The loading order runs `CLI → TOML → DB`, realized by the "skip if a higher source already set the value" approach. `AssignPositional` / `ParseDashOOptions` also "apply only when not yet loaded", so an explicit `-c` / `-m` / `-f` takes precedence over a positional.
 
 ---
 
@@ -42,7 +42,7 @@ Related: [docs/Mkfs.md](Mkfs.md) (the mkfs.pgfs CLI list) / [docs/Mount.md](Moun
 | Key | CLI | TOML | DB | Default | Type | Read timing | Notes |
 |---|---|---|---|---|---|---|---|
 | `logging.level` | `--log-level` `--log-min-level` `--min-log-level` | ✅ | ❌ | `Information` | `Level.Enum` | reflected into `Logger.MinLevel` at startup | `all` `trace` `debug` `information` `warning` `error` `critical` `none` |
-| `logging.output` | `--log-output` | ✅ | ❌ | `stderr` | `SettingLoggingOutput` | reflected into `Logger.Output` at startup via [LogSink.Configure](../src/lib/src/Logging/LogSink.cs) | `stdout` / `stderr` / `none` / `<cycle>:<dir>/<pattern>`. cycle = `none\|hourly\|daily\|monthly`; a `*` in the pattern expands to a date (hourly=`yyyyMMddHH` / daily=`yyyyMMdd` / monthly=`yyyyMM` / none=empty); `~` expands to home. e.g. `daily:~/pgfs/log/pgfs-*.log`. **Warning and above also go to stderr in a terse format (`pgfs: [Warning] ...`, no timestamp) unless the effective sink is already stderr** (so warnings are not missed even with a file/stdout sink). Likewise, **the startup banner (program name + version + Copyright) and the process life/death markers (`started`/`exited`) always go to stderr** (`Logger.Lifecycle`, so startup/shutdown can be tracked even when logs go to a file). At startup it also prints the resolved parameters (`param: scope.key = value`, with the connection-string Password masked) and unknown-option warnings |
+| `logging.output` | `--log-output` | ✅ | ❌ | `stderr` | `SettingLoggingOutput` | reflected into `Logger.Output` at startup via [LogSink.Configure](../src/core/src/Logging/LogSink.cs) | `stdout` / `stderr` / `none` / `<cycle>:<dir>/<pattern>`. cycle = `none\|hourly\|daily\|monthly`; a `*` in the pattern expands to a date (hourly=`yyyyMMddHH` / daily=`yyyyMMdd` / monthly=`yyyyMM` / none=empty); `~` expands to home. e.g. `daily:~/pgfs/log/pgfs-*.log`. **Warning and above also go to stderr in a terse format (`pgfs: [Warning] ...`, no timestamp) unless the effective sink is already stderr** (so warnings are not missed even with a file/stdout sink). Likewise, **the startup banner (program name + version + Copyright) and the process life/death markers (`started`/`exited`) always go to stderr** (`Logger.Lifecycle`, so startup/shutdown can be tracked even when logs go to a file). At startup it also prints the resolved parameters (`param: scope.key = value`, with the connection-string Password masked) and unknown-option warnings |
 
 ## 4. `mount.*`
 

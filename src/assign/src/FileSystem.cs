@@ -3,8 +3,8 @@ namespace Pgfs.Assign;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using DokanNet;
-using Lib.Api;
-using Lib.Models;
+using Core.Api;
+using Core.Models;
 using LTRData.Extensions.Native.Memory;
 using FileAccess = DokanNet.FileAccess;
 
@@ -72,7 +72,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 			var (domain, uname) = SplitDomainUser(name);
 			AuditContext.Current = new AuditContext { Uid = null, Uname = uname, Domain = domain };
 		} catch (Exception ex) {
-			Lib.Logging.Logger.Warning("failed to get the audit requestor: ", ex.Message);
+			Core.Logging.Logger.Warning("failed to get the audit requestor: ", ex.Message);
 			AuditContext.Current = null;
 		}
 	}
@@ -399,7 +399,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 					this.api.DeleteInode(inode);
 				}
 			} catch (Exception ex) {
-				Lib.Logging.Logger.Error("Cleanup delete failed: ", ex);
+				Core.Logging.Logger.Error("Cleanup delete failed: ", ex);
 			}
 		}
 	}
@@ -508,7 +508,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 			bytesRead = this.api.ReadData(inode, offset, buffer.Span);
 			return DokanResult.Success;
 		} catch (Exception ex) {
-			Lib.Logging.Logger.Error("ReadFile failed: ", path, " ", ex);
+			Core.Logging.Logger.Error("ReadFile failed: ", path, " ", ex);
 			bytesRead = 0;
 			return DokanResult.Error;
 		}
@@ -536,7 +536,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 			bytesWritten = this.api.WriteData(inode, writeOffset, buffer.Span);
 			return DokanResult.Success;
 		} catch (Exception ex) {
-			Lib.Logging.Logger.Error("WriteFile failed: ", path, " ", ex);
+			Core.Logging.Logger.Error("WriteFile failed: ", path, " ", ex);
 			bytesWritten = 0;
 			return DokanResult.Error;
 		}
@@ -755,7 +755,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 			}
 			return DokanResult.Success;
 		} catch (Exception ex) {
-			Lib.Logging.Logger.Warning("SetFileSecurity failed: ", path, " ", ex.Message);
+			Core.Logging.Logger.Warning("SetFileSecurity failed: ", path, " ", ex.Message);
 			return DokanResult.Error;
 		}
 	}

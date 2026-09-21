@@ -10,7 +10,7 @@
 ## 動機
 
 JSONB 版は `pgfs_inode.xattrs JSONB` に `{ 名前: Base64(値) }` で保持していた
-([Api.EncodeXattrValue/DecodeXattrValue](../src/lib/src/Api/Api.cs))。
+([Api.EncodeXattrValue/DecodeXattrValue](../src/core/src/Api/Api.cs))。
 
 - xattr の値は **OS 上は任意バイト列** (NUL を含む。`security.selinux` の末尾 NUL、
   `security.capability` / `system.posix_acl_access` は生バイナリ)。JSON string にバイト列は
@@ -113,7 +113,7 @@ in-memory の 2 配列を index 探索する形に書き換える。
 
 ## In-memory 表現 (Inode モデル / キャッシュ)
 
-[Models/Inode.cs](../src/lib/src/Models/Inode.cs) の `string xattrs` / `string Xattrs` を
+[Models/Inode.cs](../src/core/src/Models/Inode.cs) の `string xattrs` / `string Xattrs` を
 
 ```csharp
 public string[] xattr_names  { get; set; } = System.Array.Empty<string>();
@@ -122,9 +122,9 @@ public byte[][] xattr_values { get; set; } = System.Array.Empty<byte[]>();
 
 に置換 (Dapper が列名で自動マップ)。名前→値の探索ヘルパを 1 つ用意 (例 `TryGetXattr(name, out byte[])`)。
 更新箇所:
-- [InodeCache.cs](../src/lib/src/Api/InodeCache.cs): 中央の `inodeSelectColumns` の `inode.xattrs` を
+- [InodeCache.cs](../src/core/src/Api/InodeCache.cs): 中央の `inodeSelectColumns` の `inode.xattrs` を
   `inode.xattr_names, inode.xattr_values` に。root inode 既定 (`xattrs = "{}"`) を空配列に。
-- [Api.cs](../src/lib/src/Api/Api.cs) のクロスシャード rename INSERT: `xattrs = old.Xattrs` を
+- [Api.cs](../src/core/src/Api/Api.cs) のクロスシャード rename INSERT: `xattrs = old.Xattrs` を
   `xattr_names = old.xattr_names` / `xattr_values = old.xattr_values` に (Npgsql が配列を直接バインド)。
   通常の `InsertInode` は新規なので空配列 (列 DEFAULT に任せる)。
 

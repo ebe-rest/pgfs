@@ -17,7 +17,7 @@
 
 | プロジェクト | パス | 役割 | プラットフォーム | 状態 |
 |---|---|---|---|---|
-| **Lib** | [src/lib/](src/lib/) | コアライブラリ（Models / Api / Logging / Collections / Utility / Objects） | クロスプラットフォーム | 実装完了 |
+| **Lib** | [src/core/](src/core/) | コアライブラリ（Models / Api / Logging / Collections / Utility / Objects） | クロスプラットフォーム | 実装完了 |
 | **Mkfs** | [src/mkfs/](src/mkfs/) | PostgreSQL 側のテーブル等を初期化する CLI (`mkfs.pgfs`) | クロスプラットフォーム | 実装完了・Linux で動作確認 |
 | **Mount** | [src/mount/](src/mount/) | Linux/macOS 用マウントツール (`mount.pgfs`、Tmds.Fuse) | Linux / macOS | 全 FUSE 操作実装済み（データ I/O・xattr・symlink・hard link・POSIX ACL 含む）・Linux で動作確認 |
 | **Assign** | [src/assign/](src/assign/) | Windows 用マウントツール (`pgfs.assign`、DokanNet) | Windows | 全 Dokan 操作実装済み（ACL = Get/SetFileSecurity 投影も対応、ADS のみ未対応）・Windows で動作確認 |
@@ -39,7 +39,7 @@
 dotnet build pgfs.sln
 
 # 個別ビルド
-dotnet build src/lib/Lib.csproj
+dotnet build src/core/Core.csproj
 dotnet build src/mkfs/Mkfs.csproj
 dotnet build src/mount/Mount.csproj   # Linux/macOS 実行向け (Windows でもクロスビルドのみ通る)
 dotnet build src/assign/Assign.csproj # Windows 実行向け (Linux/macOS でもクロスビルドのみ通る)
@@ -49,11 +49,11 @@ dotnet build src/assign/Assign.csproj # Windows 実行向け (Linux/macOS でも
 
 | 構成 | 出力先 | 内容 |
 |---|---|---|
-| `dotnet build -c Debug` | `bin/Debug/` | `lib.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + 依存 dll (framework-dependent) |
+| `dotnet build -c Debug` | `bin/Debug/` | `core.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + 依存 dll (framework-dependent) |
 | `dotnet build -c Release` | `bin/Release/` | 同上の Release 版 (framework-dependent) |
 | `dotnet publish -c Release` | `bin/Publish/` | single-file self-contained な `{mkfs,mount,assign}.pgfs[.exe]` の 3 ファイル (ホスト RID 自動、各 ~38 MB) |
 
-アセンブリ名はすべて小文字ドット区切り (`lib.pgfs`, `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs`) で、Debug ビルドなら `./bin/Debug/mkfs.pgfs.exe` のように直接起動できます。
+アセンブリ名はすべて小文字ドット区切り (`core.pgfs`, `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs`) で、Debug ビルドなら `./bin/Debug/mkfs.pgfs.exe` のように直接起動できます。
 
 ### Mount（Linux/macOS）
 

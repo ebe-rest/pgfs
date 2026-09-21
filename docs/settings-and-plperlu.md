@@ -3,7 +3,7 @@
 Design for a set of configuration-model changes and the Citus custom-tablespace support that follows from
 them. **The configuration model is the area the project guidance flags as "handle carefully"**, so settle the
 design here before implementing. The source of truth for settings is
-[Schema.cs](../src/lib/src/Config/Schema.cs) / [settings-matrix.md](settings-matrix.md).
+[Schema.cs](../src/core/src/Config/Schema.cs) / [settings-matrix.md](settings-matrix.md).
 
 For the Japanese version see [settings-and-plperlu.ja.md](settings-and-plperlu.ja.md).
 
@@ -44,8 +44,8 @@ CLI:
 | `--deny-plperlu` | deny | a **bare-only fixed-false alias** (takes no value) |
 
 Implementation: add the concept of a **fixed-false alias set (negated CliOptions)** to
-[Field](../src/lib/src/Config/Field.cs)/`BoolField`. Extend the bool parse in
-[ConfigLoader](../src/lib/src/Config/ConfigLoader.cs):
+[Field](../src/core/src/Config/Field.cs)/`BoolField`. Extend the bool parse in
+[ConfigLoader](../src/core/src/Config/ConfigLoader.cs):
 - match on the canonical / positive alias (`--plperlu` / `--allow-plperlu`) → set true and **consume the next
   arg as the value if it is a `true`/`false` literal**, otherwise leave it bare=true.
 - match on the negated alias (`--deny-plperlu`) → set false (does not consume a value).
@@ -135,17 +135,17 @@ assumption is to rebuild with `mkfs --clean`. The `pgfs_settings` rows change (s
 
 ## Places to touch
 
-- [Schema.cs](../src/lib/src/Config/Schema.cs): add the `app` nested class (`Plperlu` / `Statfs`), change the
+- [Schema.cs](../src/core/src/Config/Schema.cs): add the `app` nested class (`Plperlu` / `Statfs`), change the
   SaveTo of the `FileSystem` size keys, change the SaveTo of `Database.Citus`.
-- [ConfigLoader.cs](../src/lib/src/Config/ConfigLoader.cs): the extension where bool optionally consumes
+- [ConfigLoader.cs](../src/core/src/Config/ConfigLoader.cs): the extension where bool optionally consumes
   `true|false`, and alias handling.
-- [RootConfig](../src/lib/src/Config/RootConfig.cs) + each `*Config` POCO: add `AppConfig`, re-home
+- [RootConfig](../src/core/src/Config/RootConfig.cs) + each `*Config` POCO: add `AppConfig`, re-home
   `StatfsConfig`/`DatabaseConfig`. Wire up the Build* methods.
 - [Initializer.cs](../src/mkfs/src/Initializer.cs): reference the plperlu gate, tablespace auto-mkdir, remove
   the guard, drop the per-table TABLESPACE clause + switch to CREATE DATABASE WITH TABLESPACE, add the new keys
   to PopulateSettingsRows.
 - [settings-matrix.md](settings-matrix.md): update the table.
-- Help ([HelpText](../src/lib/src/Config/HelpText.cs)) is auto-generated from Schema, so it follows along.
+- Help ([HelpText](../src/core/src/Config/HelpText.cs)) is auto-generated from Schema, so it follows along.
 
 ## (F) leave the "distribution mkfs parameters" as a comment in the mkfs-generated toml
 
@@ -158,7 +158,7 @@ Toml.FromModel output text.
 - Example included: `--connection ... --schema pgfs --prefix pgfs_ --citus --statfs require --volume-label pgfs ...`
 - The connection string's Password is already emitted in plaintext in `[database].connection` so this leaks no
   more, but the comment side **masks the Password** the same way as
-  [DescribeProvided](../src/lib/src/Config/ConfigLoader.cs).
+  [DescribeProvided](../src/core/src/Config/ConfigLoader.cs).
 
 ## Decisions
 

@@ -32,7 +32,7 @@ and renders the **Windows ACL as a projection view (a lossy projection)** of it.
 owner / group / principal names are normalized **both on store and on match** in the following order. **The same
 normalization is applied to the caller's (accessor's) name too**, so the pgfs layer overrides Linux's native
 case-sensitivity and both OSes treat case and width identically. Implemented in
-[NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs).
+[NameNormalizer](../src/core/src/Utility/NameNormalizer.cs).
 
 1. **Strip domain**: `DOMAIN\name` (NetBIOS) and `name@domain` (UPN) → `name`
 2. **Fullwidth ASCII → halfwidth**: U+FF01–FF5E to U+0021–007E (e.g. `Ａlice` → `Alice`)
@@ -84,7 +84,7 @@ ACL Entry
 - **acl[]** holds named user/group entries and the **mask** (= recomputed each time as the union of named ∪ group).
 - **allow only**. Windows **deny ACEs are not adopted** (dropped in projection; see §Windows is a projection view).
 - **Physical storage**: held as JSON in the inode xattr `user.pgfs_acl` (`entries[]`, plus `default[]` for directory
-  inheritance). No schema change. The canonical model is [PgfsAcl](../src/lib/src/Models/PgfsAcl.cs).
+  inheritance). No schema change. The canonical model is [PgfsAcl](../src/core/src/Models/PgfsAcl.cs).
 
 ## ACL evaluation (client driver / POSIX order)
 
@@ -160,16 +160,16 @@ pgfs_inode
 
 | Decision | Where it is implemented |
 |---|---|
-| [1] Name normalization | The shared [NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs) (fullwidth→halfwidth + domain stripping + lowercase). Inserted into store/resolve/caller paths of [UserResolver](../src/mount/src/UserResolver.cs) / [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) / [mount/FileSystem](../src/mount/src/FileSystem.cs) |
+| [1] Name normalization | The shared [NameNormalizer](../src/core/src/Utility/NameNormalizer.cs) (fullwidth→halfwidth + domain stripping + lowercase). Inserted into store/resolve/caller paths of [UserResolver](../src/mount/src/UserResolver.cs) / [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) / [mount/FileSystem](../src/mount/src/FileSystem.cs) |
 | [2] Domain/UPN stripping | `NameNormalizer.StripDomain` handles both `\` and `@` |
 | [3] Principal mapping | The well-known aliases in [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) (MapWinUserToPgfs/MapWinGroupToPgfs/MapPgfsUserToWin/MapPgfsGroupToWin). nobody/nogroup ↔ `NT AUTHORITY\ANONYMOUS LOGON` |
 | [6] Windows-attr xattr | JSON `{hidden,system,archive}` in `user.win.attrs`. [FileSystemUtils](../src/assign/src/FileSystemUtils.cs) Load/SaveWinAttrs |
 | [7] ReadOnly | [`IsWritable`](../src/assign/src/FileSystemUtils.cs) simplified to a normalized-name comparison (the root↔Administrator alias is absorbed by the mapping) |
 | [9] Anonymous policy | Documented here (no code change) |
-| [5] Canonical ACL model | [PgfsAcl](../src/lib/src/Models/PgfsAcl.cs) (Lib): the `user.pgfs_acl` JSON (entries[]/default[]). allow only |
+| [5] Canonical ACL model | [PgfsAcl](../src/core/src/Models/PgfsAcl.cs) (Lib): the `user.pgfs_acl` JSON (entries[]/default[]). allow only |
 | [4] Projection view (Windows read) | [FileSystemUtils.BuildSecurity](../src/assign/src/FileSystemUtils.cs) + [GetFileSecurity](../src/assign/src/FileSystem.cs). Projects owner/group SIDs + mode-derived ACEs + named ACL onto the SD |
 | [4] Projection (Windows write) / [8] owner=group | [SetFileSecurity](../src/assign/src/FileSystem.cs) + [ApplySecurity](../src/assign/src/FileSystemUtils.cs): SD → mode (3 base classes) + acl[] (named) + owner/group. If the owner is a group SID, route to nobody/that group. deny is dropped in projection |
-| [4][5] Linux POSIX ACL | The [PosixAcl](../src/lib/src/Models/PosixAcl.cs) codec + [mount/FileSystem](../src/mount/src/FileSystem.cs): `system.posix_acl_access` ⇄ st_mode (3 base classes) + `user.pgfs_acl` (named) + computed mask. No named entries returns ENODATA |
+| [4][5] Linux POSIX ACL | The [PosixAcl](../src/core/src/Models/PosixAcl.cs) codec + [mount/FileSystem](../src/mount/src/FileSystem.cs): `system.posix_acl_access` ⇄ st_mode (3 base classes) + `user.pgfs_acl` (named) + computed mask. No named entries returns ENODATA |
 
 Regression: Windows e2e **26/26** (attributes + ACL projection/reverse-projection), Linux e2e **35/35** (incl. the POSIX
 ACL named user), race **4/4**, and the dedicated [audit.sh](../tests/citus/audit.sh) **12/12** (caller_uname also goes

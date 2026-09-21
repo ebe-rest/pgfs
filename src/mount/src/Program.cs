@@ -3,10 +3,10 @@ namespace Pgfs.Mount;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Lib;
-using Lib.Api;
-using Lib.Config;
-using Lib.Logging;
+using Core;
+using Core.Api;
+using Core.Config;
+using Core.Logging;
 
 /// <summary>
 /// mount.pgfs entry point. Mounts PGFS via FUSE on Linux / macOS.

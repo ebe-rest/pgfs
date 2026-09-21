@@ -2,10 +2,10 @@ namespace Pgfs.Assign;
 
 using System.Runtime.CompilerServices;
 using System.Runtime.Versioning;
-using Lib;
-using Lib.Api;
-using Lib.Config;
-using Lib.Logging;
+using Core;
+using Core.Api;
+using Core.Config;
+using Core.Logging;
 
 /// <summary>
 /// pgfs.assign entry point. Mounts PGFS as a drive via DokanNet on Windows.

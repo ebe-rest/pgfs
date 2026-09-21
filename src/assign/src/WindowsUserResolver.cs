@@ -5,8 +5,8 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using System.Text;
-using Lib.Logging;
-using Lib.Utility;
+using Core.Logging;
+using Core.Utility;
 
 /// <summary>
 /// Resolver that converts between user name &lt;-&gt; SID/uid on Windows.

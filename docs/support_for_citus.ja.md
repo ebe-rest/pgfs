@@ -18,7 +18,7 @@ Citus 対応は 3 つの領域にまたがり、それぞれ単独でも有用:
 
 ## ストレージ: Large Object ではなく `bytea`
 
-データ本体は [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) の `ReadData` / `WriteData` / `TruncateData` / `ReleaseData` (補助の `ReadChunkSlice` / `WriteChunkSlice` / `TruncateChunk` / `DropAllChunks`) に集約。DDL は [docs/ddl/pgfs_data_chunk.sql](ddl/pgfs_data_chunk.sql)、初期化コードは [src/mkfs/src/Initializer.cs](../src/mkfs/src/Initializer.cs) の `CreateDataChunkTableAsync`、モデルは [src/lib/src/Models/Chunk.cs](../src/lib/src/Models/Chunk.cs)。
+データ本体は [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) の `ReadData` / `WriteData` / `TruncateData` / `ReleaseData` (補助の `ReadChunkSlice` / `WriteChunkSlice` / `TruncateChunk` / `DropAllChunks`) に集約。DDL は [docs/ddl/pgfs_data_chunk.sql](ddl/pgfs_data_chunk.sql)、初期化コードは [src/mkfs/src/Initializer.cs](../src/mkfs/src/Initializer.cs) の `CreateDataChunkTableAsync`、モデルは [src/core/src/Models/Chunk.cs](../src/core/src/Models/Chunk.cs)。
 
 ### なぜ bytea か
 
@@ -115,11 +115,11 @@ ALTER TABLE pgfs_data_chunk ALTER COLUMN payload SET NOT NULL;
 
 `mkfs --citus [--worker host[:port],...]` で 1 ノード / 多ノード両構成に対応。実装は以下に分散:
 
-- [Schema.Database.Citus](../src/lib/src/Config/Schema.cs) (BoolField) + [Schema.Database.Workers](../src/lib/src/Config/Schema.cs) (StringListField) — CLI / TOML 入口
-- [DatabaseConfig.Workers](../src/lib/src/Config/DatabaseConfig.cs) — `List<(string Host, int Port)>` に正規化
+- [Schema.Database.Citus](../src/core/src/Config/Schema.cs) (BoolField) + [Schema.Database.Workers](../src/core/src/Config/Schema.cs) (StringListField) — CLI / TOML 入口
+- [DatabaseConfig.Workers](../src/core/src/Config/DatabaseConfig.cs) — `List<(string Host, int Port)>` に正規化
 - [Initializer.InitializeAsync](../src/mkfs/src/Initializer.cs) のファサード + [Initializer.EnsureDatabaseAsync](../src/mkfs/src/Initializer.cs) — worker bootstrap + coordinator DB ensure + Citus topology を一括
 - 各 [CreateXxxTableAsync](../src/mkfs/src/Initializer.cs) — テーブル新規作成時のみ `create_distributed_table` / `citus_add_local_table_to_metadata` を続けて呼ぶ (per-table 責務)
-- Api 側の Citus 互換化 ([Api.Rename](../src/lib/src/Api/Api.cs) / [Api.EnsureDataRow](../src/lib/src/Api/Api.cs) / [Api.WriteChunkSlice](../src/lib/src/Api/Api.cs) / [ConfigStore.Save](../src/lib/src/Config/ConfigStore.cs))
+- Api 側の Citus 互換化 ([Api.Rename](../src/core/src/Api/Api.cs) / [Api.EnsureDataRow](../src/core/src/Api/Api.cs) / [Api.WriteChunkSlice](../src/core/src/Api/Api.cs) / [ConfigStore.Save](../src/core/src/Config/ConfigStore.cs))
 - DDL 変更 ([pgfs_inode.sql](ddl/pgfs_inode.sql) PK 複合化 + [pgfs_lock.sql](ddl/pgfs_lock.sql))
 
 検証は [tests/citus/](../tests/citus/README.md): [multinode_probe.sh](../tests/citus/multinode_probe.sh) (Citus 仕様 — auto-sync / DDL 伝搬 / shard 配置 — の挙動確認用 one-off probe) と [test_matrix.sh](../tests/citus/test_matrix.sh) (mkfs の 18 ケースマトリックス: 3 initial × 6 target)。
@@ -235,7 +235,7 @@ EnsureSchemaAsync は coordinator のみで CREATE SCHEMA を発行 → Citus �
 
 depth N で最悪 N 回の cross-shard hop。実運用では:
 
-- **`InodeCache.byPath` が効くと 2 回目以降は 0 hop** ([src/lib/src/Api/InodeCache.cs](../src/lib/src/Api/InodeCache.cs))
+- **`InodeCache.byPath` が効くと 2 回目以降は 0 hop** ([src/core/src/Api/InodeCache.cs](../src/core/src/Api/InodeCache.cs))
 - cold start (プロセス再起動直後等) で初回 path 解決のみ遅い
 - ディレクトリの深さは実用上 10〜20 程度 → 1 リクエスト 10〜20 shard hop ≈ 数十 ms (許容範囲)
 
@@ -249,7 +249,7 @@ InodeCache のヒット率が悪化するワークロード (大量の random pa
 
 ## クロスクライアントロック (`pgfs_lock`)
 
-lock ヘルパは [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) の `LockTargets` / `LockData` / `LockInode` / `LockInodes`。各 mutating Api メソッドの冒頭で適切なロックを取り、tx 終了 (COMMIT/ROLLBACK) で自動解放する。多ノード Citus + 2 client 並行 race は [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh) でカバー。
+lock ヘルパは [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) の `LockTargets` / `LockData` / `LockInode` / `LockInodes`。各 mutating Api メソッドの冒頭で適切なロックを取り、tx 終了 (COMMIT/ROLLBACK) で自動解放する。多ノード Citus + 2 client 並行 race は [tests/citus/race_multinode.sh](../tests/citus/race_multinode.sh) でカバー。
 
 ### 動機
 
@@ -286,7 +286,7 @@ Citus の `create_distributed_table` は **ハッシュ分散で、ハッシュ�
 
 ### 採用した衝突回避: 符号による namespace 分離
 
-`data lock = target_id = data_id (正)`、`inode lock = target_id = -inode_id (負)` で値の符号で namespace を分ける ([Api.cs](../src/lib/src/Api/Api.cs) の `LockData` / `LockInode` ヘルパ参照)。`pg_advisory_xact_lock(ns, key)` の 2-key 形式と違って single column PK しか持てないので、namespace は値の側で表現するしかない。
+`data lock = target_id = data_id (正)`、`inode lock = target_id = -inode_id (負)` で値の符号で namespace を分ける ([Api.cs](../src/core/src/Api/Api.cs) の `LockData` / `LockInode` ヘルパ参照)。`pg_advisory_xact_lock(ns, key)` の 2-key 形式と違って single column PK しか持てないので、namespace は値の側で表現するしかない。
 
 代替案として `pgfs_inode_lock` を別テーブルに切り出せば、inode lock を `parent_id` 分散 (data と別 colocation group) にして inode 操作の cross-shard hop を削れ、運用統計も分けやすい。テーブルを 1 つ余計に作るほど運用パターンが固まっていないので、まずは単一 `pgfs_lock` + 符号 namespace で始め、inode lock の workload が支配的と分かったら `pgfs_inode_lock` に再編する余地を残す。
 
@@ -353,7 +353,7 @@ COMMIT;   -- 行ロックは tx 終了で自動解放
 
   当面は許容するが、inode lock が支配的な workload が見えてきたら `pgfs_inode_lock` を別テーブルにして `parent_id` 分散 + `pgfs_inode` と co-located にすることで非対称を解消できる。
 - **Citus で複数 shard を跨ぐロック**: `WHERE target_id IN (a, b)` で a と b が別 shard だと取得順序が非決定的になりデッドロックリスクが上がる。**1 SQL = 1 ロック単位** を守る (ヘルパは 1 件ずつ取る形)。
-- **取り忘れ**: `LockData` / `LockInode` を呼ばずに `WriteData` 等を書くと race が起きる。コードレビューで全 mutation path を確認する規律が必要。`Api.WriteData(...)` の冒頭で `LockData` を呼ぶ規約を [Api.cs](../src/lib/src/Api/Api.cs) のクラス doc にも明記する。
+- **取り忘れ**: `LockData` / `LockInode` を呼ばずに `WriteData` 等を書くと race が起きる。コードレビューで全 mutation path を確認する規律が必要。`Api.WriteData(...)` の冒頭で `LockData` を呼ぶ規約を [Api.cs](../src/core/src/Api/Api.cs) のクラス doc にも明記する。
 - **アプリ側のデッドロック**: 同じスレッドが入れ子で `LockData(A)` → `LockData(B)` のように複数取ると、別スレッドが逆順で取ると hang。**lock の取得順は target_id 昇順** をプロジェクト規約として固定する。
 
 ---
@@ -387,5 +387,5 @@ COMMIT;   -- 行ロックは tx 終了で自動解放
 - [Citus docs](https://docs.citusdata.com/) — distributed table 一般
 - [docs/database.md](database.md) — 現行スキーマ
 - [docs/history.md](history.md) — Notify (cross-client change notification) の設計
-- [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) — データアクセス実装
+- [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) — データアクセス実装
 - [docs/performance.md](performance.md) — InodeCache の性能改善案 (cross-shard hop 緩和に効く)

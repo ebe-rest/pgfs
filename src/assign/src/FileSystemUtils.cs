@@ -4,14 +4,14 @@ using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.Json;
-using Lib.Api;
-using Lib.Models;
+using Core.Api;
+using Core.Models;
 
 /// <summary>
 /// Translates PGFS's Linux-style inode attributes (st_mode, etc.) into Windows <see cref="FileAttributes"/>.
 /// Windows-specific logic (root -&gt; administrator name resolution, SetOwnership, etc.) also lives here.
 ///
-/// Uses constants from <see cref="Lib.Api.Mode"/> such as S_IFDIR / S_IFREG / S_IFLNK / S_IRWXU.
+/// Uses constants from <see cref="Core.Api.Mode"/> such as S_IFDIR / S_IFREG / S_IFLNK / S_IRWXU.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class FileSystemUtils

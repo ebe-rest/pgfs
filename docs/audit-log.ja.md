@@ -70,7 +70,7 @@ chmod / chown / 削除 / リネーム / 作成 / ハードリンクといった 
 
 ## 呼び出し元コンテキストの配線
 
-操作ごとに変わる「誰が」は OS 層 (Mount / Assign) でしか取れないため、`Pgfs.Lib.Models.AuditContext` を **ambient (`AsyncLocal`)** で Api に渡す。各 FUSE / Dokan コールバックの先頭で `AuditContext.Current` をセットし、Api はフック時にそれを読む。
+操作ごとに変わる「誰が」は OS 層 (Mount / Assign) でしか取れないため、`Pgfs.Core.Models.AuditContext` を **ambient (`AsyncLocal`)** で Api に渡す。各 FUSE / Dokan コールバックの先頭で `AuditContext.Current` をセットし、Api はフック時にそれを読む。
 
 `AuditContext` には per-call で変わる `Uid` / `Uname` / `Domain` のみを載せる。`caller_host` はプロセス定数なので Api がコンストラクタで 1 回 `Dns.GetHostName()` 解決し、`caller_ip` は INSERT 内で `inet_client_addr()` をサーバ側評価する (どちらも `AuditContext` には入れない)。
 
@@ -86,7 +86,7 @@ chmod / chown / 削除 / リネーム / 作成 / ハードリンクといった 
 - caller_host は「どのマシンが操作したか」、caller_ip は「PG から見た接続元」。複数クライアントが同一の DB-FS を叩く構成で「どのクライアントの誰が」を後から追える。
 - OS 層は各 mutating コールバックの先頭で `SetAuditContext()` を呼んで `AuditContext.Current` を立てる (audit 無効時や取得失敗時は null = caller_* が NULL になるだけ)。
 
-## フック箇所 ([src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs))
+## フック箇所 ([src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs))
 
 成功 (`rows > 0` / 戻り値非 null) を確認した後、**同一 tx 内** で `WriteAudit` を呼ぶ。
 
@@ -113,8 +113,8 @@ chmod / chown / 削除 / リネーム / 作成 / ハードリンクといった 
 
 3 レイヤ:
 
-1. **設定 / スキーマ**: [Schema.Audit.Enabled](../src/lib/src/Config/Schema.cs) + [AuditConfig](../src/lib/src/Config/AuditConfig.cs) + `ConfigLoader` 配線、[docs/ddl/pgfs_audit.sql](ddl/pgfs_audit.sql)、mkfs [CreateAuditTableAsync](../src/mkfs/src/Initializer.cs) + 設定行投入。
-2. **Api フック**: [AuditContext](../src/lib/src/Models/AuditContext.cs) ambient、[Api.WriteAudit / EnsureAuditPartition](../src/lib/src/Api/Api.cs)、6 メソッドにフック、`InsertInode` の tx 化。
+1. **設定 / スキーマ**: [Schema.Audit.Enabled](../src/core/src/Config/Schema.cs) + [AuditConfig](../src/core/src/Config/AuditConfig.cs) + `ConfigLoader` 配線、[docs/ddl/pgfs_audit.sql](ddl/pgfs_audit.sql)、mkfs [CreateAuditTableAsync](../src/mkfs/src/Initializer.cs) + 設定行投入。
+2. **Api フック**: [AuditContext](../src/core/src/Models/AuditContext.cs) ambient、[Api.WriteAudit / EnsureAuditPartition](../src/core/src/Api/Api.cs)、6 メソッドにフック、`InsertInode` の tx 化。
 3. **呼び出し元プラミング**: Tmds.Fuse フォークに `fuse_get_context` ([LibFuse.cs](../vendor/Tmds.Fuse/src/Tmds.Fuse/LibFuse.cs) / `Fuse.TryGetCallerContext`)、[mount/FileSystem.cs](../src/mount/src/FileSystem.cs) の 9 コールバック・[assign/FileSystem.cs](../src/assign/src/FileSystem.cs) の CreateFile/Cleanup/SetFileAttributes/MoveFile で `SetAuditContext`。
 
 ## テスト

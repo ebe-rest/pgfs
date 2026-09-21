@@ -45,7 +45,7 @@ Rejected:
 
 ## Cross-client locking
 
-Cross-client mutual exclusion using row locks on `pgfs_lock(target_id BIGINT PK)`, integrated into [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs). The design details, the integration points, and the lock-acquisition SQL are authoritatively in [support_for_citus.md §locking](support_for_citus.md). The decisions:
+Cross-client mutual exclusion using row locks on `pgfs_lock(target_id BIGINT PK)`, integrated into [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs). The design details, the integration points, and the lock-acquisition SQL are authoritatively in [support_for_citus.md §locking](support_for_citus.md). The decisions:
 
 - **why "a custom TTL table + heartbeat" and `pg_advisory_xact_lock` were not adopted**: a TTL race / coordinator-local constraints / not Citus-distributable (details in the support_for_citus.md alternatives comparison).
 - **namespace separation implemented by "the sign of target_id", not "a separate table"**: Citus's single-column distribution constraint forces the 1-column `pgfs_lock(target_id BIGINT PK)`, so namespaces are separated by the sign of the value (`+data_id` / `-inode_id`). The "split pgfs_inode_lock into a separate table distributed + co-located by parent_id" option is left as room to reorganize if inode locks turn out to be the dominant workload with asymmetric cost.
@@ -66,7 +66,7 @@ Cross-client mutual exclusion using row locks on `pgfs_lock(target_id BIGINT PK)
 
 ## The configuration model
 
-The configuration is **static `Field<T>` descriptors + mutable POCOs + `ConfigLoader` (unifying CLI/TOML/DB/Default) + `ConfigStore` (DB I/O)**, under [src/lib/src/Config/](../src/lib/src/Config/). The Schema is [src/lib/src/Config/Schema.cs](../src/lib/src/Config/Schema.cs) (it enumerates all Fields automatically via reflection).
+The configuration is **static `Field<T>` descriptors + mutable POCOs + `ConfigLoader` (unifying CLI/TOML/DB/Default) + `ConfigStore` (DB I/O)**, under [src/core/src/Config/](../src/core/src/Config/). The Schema is [src/core/src/Config/Schema.cs](../src/core/src/Config/Schema.cs) (it enumerates all Fields automatically via reflection).
 
 - **immutable enough with POCOs**: in the current code there is no setting that is rewritten during a mount (see the lifecycle aggregation in [settings-matrix.md](settings-matrix.md)), which is the rationale for plain mutable POCOs rather than a "smart" change-tracking tree.
 - **`pgfs_settings` is a flat `(scope, key, value)` PK**: the flat key avoids a recursive CTE entirely (an earlier hierarchical `(id, parent_id, key, value)` form required a recursive CTE to read). The root inode uses `id = 0` for the same reason — BIGSERIAL never returns 0, so a self-referencing `(id=0, parent_id=0)` row cannot collide with real rows, and no cycle detection is needed.
@@ -92,7 +92,7 @@ This resolves 3 constraints of the upstream version:
 
 ## /etc/fstab and mount(8) integration
 
-[`ConfigLoader.ParseCli`](../src/lib/src/Config/ConfigLoader.cs) has a built-in parser for positional arguments (source=connection or setting.file / target=mount-point) and `-o key=val,flag,...`. The first positional is `database.connection` (URL form) if it starts with `postgresql:`, otherwise `setting.file` (a TOML path) — a heuristic letting `mount.pgfs postgresql://... /mnt/pgfs` and `mount.pgfs /etc/pgfs.toml /mnt/pgfs` coexist (the kv form is indistinguishable, so `-c` is required).
+[`ConfigLoader.ParseCli`](../src/core/src/Config/ConfigLoader.cs) has a built-in parser for positional arguments (source=connection or setting.file / target=mount-point) and `-o key=val,flag,...`. The first positional is `database.connection` (URL form) if it starts with `postgresql:`, otherwise `setting.file` (a TOML path) — a heuristic letting `mount.pgfs postgresql://... /mnt/pgfs` and `mount.pgfs /etc/pgfs.toml /mnt/pgfs` coexist (the kv form is indistinguishable, so `-c` is required).
 
 Unrelated flags from the fstab/mount(8) helper (`-i`, `-f`, `-n`, `-s`, `-v`, `-N`, `-t`, `_netdev`, `noauto`, ...) are silently skipped **only in helper context**. The helper-context decision is the AND of (a) `args` has a positional and (b) the parent process comm (`/proc/<ppid>/comm`) is `"mount"`. On non-Linux it is always treated as direct execution. So `-f` (= setting.file short form) / `-s` (= database.schema short form) work **only in direct execution**.
 
@@ -106,7 +106,7 @@ Full spec in [fstab-support.md](fstab-support.md). Verified end to end with a re
 
 ## Connection retry
 
-A lightweight in-house helper ([src/lib/src/Utility/Retry.cs](../src/lib/src/Utility/Retry.cs)) wraps `Pg.OpenConnection` / `OpenConnectionAsync` (rather than pulling in Polly). The transient decision is `SocketException` / `TimeoutException` / a list of `PostgresException` SqlStates (`57P03` / `57P01` / `57P02` / `08000` / `08003` / `08006` / `08001` / `08004` / `53300`) / other `NpgsqlException`.
+A lightweight in-house helper ([src/core/src/Utility/Retry.cs](../src/core/src/Utility/Retry.cs)) wraps `Pg.OpenConnection` / `OpenConnectionAsync` (rather than pulling in Polly). The transient decision is `SocketException` / `TimeoutException` / a list of `PostgresException` SqlStates (`57P03` / `57P01` / `57P02` / `08000` / `08003` / `08006` / `08001` / `08004` / `53300`) / other `NpgsqlException`.
 
 **Exceptions during query execution are not retried** (to keep write idempotency, retry is limited to connection-open time). The exponential backoff is controlled by `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` (default 5 / 200ms / 2000ms), read by the `Api` ctor and applied globally via `Retry.Configure`.
 
@@ -114,7 +114,7 @@ A lightweight in-house helper ([src/lib/src/Utility/Retry.cs](../src/lib/src/Uti
 
 ## Cross-client change notification
 
-Cross-client change propagation using PostgreSQL `LISTEN` / `NOTIFY` ([src/lib/src/Api/NotifyChannel.cs](../src/lib/src/Api/NotifyChannel.cs) + [src/lib/src/Api/RemoteChangeInfo.cs](../src/lib/src/Api/RemoteChangeInfo.cs)).
+Cross-client change propagation using PostgreSQL `LISTEN` / `NOTIFY` ([src/core/src/Api/NotifyChannel.cs](../src/core/src/Api/NotifyChannel.cs) + [src/core/src/Api/RemoteChangeInfo.cs](../src/core/src/Api/RemoteChangeInfo.cs)).
 
 - **opt-in**: `database.notify_enabled` (default false). Enabled by any of CLI `--notify`, TOML `[database] notify_enabled = true`, `-o notify-enabled`. There is the overhead of 1 dedicated connection + a `SELECT pg_notify(...)` on each write, so OFF is preferable for single-client operation.
 - **channel name**: `{schema}_{prefix}notify` (e.g. `pgfs_pgfs_notify`). No collision even with multiple pgfs instances in one DB.
@@ -151,11 +151,11 @@ The Windows e2e ([tests/windows/](../tests/windows/README.md)) has 26 tests symm
 
 PGFS is not an authentication system; it is **storage that holds name-based ACLs**. It persists no UID/GID/SID/GUID and keeps no user/group database — each OS resolves names at runtime. The internal model takes **POSIX ACLs as canonical** and renders the **Windows ACL as a lossy projection view** of them. The authoritative design is [permission-interop.md](permission-interop.md) (with a diagram in [permission-interop-diagram.html](permission-interop-diagram.html)).
 
-- **Name normalization is the core.** owner / group / principal names — and the caller's own name — are normalized identically on store and on match: strip domain (`DOMAIN\name` and `name@domain`), fold fullwidth ASCII to halfwidth, lowercase. This overrides Linux's native case-sensitivity in the pgfs layer so both OSes treat `alice`=`Alice`=`Ａlice` the same. The shared helper is [NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs), inserted into the store/resolve/caller paths of the resolvers and the mount FileSystem.
+- **Name normalization is the core.** owner / group / principal names — and the caller's own name — are normalized identically on store and on match: strip domain (`DOMAIN\name` and `name@domain`), fold fullwidth ASCII to halfwidth, lowercase. This overrides Linux's native case-sensitivity in the pgfs layer so both OSes treat `alice`=`Alice`=`Ａlice` the same. The shared helper is [NameNormalizer](../src/core/src/Utility/NameNormalizer.cs), inserted into the store/resolve/caller paths of the resolvers and the mount FileSystem.
 - **The DB stores Linux names**, and each driver maps well-known principals both ways: `root`↔`Administrator(s)`, `nobody`/`nogroup`↔`NT AUTHORITY\ANONYMOUS LOGON`, `other`↔`Everyone` (in [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs)). An unresolved name is never rewritten in storage; it resolves to `nobody`/`nogroup` only at evaluation time.
-- **The ACL model is POSIX-only, allow only.** `mode` is the canonical source for the owner/group/other base classes; named user/group entries plus a recomputed mask live in a canonical ACL document ([PgfsAcl](../src/lib/src/Models/PgfsAcl.cs)) stored as JSON in the `user.pgfs_acl` xattr (with a `default[]` for directory inheritance). No schema change.
+- **The ACL model is POSIX-only, allow only.** `mode` is the canonical source for the owner/group/other base classes; named user/group entries plus a recomputed mask live in a canonical ACL document ([PgfsAcl](../src/core/src/Models/PgfsAcl.cs)) stored as JSON in the `user.pgfs_acl` xattr (with a `default[]` for directory inheritance). No schema change.
 - **Windows is a projection view.** `GetFileSecurity` projects the inode (owner/group→SID, mode→owner/group/Everyone allow ACEs, named entries from `user.pgfs_acl`) onto a security descriptor; `SetFileSecurity` reverse-projects an incoming SD back to mode + named ACL + owner/group. deny ACEs, ACE ordering, and inheritance flags have no POSIX equivalent and are dropped in projection — so an exact Windows ⇄ Windows ACL match is not guaranteed, in exchange for a far simpler implementation (no verbatim store/restore). When a group SID arrives as the owner, it is routed to `owner=nobody` / the group field, so the group is not lost to Linux owner resolution.
-- **Linux round-trips the same canonical store** through `system.posix_acl_access`: the [PosixAcl](../src/lib/src/Models/PosixAcl.cs) codec converts the ACL binary to/from `st_mode`'s base classes + `user.pgfs_acl` named entries, recomputing the mask each time; a minimal ACL with no named entries returns ENODATA, matching getfacl's convention of deriving from mode. `system.posix_acl_default` is currently a pass-through (Linux-internal round-trip only).
+- **Linux round-trips the same canonical store** through `system.posix_acl_access`: the [PosixAcl](../src/core/src/Models/PosixAcl.cs) codec converts the ACL binary to/from `st_mode`'s base classes + `user.pgfs_acl` named entries, recomputing the mask each time; a minimal ACL with no named entries returns ENODATA, matching getfacl's convention of deriving from mode. `system.posix_acl_default` is currently a pass-through (Linux-internal round-trip only).
 - **Enforcement and deferred work.** Both sides display and round-trip the canonical store (`ls -l` / the Windows Security tab / `getfacl` all reflect it). Owner-match decisions use the normalized stored names. Strict kernel-level enforcement of named ACLs on Linux, the Windows-inheritance translation of `system.posix_acl_default`, and automated cross-OS round-trip tests are deferred until a workload requires them.
 
 ---

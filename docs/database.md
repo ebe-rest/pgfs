@@ -85,7 +85,7 @@ The file body is stored as bytea chunks: one chunk = one bytea (1MB by default).
 
 DDL: [docs/ddl/pgfs_settings.sql](ddl/pgfs_settings.sql)
 
-A simple key-value store with a flat `(scope, key)` PK. One row = the persisted value of one [`Pgfs.Lib.Config.Field`](../src/lib/src/Config/Field.cs). Reading and writing are handled by `LoadAll` / `Save<T>` in [`Pgfs.Lib.Config.ConfigStore`](../src/lib/src/Config/ConfigStore.cs).
+A simple key-value store with a flat `(scope, key)` PK. One row = the persisted value of one [`Pgfs.Core.Config.Field`](../src/core/src/Config/Field.cs). Reading and writing are handled by `LoadAll` / `Save<T>` in [`Pgfs.Core.Config.ConfigStore`](../src/core/src/Config/ConfigStore.cs).
 
 | Column       | Type        | NULL       | DEFAULT             | INDEX | Description                                                       |
 |:-------------|:------------|:-----------|---------------------|-------|:-----------------------------------------------------------------|

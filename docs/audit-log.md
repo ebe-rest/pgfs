@@ -70,7 +70,7 @@ The workaround: **ensure the partition (`EnsureAuditPartition`) on a separate co
 
 ## Wiring the caller context
 
-The per-operation "who" can only be obtained at the OS layer (Mount / Assign), so `Pgfs.Lib.Models.AuditContext` is passed to the Api as an **ambient (`AsyncLocal`)** value. Each FUSE / Dokan callback sets `AuditContext.Current` at its start, and the Api reads it at hook time.
+The per-operation "who" can only be obtained at the OS layer (Mount / Assign), so `Pgfs.Core.Models.AuditContext` is passed to the Api as an **ambient (`AsyncLocal`)** value. Each FUSE / Dokan callback sets `AuditContext.Current` at its start, and the Api reads it at hook time.
 
 `AuditContext` carries only the per-call `Uid` / `Uname` / `Domain`. `caller_host` is a process constant, so the Api resolves `Dns.GetHostName()` once in its constructor, and `caller_ip` is evaluated server-side in the INSERT with `inet_client_addr()` (neither goes into `AuditContext`).
 
@@ -86,7 +86,7 @@ The per-operation "who" can only be obtained at the OS layer (Mount / Assign), s
 - caller_host is "which machine performed the operation", caller_ip is "the connection source as seen by PG". In a setup where multiple clients hit the same DB-FS, you can later trace "which client's who".
 - The OS layer calls `SetAuditContext()` at the start of each mutating callback to set `AuditContext.Current` (when auditing is disabled or retrieval fails, it sets null = caller_* just become NULL).
 
-## Hook points ([src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs))
+## Hook points ([src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs))
 
 After confirming success (`rows > 0` / non-null return), `WriteAudit` is called **within the same tx**.
 
@@ -113,8 +113,8 @@ After confirming success (`rows > 0` / non-null return), `WriteAudit` is called 
 
 Three layers:
 
-1. **Settings / schema**: [Schema.Audit.Enabled](../src/lib/src/Config/Schema.cs) + [AuditConfig](../src/lib/src/Config/AuditConfig.cs) + `ConfigLoader` wiring, [docs/ddl/pgfs_audit.sql](ddl/pgfs_audit.sql), mkfs [CreateAuditTableAsync](../src/mkfs/src/Initializer.cs) + the settings-row insertion.
-2. **Api hooks**: the [AuditContext](../src/lib/src/Models/AuditContext.cs) ambient, [Api.WriteAudit / EnsureAuditPartition](../src/lib/src/Api/Api.cs), hooks on the 6 methods, the transactionalization of `InsertInode`.
+1. **Settings / schema**: [Schema.Audit.Enabled](../src/core/src/Config/Schema.cs) + [AuditConfig](../src/core/src/Config/AuditConfig.cs) + `ConfigLoader` wiring, [docs/ddl/pgfs_audit.sql](ddl/pgfs_audit.sql), mkfs [CreateAuditTableAsync](../src/mkfs/src/Initializer.cs) + the settings-row insertion.
+2. **Api hooks**: the [AuditContext](../src/core/src/Models/AuditContext.cs) ambient, [Api.WriteAudit / EnsureAuditPartition](../src/core/src/Api/Api.cs), hooks on the 6 methods, the transactionalization of `InsertInode`.
 3. **Caller plumbing**: `fuse_get_context` in the Tmds.Fuse fork ([LibFuse.cs](../vendor/Tmds.Fuse/src/Tmds.Fuse/LibFuse.cs) / `Fuse.TryGetCallerContext`), `SetAuditContext` in the 9 callbacks of [mount/FileSystem.cs](../src/mount/src/FileSystem.cs) and in CreateFile/Cleanup/SetFileAttributes/MoveFile of [assign/FileSystem.cs](../src/assign/src/FileSystem.cs).
 
 ## Tests

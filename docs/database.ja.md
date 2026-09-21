@@ -85,7 +85,7 @@ DDL: [docs/ddl/pgfs_data_chunk.sql](ddl/pgfs_data_chunk.sql)
 
 DDL: [docs/ddl/pgfs_settings.sql](ddl/pgfs_settings.sql)
 
-フラット `(scope, key)` PK の単純な key-value ストア。1 行 = 1 つの [`Pgfs.Lib.Config.Field`](../src/lib/src/Config/Field.cs) の永続化値です。読み書きは [`Pgfs.Lib.Config.ConfigStore`](../src/lib/src/Config/ConfigStore.cs) の `LoadAll` / `Save<T>` が担当します。
+フラット `(scope, key)` PK の単純な key-value ストア。1 行 = 1 つの [`Pgfs.Core.Config.Field`](../src/core/src/Config/Field.cs) の永続化値です。読み書きは [`Pgfs.Core.Config.ConfigStore`](../src/core/src/Config/ConfigStore.cs) の `LoadAll` / `Save<T>` が担当します。
 
 | カラム名     | データ型     | NULL       | DEFAULT             | INDEX | 説明                                                       |
 |:-------------|:------------|:-----------|---------------------|-------|:-----------------------------------------------------------|

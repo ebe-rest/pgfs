@@ -9,17 +9,17 @@ For the Japanese version see [df-support.ja.md](df-support.ja.md).
 Status: **implemented**. The non-Citus full chain, the Citus multi-worker aggregation, and
 `df` over a live mount have all been verified on real hardware. This document is the source of truth.
 
-Implementation: [Schema.Statfs.Mode](../src/lib/src/Config/Schema.cs) (`--statfs`) /
+Implementation: [Schema.Statfs.Mode](../src/core/src/Config/Schema.cs) (`--statfs`) /
 [Initializer.CreateStatfsFunctionsAsync](../src/mkfs/src/Initializer.cs) (function creation) /
-[Api.GetStatFs](../src/lib/src/Api/Api.cs) (call site + a few-second cache + nominal fallback) /
+[Api.GetStatFs](../src/core/src/Api/Api.cs) (call site + a few-second cache + nominal fallback) /
 the wiring in [mount StatFS](../src/mount/src/FileSystem.cs) + [assign GetDiskFreeSpace](../src/assign/src/FileSystem.cs).
 
 ## Motivation / current state
 
 The naive [`FileSystem.StatFS`](../src/mount/src/FileSystem.cs) returns this pseudo disk information:
 
-- capacity = [`Api.GetCapacityBytes`](../src/lib/src/Api/Api.cs) = `file_system.max_file_size` (nominal capacity)
-- used = [`Api.GetTotalUsedBytes`](../src/lib/src/Api/Api.cs) = `pg_database_size(...)`
+- capacity = [`Api.GetCapacityBytes`](../src/core/src/Api/Api.cs) = `file_system.max_file_size` (nominal capacity)
+- used = [`Api.GetTotalUsedBytes`](../src/core/src/Api/Api.cs) = `pg_database_size(...)`
 - free = capacity − used
 
 That is "nominal capacity − DB size", **not the real free space of the underlying FS**. We want
@@ -119,7 +119,7 @@ Notes on the aggregation semantics (accepted as a `df` display convention):
 calls `SELECT total, avail FROM {prefix}statfs()` through an `Api` method.
 
 **One more fallback on the C# side**: if the function does not exist / errors / `avail IS NULL`, fall back to
-[`GetCapacityBytes`](../src/lib/src/Api/Api.cs) − [`GetTotalUsedBytes`](../src/lib/src/Api/Api.cs)
+[`GetCapacityBytes`](../src/core/src/Api/Api.cs) − [`GetTotalUsedBytes`](../src/core/src/Api/Api.cs)
 (= nominal capacity − DB size). This keeps "plain PG, an old endpoint, no df" from breaking.
 
 The full fallback chain:
@@ -186,14 +186,14 @@ This feature runs **on the PG server side**, so what matters is the *PG host's O
 ## Implementation summary
 
 1. `app.statfs` in `Schema` (`StringField`, `SaveTo=Db`, `AppliesTo=Mkfs`, default `auto`) + value validation in mkfs.
-2. mkfs CLI `--statfs` / `--statfs-mode` wiring ([Schema.Statfs.Mode](../src/lib/src/Config/Schema.cs)).
+2. mkfs CLI `--statfs` / `--statfs-mode` wiring ([Schema.Statfs.Mode](../src/core/src/Config/Schema.cs)).
 3. [`Initializer.CreateStatfsFunctionsAsync`](../src/mkfs/src/Initializer.cs):
    - `auto`/`require`: `CREATE EXTENSION IF NOT EXISTS plperlu` (fail under require if impossible, nominal fallback under auto)
      → create `{prefix}statvfs` (plperlu) / `{prefix}fs_free` / `{prefix}statfs`. **`fs_free`/`statfs` are `SECURITY DEFINER`**.
    - `nominal`: **DROP** the existing `{prefix}statfs`/`fs_free`/`statvfs`. `auto`+plperlu-absent: create no functions.
    - On Citus, place statvfs/fs_free on every node with `run_command_on_all_nodes`; the `statfs` entry point is
      coordinator-only (worker aggregation via `run_command_on_workers`, local on a single node).
-4. [`Api.GetStatFs()`](../src/lib/src/Api/Api.cs) (→ `SELECT total, avail FROM {prefix}statfs()`) + a few-second cache + nominal fallback when the function is missing/fails.
+4. [`Api.GetStatFs()`](../src/core/src/Api/Api.cs) (→ `SELECT total, avail FROM {prefix}statfs()`) + a few-second cache + nominal fallback when the function is missing/fails.
 5. Switch [`FileSystem.StatFS`](../src/mount/src/FileSystem.cs) (mount) and assign [`GetDiskFreeSpace`](../src/assign/src/FileSystem.cs) to go through `GetStatFs()`.
 6. (future) double-count correction for replication_factor>1 / real Windows measurement / all-node ensure at mount time / a C implementation.
 

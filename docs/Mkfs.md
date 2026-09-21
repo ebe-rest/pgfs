@@ -2,7 +2,7 @@
 
 Specification for `mkfs.pgfs`, the tool that initializes a PGFS filesystem on a PostgreSQL database.
 
-This document describes the specification as implemented in [src/mkfs/](../src/mkfs/) (built on `Pgfs.Lib.Config`). Provisional and unsupported items are listed under "Provisional implementation".
+This document describes the specification as implemented in [src/mkfs/](../src/mkfs/) (built on `Pgfs.Core.Config`). Provisional and unsupported items are listed under "Provisional implementation".
 
 A Japanese translation is available in [Mkfs.ja.md](Mkfs.ja.md).
 
@@ -39,11 +39,11 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 
 Precedence (last wins): **defaults < DB < settings file (TOML) < command-line arguments**.
 
-Internally, [`ConfigLoader`](../src/lib/src/Config/ConfigLoader.cs) runs the CLI -> TOML -> DB -> defaults sources and merges them in one pass. With `--clean`, `skipToml = true` deliberately ignores the TOML.
+Internally, [`ConfigLoader`](../src/core/src/Config/ConfigLoader.cs) runs the CLI -> TOML -> DB -> defaults sources and merges them in one pass. With `--clean`, `skipToml = true` deliberately ignores the TOML.
 
 ## Command-line options
 
-These are defined by the `CliOptions` of each `Field<T>` in [src/lib/src/Config/Schema.cs](../src/lib/src/Config/Schema.cs). The tables below are an excerpt.
+These are defined by the `CliOptions` of each `Field<T>` in [src/core/src/Config/Schema.cs](../src/core/src/Config/Schema.cs). The tables below are an excerpt.
 
 ### Connection (PGFS user)
 
@@ -215,7 +215,7 @@ PK = `target_id` only. No audit columns (it holds lock tokens, not data).
 
 ### `{prefix}settings`
 
-A flat `(scope, key)` PK. [`ConfigStore.Save<T>`](../src/lib/src/Config/ConfigStore.cs) UPSERTs here and [`ConfigStore.LoadAll`](../src/lib/src/Config/ConfigStore.cs) reads from here.
+A flat `(scope, key)` PK. [`ConfigStore.Save<T>`](../src/core/src/Config/ConfigStore.cs) UPSERTs here and [`ConfigStore.LoadAll`](../src/core/src/Config/ConfigStore.cs) reads from here.
 
 | Column | Type | NULL | DEFAULT |
 |---|---|---|---|
@@ -299,7 +299,7 @@ mkfs is essentially cross-platform, but the following assume **execution on Linu
   sudo chmod 0700 /var/lib/pgfs
   ```
   This depends on the machine's OS / layout, so mkfs does not automate it. On macOS the `postgres` user's uid/gid differ. On Windows you would need to configure NTFS ACLs, which mkfs does not handle yet.
-- **The default mount point** is `/mnt/pgfs` (the Linux/macOS default of [`Schema.Mount.MountPoint`](../src/lib/src/Config/Schema.cs)). On Windows it is `P:`.
+- **The default mount point** is `/mnt/pgfs` (the Linux/macOS default of [`Schema.Mount.MountPoint`](../src/core/src/Config/Schema.cs)). On Windows it is `P:`.
 - **The root inode's `st_mode = 16877 (0o40755)`** represents a POSIX directory + `rwxr-xr-x`. Windows junctions are distinguished by the `is_junction` column ([docs/database.md](database.md)).
 
 Everything else (connection strings, SQL queries, table definitions, etc.) is cross-platform.
@@ -330,7 +330,7 @@ Everything else (connection strings, SQL queries, table definitions, etc.) is cr
 - **[Program.cs](../src/mkfs/src/Program.cs)**: builds a `RootConfig` from CLI / TOML / defaults via `ConfigLoader` (with `skipToml: true` under `--clean`) -> `Initializer.InitializeAsync` -> writes the SaveTo=File values to the TOML.
 - **[Initializer.cs](../src/mkfs/src/Initializer.cs)**: implements each step in "Role" above. All SQL is issued via `Pg.ExecuteAsync` / `Pg.QueryAsync`. Table creation is centralized in the `CreateTableAsync` helper. SaveTo=Db values are UPSERTed into `pgfs_settings` via `ConfigStore.Save<T>`.
 
-The configuration model reuses `RootConfig` / `Schema` from [src/lib/src/Config/](../src/lib/src/Config/) directly. No mkfs-specific configuration classes are created.
+The configuration model reuses `RootConfig` / `Schema` from [src/core/src/Config/](../src/core/src/Config/) directly. No mkfs-specific configuration classes are created.
 
 ## References
 

@@ -2,7 +2,7 @@
 
 一連の設定モデル変更と、それに連なる Citus カスタム tablespace 対応の設計。**設定モデルは
 プロジェクト指針が「慎重に」と指定する領域**なので、本書で設計を固めてから実装する。設定項目の正は
-[Schema.cs](../src/lib/src/Config/Schema.cs) / [settings-matrix.md](settings-matrix.md)。
+[Schema.cs](../src/core/src/Config/Schema.cs) / [settings-matrix.md](settings-matrix.md)。
 
 英語版は [settings-and-plperlu.md](settings-and-plperlu.md) を参照してください。
 
@@ -42,8 +42,8 @@ CLI:
 | `--allow-plperlu` | allow | **bare 専用の固定 true 別名** (値は取らない) |
 | `--deny-plperlu` | deny | **bare 専用の固定 false 別名** (値は取らない) |
 
-実装: [Field](../src/lib/src/Config/Field.cs)/`BoolField` に **固定 false の別名集合 (negated CliOptions)** の概念を足す。
-[ConfigLoader](../src/lib/src/Config/ConfigLoader.cs) の bool パースを拡張:
+実装: [Field](../src/core/src/Config/Field.cs)/`BoolField` に **固定 false の別名集合 (negated CliOptions)** の概念を足す。
+[ConfigLoader](../src/core/src/Config/ConfigLoader.cs) の bool パースを拡張:
 - canonical / 正の別名 (`--plperlu` / `--allow-plperlu`) にマッチ → true をセットし、**直後の引数が `true`/`false`
   リテラルならそれを値として消費**、そうでなければ bare=true のまま。
 - negated 別名 (`--deny-plperlu`) にマッチ → false をセット (値は飲まない)。
@@ -122,15 +122,15 @@ file_system サイズ系が新たに DB 行として増える)。
 
 ## 触る場所
 
-- [Schema.cs](../src/lib/src/Config/Schema.cs): `app` nested class 新設 (`Plperlu` / `Statfs`)、`FileSystem`
+- [Schema.cs](../src/core/src/Config/Schema.cs): `app` nested class 新設 (`Plperlu` / `Statfs`)、`FileSystem`
   サイズ系の SaveTo 変更、`Database.Citus` の SaveTo 変更。
-- [ConfigLoader.cs](../src/lib/src/Config/ConfigLoader.cs): bool が `true|false` を任意に飲む拡張、別名処理。
-- [RootConfig](../src/lib/src/Config/RootConfig.cs) + 各 `*Config` POCO: `AppConfig` 追加、`StatfsConfig`/
+- [ConfigLoader.cs](../src/core/src/Config/ConfigLoader.cs): bool が `true|false` を任意に飲む拡張、別名処理。
+- [RootConfig](../src/core/src/Config/RootConfig.cs) + 各 `*Config` POCO: `AppConfig` 追加、`StatfsConfig`/
   `DatabaseConfig` の所属替え。Build* の配線。
 - [Initializer.cs](../src/mkfs/src/Initializer.cs): plperlu ゲート参照、tablespace auto-mkdir、ガード撤廃、
   per-table TABLESPACE 句廃止 + CREATE DATABASE WITH TABLESPACE 化、PopulateSettingsRows に新キー。
 - [settings-matrix.md](settings-matrix.md): 表を更新。
-- ヘルプ ([HelpText](../src/lib/src/Config/HelpText.cs)) は Schema から自動生成なので追従。
+- ヘルプ ([HelpText](../src/core/src/Config/HelpText.cs)) は Schema から自動生成なので追従。
 
 ## (F) mkfs 生成 toml に「配布用 mkfs パラメータ」をコメントで残す
 
@@ -141,7 +141,7 @@ mkfs が toml を書き出すとき ([WriteTomlFile](../src/mkfs/src/Program.cs)
   配布しない & クライアントは super 不要)。
 - 含める例: `--connection ... --schema pgfs --prefix pgfs_ --citus --statfs require --volume-label pgfs ...`
 - 接続文字列の Password は既に `[database].connection` に平文で出ているので情報漏洩は増えないが、コメント側は
-  [DescribeProvided](../src/lib/src/Config/ConfigLoader.cs) と同様に **Password をマスク**して出す。
+  [DescribeProvided](../src/core/src/Config/ConfigLoader.cs) と同様に **Password をマスク**して出す。
 
 ## 決定事項
 

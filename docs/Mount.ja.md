@@ -2,7 +2,7 @@
 
 PGFS ファイルシステムを **FUSE 経由でマウント** する Linux / macOS 用ツール `mount.pgfs` の仕様です。
 
-このドキュメントは現行実装 ([src/mount/](../src/mount/)) の仕様をまとめたもので、Windows 用の [Pgfs.Assign](../src/assign/) (DokanNet 版) とは別の実行ファイルです。共通部分はすべて [`Pgfs.Lib.Api.Api`](../src/lib/src/Api/Api.cs) に集約されています。
+このドキュメントは現行実装 ([src/mount/](../src/mount/)) の仕様をまとめたもので、Windows 用の [Pgfs.Assign](../src/assign/) (DokanNet 版) とは別の実行ファイルです。共通部分はすべて [`Pgfs.Core.Api.Api`](../src/core/src/Api/Api.cs) に集約されています。
 
 英語版は [Mount.md](Mount.md) を参照してください。
 
@@ -13,7 +13,7 @@ PGFS が初期化された PostgreSQL データベース ([docs/Mkfs.md](Mkfs.md
 ```
 PostgreSQL (pgfs_inode / pgfs_data / pgfs_data_chunk / pgfs_settings)
         ↑↓ Npgsql + Dapper
-    Pgfs.Lib.Api.Api（クロスプラットフォーム）
+    Pgfs.Core.Api.Api（クロスプラットフォーム）
         ↑↓
     Pgfs.Mount.FileSystem : Tmds.Fuse.FuseFileSystemBase（Linux/macOS 固有）
         ↑↓ FUSE
@@ -89,7 +89,7 @@ sudo umount -l /mnt/pgfs     # lazy
 
 ## 設定
 
-設定モデルは [`Pgfs.Lib.Config.RootConfig`](../src/lib/src/Config/RootConfig.cs) を共有しています。Mkfs と同じ TOML 設定ファイルと同じコマンドラインオプションが使えます。詳細は [docs/Mkfs.md](Mkfs.md) を参照。
+設定モデルは [`Pgfs.Core.Config.RootConfig`](../src/core/src/Config/RootConfig.cs) を共有しています。Mkfs と同じ TOML 設定ファイルと同じコマンドラインオプションが使えます。詳細は [docs/Mkfs.md](Mkfs.md) を参照。
 
 mount.pgfs が特に使うのは:
 
@@ -142,7 +142,7 @@ mount.pgfs が特に使うのは:
 
 ## 他クライアント変更通知 (Notify)
 
-`database.notify_enabled=true` で有効化すると、PostgreSQL `LISTEN` / `NOTIFY` 経由で他クライアントの書き込みを受信し、ローカル `InodeCache` を invalidate する ([src/lib/src/Api/NotifyChannel.cs](../src/lib/src/Api/NotifyChannel.cs))。複数の `mount.pgfs` / `pgfs.assign` から同じ PG/pgfs を共有マウントしているときに、書き込みクライアントの変更が他クライアントの `stat` / `ls` に反映される。
+`database.notify_enabled=true` で有効化すると、PostgreSQL `LISTEN` / `NOTIFY` 経由で他クライアントの書き込みを受信し、ローカル `InodeCache` を invalidate する ([src/core/src/Api/NotifyChannel.cs](../src/core/src/Api/NotifyChannel.cs))。複数の `mount.pgfs` / `pgfs.assign` から同じ PG/pgfs を共有マウントしているときに、書き込みクライアントの変更が他クライアントの `stat` / `ls` に反映される。
 
 **Linux 側の制約**: Tmds.Fuse の高レベル API には libfuse の low-level `fuse_lowlevel_notify_inval_*` に相当するエクスポートが無いため、**kernel inode/dentry キャッシュへのアクティブな invalidate ができない**。実用上の影響:
 
@@ -164,12 +164,12 @@ mount.pgfs が特に使うのは:
 │   - FillStat / ResolveOwner    ※Linux 固有              │
 │   - CurrentUserNames           ※Windows でも応用可能     │
 ├─────────────────────────────────────────────────────────┤
-│ Pgfs.Lib.Api.Api             ── DB 操作 (クロスプラットフォーム) │
+│ Pgfs.Core.Api.Api             ── DB 操作 (クロスプラットフォーム) │
 │   - GetByPath / ListChildren / CreateDirectory / ...    │
 ├─────────────────────────────────────────────────────────┤
-│ Pgfs.Lib.Api.InodeCache      ── inode メモリキャッシュ    │
+│ Pgfs.Core.Api.InodeCache      ── inode メモリキャッシュ    │
 ├─────────────────────────────────────────────────────────┤
-│ Pgfs.Lib.Utility.Pg          ── Npgsql + Dapper ラッパ   │
+│ Pgfs.Core.Utility.Pg          ── Npgsql + Dapper ラッパ   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -227,7 +227,7 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 `setfacl` / `getfacl` と往復する。`system.posix_acl_access` の getxattr/setxattr を特別扱いし、ACL バイナリと
 **`st_mode` の基本3クラス + 正準 ACL ドキュメント (`user.pgfs_acl` の named エントリ)** を相互変換する
 ([src/mount/src/FileSystem.cs](../src/mount/src/FileSystem.cs) の `BuildPosixAccessAcl` / `SetPosixAccessAcl`、コーデックは
-[PosixAcl](../src/lib/src/Models/PosixAcl.cs))。
+[PosixAcl](../src/core/src/Models/PosixAcl.cs))。
 
 - entry 順は USER_OBJ → USER* → GROUP_OBJ → GROUP* → MASK → OTHER。mask は group_obj ∪ 全 named を都度再計算。
 - named エントリが無い「最小 ACL」は ENODATA を返し、getfacl が mode から導出する慣習に合わせる。
@@ -241,7 +241,7 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 ### マウントオプション (`-o key=val,flag,...`)
 
 `mount -t pgfs` / fstab / 直接起動のいずれでも `-o` を受け付けます。パースは
-[ConfigLoader.ParseDashOOptions](../src/lib/src/Config/ConfigLoader.cs) が担い、各キーを次の**クラス**の
+[ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs) が担い、各キーを次の**クラス**の
 いずれか 1 つに分類します (互換マップの正はこのメソッド)。`mount(8)` helper 呼び出し規約・fstab エントリ書式・
 起動時自動マウントの詳細は [fstab-support.ja.md](fstab-support.ja.md) を参照。
 
@@ -250,7 +250,7 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 | **(1) FUSE passthrough** | `allow_other` `allow_root` `default_permissions` `ro` `auto_unmount` `kernel_cache` `auto_cache` / 値あり: `umask=022` `uid=` `gid=` `max_read=` `fsname=` `subtype=` `max_write=` `max_readahead=` `entry_timeout=` `attr_timeout=` | libfuse へ verbatim 転送 ([Program.RunFuseMountAsync](../src/mount/src/Program.cs) が `attr_timeout=0` の後ろに連結。後勝ちで上書き可) |
 | **(2) 受理して無視** | `rw` `nonempty` `direct_io` `defaults` `nofail` `noauto` `_netdev` `user(s)` `owner` `group` `noatime` 系 `nostrictatime` `lazytime`/`nolazytime` `mand`/`nomand` `iversion`/`noiversion` `comment=` `nosuid`/`nodev`/`noexec`/`exec` `async`/`sync` 等 | カーネル mount 層 / fstab 慣習。FUSE には**渡さない** (黙って受理) |
 | **(2′) userspace 接頭辞** | `x-systemd.automount` `x-systemd.requires=` `x-gvfs-show` `x-mount.mkdir` | `x-` 接頭辞を一括で (2) と同じく無視 (systemd / gvfs 等が解釈する fstab 拡張) |
-| **(3) pgfs 設定** | `-o schema=foo` `-o cache-max-entries=2048` | `-`/`_` を正規化して設定 [Field](../src/lib/src/Config/Field.cs) に流す (`Scope.Key` / dash-o 名で照合) |
+| **(3) pgfs 設定** | `-o schema=foo` `-o cache-max-entries=2048` | `-`/`_` を正規化して設定 [Field](../src/core/src/Config/Field.cs) に流す (`Scope.Key` / dash-o 名で照合) |
 | **(4) 未知** | `-o allwo_other` (タイポ) | **Warning ログ**を出して無視 (起動時に気づけるように) |
 | **(5) 非対応のマウント操作** | `remount` `bind` `rbind` `move` | **専用 Warning** (「pgfs では未対応」) を出して無視。タイポ (4) と区別し "remount したつもり" の誤解を防ぐ |
 
@@ -278,8 +278,8 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 | POSIX ACL (setfacl/getfacl) | ✅ | `system.posix_acl_access` ⇄ `st_mode` + 正準 ACL (`user.pgfs_acl`)。Windows DACL と同じ正準ストアを共有。詳細は上記「POSIX ACL」/ [permission-interop.md](permission-interop.md)。named ACL の厳密 enforce は要件待ち |
 | macOS 動作確認 | ❌ | Tmds.Fuse の macOS 対応次第。macFUSE が必要 |
 | アクセスチェック (`Access`) | ❌ | 当面マウント時に `default_permissions` を渡せばカーネル側で判断される想定 |
-| Mount オプション `-o` | ✅ | `-o key=val,flag,...` を分類 (FUSE passthrough / 受理して無視 + `x-` 接頭辞 / pgfs 設定 / 未知=Warning / 非対応マウント操作=明示 Warning)。詳細は上記「マウントオプション」。実装は [ConfigLoader.ParseDashOOptions](../src/lib/src/Config/ConfigLoader.cs) |
-| 接続失敗時の再接続 | ✅ | [Retry](../src/lib/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。クエリ実行中の例外は idempotency 問題があるため再試行しない |
+| Mount オプション `-o` | ✅ | `-o key=val,flag,...` を分類 (FUSE passthrough / 受理して無視 + `x-` 接頭辞 / pgfs 設定 / 未知=Warning / 非対応マウント操作=明示 Warning)。詳細は上記「マウントオプション」。実装は [ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs) |
+| 接続失敗時の再接続 | ✅ | [Retry](../src/core/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。クエリ実行中の例外は idempotency 問題があるため再試行しない |
 | OS に存在しない uname / gname のフォールバック | ✅ | `getpwnam` / `getgrnam` 失敗時、`mount.fallback_uname` / `mount.fallback_gname` (DB 保存、既定 `nobody` / `nogroup`) に解決した uid/gid を返す。fallback 名自体が解決できなければ uid=65534 (NFS の nobody 慣習値) を hardcode し warning ログ。実装は [src/mount/src/UserResolver.cs](../src/mount/src/UserResolver.cs)、Linux e2e の `test_fallback_uname_gname` で検証 |
 | Read/Write のストリーミング | ⚠️ | 現状各チャンクで個別に upsert/read している。大量 I/O では複数チャンク分を 1 往復にまとめる最適化余地 |
 | xattr 値のバイナリ表現 | ✅ | `xattr_values BYTEA[]` に**生バイト列を忠実保持** (旧 Base64+JSONB から移行)。NUL 含む任意バイト列が無加工で往復し、SQL でも bytea として直接見える。設計・検証は [xattr-bytea.ja.md](xattr-bytea.ja.md) |
@@ -342,6 +342,6 @@ fusermount3 -u /mnt/pgfs
 
 - [docs/database.md](database.md) DB スキーマ設計
 - [docs/Mkfs.md](Mkfs.md) 初期化ツールの仕様
-- [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) 共通 API
-- [src/lib/src/Api/InodeCache.cs](../src/lib/src/Api/InodeCache.cs) inode キャッシュ
+- [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) 共通 API
+- [src/core/src/Api/InodeCache.cs](../src/core/src/Api/InodeCache.cs) inode キャッシュ
 - [Tmds.Fuse](https://github.com/tmds/Tmds.Fuse) FUSE ライブラリ

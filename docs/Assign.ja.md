@@ -2,7 +2,7 @@
 
 PGFS ファイルシステムを **DokanNet 経由でマウント** する Windows 用ツール `pgfs.assign` の仕様です。
 
-このドキュメントは現行実装 ([src/assign/](../src/assign/)) の仕様をまとめたもので、Linux/macOS 用の [Pgfs.Mount](../src/mount/) (Tmds.Fuse 版) と対になる存在です。共通部分はすべて [`Pgfs.Lib.Api.Api`](../src/lib/src/Api/Api.cs) に集約されており、Mount/Assign は OS 固有のアダプタに徹しています。
+このドキュメントは現行実装 ([src/assign/](../src/assign/)) の仕様をまとめたもので、Linux/macOS 用の [Pgfs.Mount](../src/mount/) (Tmds.Fuse 版) と対になる存在です。共通部分はすべて [`Pgfs.Core.Api.Api`](../src/core/src/Api/Api.cs) に集約されており、Mount/Assign は OS 固有のアダプタに徹しています。
 
 英語版は [Assign.md](Assign.md) を参照してください。
 
@@ -13,7 +13,7 @@ PGFS が初期化された PostgreSQL データベース ([docs/Mkfs.md](Mkfs.md
 ```
 PostgreSQL (pgfs_inode / pgfs_data / pgfs_data_chunk / pgfs_settings)
         ↑↓ Npgsql + Dapper
-    Pgfs.Lib.Api.Api（クロスプラットフォーム）
+    Pgfs.Core.Api.Api（クロスプラットフォーム）
         ↑↓
     Pgfs.Assign.FileSystem : DokanNet.IDokanOperations2（Windows 固有）
         ↑↓ Dokan2 ドライバ
@@ -65,7 +65,7 @@ dotnet run --project src\assign -- --help
 
 ## 設定
 
-設定モデルは [`Pgfs.Lib.Config.RootConfig`](../src/lib/src/Config/RootConfig.cs) を共有しています。Mkfs / Mount と同じ TOML 設定ファイルと同じコマンドラインオプションが使えます。詳細は [docs/Mkfs.md](Mkfs.md) を参照。
+設定モデルは [`Pgfs.Core.Config.RootConfig`](../src/core/src/Config/RootConfig.cs) を共有しています。Mkfs / Mount と同じ TOML 設定ファイルと同じコマンドラインオプションが使えます。詳細は [docs/Mkfs.md](Mkfs.md) を参照。
 
 pgfs.assign が特に使うのは:
 
@@ -119,15 +119,15 @@ pgfs.assign が特に使うのは:
 ├─────────────────────────────────────────────────────────┤
 │ Pgfs.Assign.WindowsUserResolver ── SID ↔ NTAccount 解決 (Windows 固有) │
 ├─────────────────────────────────────────────────────────┤
-│ Pgfs.Lib.Api.Api             ── DB 操作 (クロスプラットフォーム) │
+│ Pgfs.Core.Api.Api             ── DB 操作 (クロスプラットフォーム) │
 │   - GetByPath / ListChildren / CreateDirectory / ...    │
 │   - ReadData / WriteData / TruncateData                 │
 │   - CreateSymlink / CreateHardLink                      │
 │   - GetXAttr / SetXAttr / ListXAttr / RemoveXAttr       │
 ├─────────────────────────────────────────────────────────┤
-│ Pgfs.Lib.Api.InodeCache      ── inode メモリキャッシュ    │
+│ Pgfs.Core.Api.InodeCache      ── inode メモリキャッシュ    │
 ├─────────────────────────────────────────────────────────┤
-│ Pgfs.Lib.Utility.Pg          ── Npgsql + Dapper ラッパ   │
+│ Pgfs.Core.Utility.Pg          ── Npgsql + Dapper ラッパ   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -144,13 +144,13 @@ pgfs.assign が特に使うのは:
 | 書き込みの追記モード | offset 引数 | `info.WriteToEndOfFile` |
 | ACL | st_mode + 正準 ACL (`system.posix_acl_access` 経由) | st_mode + 正準 ACL (`Get/SetFileSecurity` で SD 投影) |
 
-両者とも [`Pgfs.Lib.Api.Api`](../src/lib/src/Api/Api.cs) を呼ぶだけで実 DB 操作は共通化されています。
+両者とも [`Pgfs.Core.Api.Api`](../src/core/src/Api/Api.cs) を呼ぶだけで実 DB 操作は共通化されています。
 
 ## 設計判断・暫定実装
 
 ### 名前正規化 + well-known principal マッピング
 
-owner / group / principal 名は **保存時・照合時・呼び出し元名のすべて**で正規化する ([NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs): 全角ASCII→半角 + ドメイン除去 `\`・`@` + 小文字化)。DB は **Linux 名で保存**し、Windows ⇄ Linux の well-known 名は [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) のマッピングで双方向変換する: `root`↔`Administrator(s)` / `nobody`・`nogroup`↔`NT AUTHORITY\ANONYMOUS LOGON` / `other`↔`Everyone`。これにより Windows で作ったファイルも Linux で同名解決でき、大小・全半角も同一視される (設計の正は [permission-interop.md](permission-interop.md))。
+owner / group / principal 名は **保存時・照合時・呼び出し元名のすべて**で正規化する ([NameNormalizer](../src/core/src/Utility/NameNormalizer.cs): 全角ASCII→半角 + ドメイン除去 `\`・`@` + 小文字化)。DB は **Linux 名で保存**し、Windows ⇄ Linux の well-known 名は [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) のマッピングで双方向変換する: `root`↔`Administrator(s)` / `nobody`・`nogroup`↔`NT AUTHORITY\ANONYMOUS LOGON` / `other`↔`Everyone`。これにより Windows で作ったファイルも Linux で同名解決でき、大小・全半角も同一視される (設計の正は [permission-interop.md](permission-interop.md))。
 
 ### `Hidden` / `System` / `Archive` 属性
 
@@ -208,7 +208,7 @@ POSIX を正準・Windows ACL を **投影ビュー**として実装済み (設�
 | POSIX 互換 range lock | ❌ | `DokanOptions.UserModeLock` でカーネル任せ |
 | Junction（再解析ポイント） | ❌ | DB スキーマには `is_junction` 列あり。Mount からのみ参照可能。Assign 側は未対応 |
 | Notify (他クライアント変更通知) | ✅ | `database.notify_enabled=true` (CLI `--notify`) で有効化。PostgreSQL LISTEN/NOTIFY 経由で他クライアントの書き込みを受信し、ローカル `InodeCache` を invalidate した後、[FileSystem.PropagateRemoteChange](../src/assign/src/FileSystem.cs) が `DokanInstance.NotifyUpdate(WindowsPath)` で Explorer に再描画を依頼する。ペイロード仕様等の詳細は [history.md](history.md) 「他クライアント変更通知 (Notify)」参照 |
-| 接続失敗時の再接続 | ✅ | [Retry](../src/lib/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。クエリ実行中の例外は idempotency 問題があるため再試行しない |
+| 接続失敗時の再接続 | ✅ | [Retry](../src/core/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。クエリ実行中の例外は idempotency 問題があるため再試行しない |
 | OS に存在しない uname / gname のフォールバック | ✅ | `NTAccount.Translate` 失敗時、`mount.fallback_uname` / `mount.fallback_gname` (DB 保存、既定 `nobody` / `nogroup`) を SID 解決して返す。`nobody`/`nogroup` は well-known マッピングで `NT AUTHORITY\ANONYMOUS LOGON` に解決される。それも SID 解決できなければ `WellKnownSidType.AnonymousSid` を hardcode し warning ログ。実装は [src/assign/src/WindowsUserResolver.cs](../src/assign/src/WindowsUserResolver.cs) |
 
 ## 動作確認シナリオ（Windows 想定）
@@ -246,6 +246,6 @@ dokanctl /u P:
 - [docs/database.md](database.md) DB スキーマ設計
 - [docs/Mkfs.md](Mkfs.md) 初期化ツールの仕様
 - [docs/Mount.md](Mount.md) Linux/macOS 版マウントツール
-- [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) 共通 API
+- [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) 共通 API
 - [Dokan](https://dokan-dev.github.io/) Dokan ドライバ
 - [DokanNet](https://github.com/dokan-dev/dokan-dotnet) C# バインディング

@@ -63,7 +63,7 @@ When the user types `sudo mount /mnt/pgfs`:
 
 Inside `mount.pgfs`, the positional[0] / positional[1] / `-o` parser quietly route the values. The `-o` contents are expanded by `ParseDashOOptions` (`_netdev` is ignored, `allow_other` is forwarded to libfuse via `FuseFlags`, `cache-max-entries=4096` overrides `mount.cache_max_entries`).
 
-At this point [`IsMountHelperContext`](../src/lib/src/Config/ConfigLoader.cs) returns **true** by confirming the parent's comm is `mount` and that positionals exist, enabling `MountHelperFlagsNoValue` / `MountHelperFlagsWithValue` (i.e. the helper-context-only silent swallowing).
+At this point [`IsMountHelperContext`](../src/core/src/Config/ConfigLoader.cs) returns **true** by confirming the parent's comm is `mount` and that positionals exist, enabling `MountHelperFlagsNoValue` / `MountHelperFlagsWithValue` (i.e. the helper-context-only silent swallowing).
 
 ### Invoking `mount.pgfs` directly, without `mount(8)`
 
@@ -79,7 +79,7 @@ To bring it up with just the mount target, **always go through `mount(8)`** (`su
 
 ## The mount(8) <-> mount.pgfs argument mapping
 
-`mount.pgfs` accepts both (a) being called as a `mount(8)` helper and (b) being run directly by a user. Because the same short form can mean different things, at startup [`IsMountHelperContext`](../src/lib/src/Config/ConfigLoader.cs) decides the context, and only in helper context does it silently skip mount(8)'s internal flags.
+`mount.pgfs` accepts both (a) being called as a `mount(8)` helper and (b) being run directly by a user. Because the same short form can mean different things, at startup [`IsMountHelperContext`](../src/core/src/Config/ConfigLoader.cs) decides the context, and only in helper context does it silently skip mount(8)'s internal flags.
 
 ### Helper-context detection
 
@@ -96,7 +96,7 @@ If either is false it is treated as direct invocation and `MountHelperFlagsNoVal
 |---|---|---|---|---|
 | **positional[0]** (= fstab column 1 `<source>`) | the FS "data source" | starts with `postgresql:` -> `database.connection`; otherwise -> `setting.file` (TOML path) | same | dual meaning ([§Positional arguments](#1-accepting-positional-arguments-source--target)) |
 | **positional[1]** (= fstab column 2 `<target>`) | mount point | routed to `mount.mount_point` (only if unset) | same | |
-| `-o <opts>` (= fstab column 4) | comma-separated options | [`ParseDashOOptions`](../src/lib/src/Config/ConfigLoader.cs) splits on commas -> matches against `Field.CliOptions` / `Field.EffectiveDashOName`; `allow_other` etc. -> `MountConfig.FuseFlags`; `_netdev` / `noauto` / `noatime` etc. -> ignored | same | details [§-o parser](#2--o-keyvalflag-parser) |
+| `-o <opts>` (= fstab column 4) | comma-separated options | [`ParseDashOOptions`](../src/core/src/Config/ConfigLoader.cs) splits on commas -> matches against `Field.CliOptions` / `Field.EffectiveDashOName`; `allow_other` etc. -> `MountConfig.FuseFlags`; `_netdev` / `noauto` / `noatime` etc. -> ignored | same | details [§-o parser](#2--o-keyvalflag-parser) |
 | `-i, --internal-only` | do not call the helper | silently skipped | unknown-option warning (no mount.pgfs-specific flag assigned) | mount(8) does not actually pass this to the helper, so this is a safety net |
 | `-f, --fake` | dry-run | silently skipped -> actually still mounts (TODO: honor fake) | valid as the short form of `setting.file` | |
 | `-n, --no-mtab` | do not update `/etc/mtab` | silently skipped | unknown-option warning | under FUSE, mtab is written by fusermount3 |
@@ -154,7 +154,7 @@ The helper-context decision is precomputed once at the start of the `ConfigLoade
 
 ### 1. Accepting positional arguments (source / target)
 
-[`ConfigLoader.ParseCli`](../src/lib/src/Config/ConfigLoader.cs) picks up to two positionals:
+[`ConfigLoader.ParseCli`](../src/core/src/Config/ConfigLoader.cs) picks up to two positionals:
 
 | Position | Role | Maps to |
 |---|---|---|
@@ -395,5 +395,5 @@ This closes the fstab-support core + verification entirely.
 ## Related
 
 - The Mount spec -> [Mount.md](Mount.md)
-- The configuration model in general -> [src/lib/src/Config/](../src/lib/src/Config/) and [architecture.md](architecture.md)
-- The current behavior of ConfigLoader / Schema -> [src/lib/src/Config/ConfigLoader.cs](../src/lib/src/Config/ConfigLoader.cs) / [Schema.cs](../src/lib/src/Config/Schema.cs)
+- The configuration model in general -> [src/core/src/Config/](../src/core/src/Config/) and [architecture.md](architecture.md)
+- The current behavior of ConfigLoader / Schema -> [src/core/src/Config/ConfigLoader.cs](../src/core/src/Config/ConfigLoader.cs) / [Schema.cs](../src/core/src/Config/Schema.cs)

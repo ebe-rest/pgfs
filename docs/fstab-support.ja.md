@@ -63,7 +63,7 @@ postgresql://pgfs@pgsql_server/pgfs   /mnt/pgfs   pgfs   _netdev,allow_other,cac
 
 `mount.pgfs` 内では positional[0] / positional[1] / `-o` パーサが粛々と値を流す。`-o` の中身は `ParseDashOOptions` で展開される (`_netdev` は無視、`allow_other` は `FuseFlags` 経由で libfuse に転送、`cache-max-entries=4096` は `mount.cache_max_entries` を上書き)。
 
-このとき [`IsMountHelperContext`](../src/lib/src/Config/ConfigLoader.cs) は親 comm = `mount` と positional 存在を確認して **true** を返し、`MountHelperFlagsNoValue` / `MountHelperFlagsWithValue` が有効化される (= helper context 専用の silent 飲み込み)。
+このとき [`IsMountHelperContext`](../src/core/src/Config/ConfigLoader.cs) は親 comm = `mount` と positional 存在を確認して **true** を返し、`MountHelperFlagsNoValue` / `MountHelperFlagsWithValue` が有効化される (= helper context 専用の silent 飲み込み)。
 
 ### `mount(8)` を経由せず `mount.pgfs` を直接叩く場合
 
@@ -79,7 +79,7 @@ postgresql://pgfs@pgsql_server/pgfs   /mnt/pgfs   pgfs   _netdev,allow_other,cac
 
 ## `mount(8)` と `mount.pgfs` の引数対応表
 
-`mount.pgfs` は (a) `mount(8)` helper として呼ばれた場合 と (b) ユーザーが直接実行した場合 の両方を受ける。同じ短縮形が異なる意味を持つことがあるため、起動時に [`IsMountHelperContext`](../src/lib/src/Config/ConfigLoader.cs) で context を判定し、helper context のときだけ mount(8) 内部用フラグを silent に読み飛ばす。
+`mount.pgfs` は (a) `mount(8)` helper として呼ばれた場合 と (b) ユーザーが直接実行した場合 の両方を受ける。同じ短縮形が異なる意味を持つことがあるため、起動時に [`IsMountHelperContext`](../src/core/src/Config/ConfigLoader.cs) で context を判定し、helper context のときだけ mount(8) 内部用フラグを silent に読み飛ばす。
 
 ### Helper context の判定
 
@@ -96,7 +96,7 @@ postgresql://pgfs@pgsql_server/pgfs   /mnt/pgfs   pgfs   _netdev,allow_other,cac
 |---|---|---|---|---|
 | **positional[0]** (= fstab 1 列目 `<source>`) | FS の「データ源」 | `postgresql:` で始まる → `database.connection`、それ以外 → `setting.file` (TOML パス) | 同左 | 両義サポート ([§位置引数](#1-位置引数-source--target-の受け入れ)) |
 | **positional[1]** (= fstab 2 列目 `<target>`) | マウントポイント | `mount.mount_point` に流す (未設定時のみ) | 同左 | |
-| `-o <opts>` (= fstab 4 列目) | カンマ区切りオプション | [`ParseDashOOptions`](../src/lib/src/Config/ConfigLoader.cs) でカンマ split → `Field.CliOptions` / `Field.EffectiveDashOName` と照合 / `allow_other` 等は `MountConfig.FuseFlags` へ / `_netdev` / `noauto` / `noatime` 等は無視 | 同左 | 詳細 [§-o パーサ](#2--o-keyvalflag-パーサ) |
+| `-o <opts>` (= fstab 4 列目) | カンマ区切りオプション | [`ParseDashOOptions`](../src/core/src/Config/ConfigLoader.cs) でカンマ split → `Field.CliOptions` / `Field.EffectiveDashOName` と照合 / `allow_other` 等は `MountConfig.FuseFlags` へ / `_netdev` / `noauto` / `noatime` 等は無視 | 同左 | 詳細 [§-o パーサ](#2--o-keyvalflag-パーサ) |
 | `-i, --internal-only` | helper を呼ばない指示 | silent 読み飛ばし | (mount.pgfs 固有フラグ未割当のため) 未知オプション warning | mount(8) は実際には helper に渡さないので保険 |
 | `-f, --fake` | dry-run | silent 読み飛ばし → 実際はマウントしてしまう (TODO: fake 尊重) | `setting.file` の短縮形として有効 | |
 | `-n, --no-mtab` | `/etc/mtab` を更新しない | silent 読み飛ばし | 未知オプション warning | FUSE では mtab は fusermount3 が書く |
@@ -154,7 +154,7 @@ helper context 判定の前計算は `ConfigLoader` コンストラクタの冒�
 
 ### 1. 位置引数 (source / target) の受け入れ
 
-[`ConfigLoader.ParseCli`](../src/lib/src/Config/ConfigLoader.cs) は位置引数を 2 つまで拾う:
+[`ConfigLoader.ParseCli`](../src/core/src/Config/ConfigLoader.cs) は位置引数を 2 つまで拾う:
 
 | 位置 | 役割 | マップ先 |
 |---|---|---|
@@ -396,5 +396,5 @@ $ findmnt | grep pgfs
 ## 関連項目
 
 - 既存の Mount 仕様 → [Mount.md](Mount.md)
-- 設定モデル全般 → [src/lib/src/Config/](../src/lib/src/Config/) と [architecture.md](architecture.md)
-- ConfigLoader / Schema の現状動作 → [src/lib/src/Config/ConfigLoader.cs](../src/lib/src/Config/ConfigLoader.cs) / [Schema.cs](../src/lib/src/Config/Schema.cs)
+- 設定モデル全般 → [src/core/src/Config/](../src/core/src/Config/) と [architecture.md](architecture.md)
+- ConfigLoader / Schema の現状動作 → [src/core/src/Config/ConfigLoader.cs](../src/core/src/Config/ConfigLoader.cs) / [Schema.cs](../src/core/src/Config/Schema.cs)

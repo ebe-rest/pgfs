@@ -31,7 +31,7 @@ PGFS は **認証システムではなく、名前ベース ACL を保持する�
 
 owner / group / principal 名は、**保存時も照合時も**次の順で正規化する。**呼び出し元(アクセス主体)の名前にも
 同じ正規化を適用**するので、Linux 本来の case-sensitive を pgfs 層で上書きし、両 OS で大小・全半角を同一視する。
-実装は [NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs)。
+実装は [NameNormalizer](../src/core/src/Utility/NameNormalizer.cs)。
 
 1. **ドメイン除去**: `DOMAIN\name` (NetBIOS) と `name@domain` (UPN) → `name`
 2. **全角 ASCII → 半角**: U+FF01–FF5E を U+0021–007E へ (例 `Ａlice` → `Alice`)
@@ -82,7 +82,7 @@ ACL Entry
 - **acl[]** は named user/group エントリと **mask** (= named ∪ group の union を都度再計算)。
 - **allow のみ**。Windows の **deny ACE は採用しない** (投影で落とす。→ §Windows 投影ビュー)。
 - **物理保存**: inode の xattr `user.pgfs_acl` に JSON で持つ (`entries[]` と、ディレクトリの継承用 `default[]`)。
-  スキーマ追加なし。正準モデルは [PgfsAcl](../src/lib/src/Models/PgfsAcl.cs)。
+  スキーマ追加なし。正準モデルは [PgfsAcl](../src/core/src/Models/PgfsAcl.cs)。
 
 ## ACL 評価 (クライアントドライバ / POSIX 順)
 
@@ -153,16 +153,16 @@ pgfs_inode
 
 | 決定 | 実装箇所 |
 |---|---|
-| [1] 名前正規化 | 共通 [NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs) (全半角→半角 + domain 除去 + 小文字)。[UserResolver](../src/mount/src/UserResolver.cs) / [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) / [mount/FileSystem](../src/mount/src/FileSystem.cs) の保存・解決・呼び出し元に挿入 |
+| [1] 名前正規化 | 共通 [NameNormalizer](../src/core/src/Utility/NameNormalizer.cs) (全半角→半角 + domain 除去 + 小文字)。[UserResolver](../src/mount/src/UserResolver.cs) / [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) / [mount/FileSystem](../src/mount/src/FileSystem.cs) の保存・解決・呼び出し元に挿入 |
 | [2] ドメイン/UPN 除去 | `NameNormalizer.StripDomain` が `\` と `@` 両対応 |
 | [3] principal マッピング | [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) の well-known alias (MapWinUserToPgfs/MapWinGroupToPgfs/MapPgfsUserToWin/MapPgfsGroupToWin)。nobody/nogroup ↔ `NT AUTHORITY\ANONYMOUS LOGON` |
 | [6] Win属性 xattr | `user.win.attrs` に JSON `{hidden,system,archive}`。[FileSystemUtils](../src/assign/src/FileSystemUtils.cs) の Load/SaveWinAttrs |
 | [7] ReadOnly | [`IsWritable`](../src/assign/src/FileSystemUtils.cs) を正規化済み名比較に簡素化 (root↔Administrator エイリアスはマッピングで吸収) |
 | [9] 匿名ポリシー | 本書に明記 (コード変更なし) |
-| [5] ACL 正準モデル | [PgfsAcl](../src/lib/src/Models/PgfsAcl.cs) (Lib): `user.pgfs_acl` JSON (entries[]/default[])。allow のみ |
+| [5] ACL 正準モデル | [PgfsAcl](../src/core/src/Models/PgfsAcl.cs) (Lib): `user.pgfs_acl` JSON (entries[]/default[])。allow のみ |
 | [4] 投影ビュー (Windows 読み) | [FileSystemUtils.BuildSecurity](../src/assign/src/FileSystemUtils.cs) + [GetFileSecurity](../src/assign/src/FileSystem.cs)。owner/group SID + mode 由来 ACE + named ACL を SD に投影 |
 | [4] 投影 (Windows 書き) / [8] owner=group | [SetFileSecurity](../src/assign/src/FileSystem.cs) + [ApplySecurity](../src/assign/src/FileSystemUtils.cs): SD → mode(基本3クラス) + acl[](named) + owner/group。owner が group SID なら nobody/該当へ。deny は投影で落とす |
-| [4][5] Linux POSIX ACL | [PosixAcl](../src/lib/src/Models/PosixAcl.cs) コーデック + [mount/FileSystem](../src/mount/src/FileSystem.cs) で `system.posix_acl_access` ⇄ st_mode(基本3クラス) + `user.pgfs_acl`(named) + mask 算出。named 無しは ENODATA |
+| [4][5] Linux POSIX ACL | [PosixAcl](../src/core/src/Models/PosixAcl.cs) コーデック + [mount/FileSystem](../src/mount/src/FileSystem.cs) で `system.posix_acl_access` ⇄ st_mode(基本3クラス) + `user.pgfs_acl`(named) + mask 算出。named 無しは ENODATA |
 
 回帰: Windows e2e **26/26** (属性 + ACL 投影/逆投影含む) / Linux e2e **35/35** (POSIX ACL named user 含む) / race **4/4** / 監査専用 [audit.sh](../tests/citus/audit.sh) **12/12** (caller_uname も正規化経由) すべて PASS。
 

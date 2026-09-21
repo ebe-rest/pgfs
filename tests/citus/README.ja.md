@@ -194,7 +194,7 @@ bash tests/citus/audit.sh
 
 ## cross-shard rename の動作確認
 
-`test_rename_into_subdir` (Linux/Windows 両 e2e) が **異なる親への rename** をカバーしているので、Citus 環境で通っていれば cross-shard rename も実証済み。実装は [Api.cs](../../src/lib/src/Api/Api.cs) の `Rename` の DELETE+INSERT (OVERRIDING SYSTEM VALUE) 経路。
+`test_rename_into_subdir` (Linux/Windows 両 e2e) が **異なる親への rename** をカバーしているので、Citus 環境で通っていれば cross-shard rename も実証済み。実装は [Api.cs](../../src/core/src/Api/Api.cs) の `Rename` の DELETE+INSERT (OVERRIDING SYSTEM VALUE) 経路。
 
 cross-shard rename を SQL レベルで明示確認したい場合は [verify.sql](verify.sql) の EXPLAIN ブロックを参照。
 

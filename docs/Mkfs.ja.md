@@ -2,7 +2,7 @@
 
 PGFS ファイルシステムを PostgreSQL データベース上に初期化するツール `mkfs.pgfs` の仕様です。
 
-このドキュメントは [src/mkfs/](../src/mkfs/)（`Pgfs.Lib.Config` ベース）で実装した仕様をまとめたものです。暫定・未対応事項は「暫定実装」セクションに記載します。
+このドキュメントは [src/mkfs/](../src/mkfs/)（`Pgfs.Core.Config` ベース）で実装した仕様をまとめたものです。暫定・未対応事項は「暫定実装」セクションに記載します。
 
 英語版は [Mkfs.md](Mkfs.md) を参照してください。
 
@@ -39,11 +39,11 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 
 優先順位（後勝ち）: **既定値 < DB < 設定ファイル (TOML) < コマンドライン引数**。
 
-実装上は [`ConfigLoader`](../src/lib/src/Config/ConfigLoader.cs) が CLI → TOML → DB → Default の順にソースを走らせて 1 度に統合します。`--clean` 時は `skipToml = true` で TOML を意図的に無視します。
+実装上は [`ConfigLoader`](../src/core/src/Config/ConfigLoader.cs) が CLI → TOML → DB → Default の順にソースを走らせて 1 度に統合します。`--clean` 時は `skipToml = true` で TOML を意図的に無視します。
 
 ## コマンドラインオプション
 
-[src/lib/src/Config/Schema.cs](../src/lib/src/Config/Schema.cs) の各 `Field<T>` の `CliOptions` で定義されています。下表はその抜粋。
+[src/core/src/Config/Schema.cs](../src/core/src/Config/Schema.cs) の各 `Field<T>` の `CliOptions` で定義されています。下表はその抜粋。
 
 ### 接続（PGFS ユーザー）
 
@@ -217,7 +217,7 @@ PK = `target_id` のみ。監査列なし（データではなく lock token な
 
 ### `{prefix}settings`
 
-フラット `(scope, key)` PK。[`ConfigStore.Save<T>`](../src/lib/src/Config/ConfigStore.cs) がここに UPSERT し、[`ConfigStore.LoadAll`](../src/lib/src/Config/ConfigStore.cs) がここから読み出します。
+フラット `(scope, key)` PK。[`ConfigStore.Save<T>`](../src/core/src/Config/ConfigStore.cs) がここに UPSERT し、[`ConfigStore.LoadAll`](../src/core/src/Config/ConfigStore.cs) がここから読み出します。
 
 | カラム | 型 | NULL | DEFAULT |
 |---|---|---|---|
@@ -301,7 +301,7 @@ mkfs は基本的にクロスプラットフォームですが、以下の点は
   sudo chmod 0700 /var/lib/pgfs
   ```
   この処理はマシン側の OS / 配置によって異なるため mkfs では自動化していません。macOS では `postgres` ユーザーの uid/gid が異なります。Windows では NTFS ACL を設定する必要があり、現在の mkfs は未対応です。
-- **既定マウントポイント** は `/mnt/pgfs`（[`Schema.Mount.MountPoint`](../src/lib/src/Config/Schema.cs) の Linux/macOS 既定）。Windows では `P:`。
+- **既定マウントポイント** は `/mnt/pgfs`（[`Schema.Mount.MountPoint`](../src/core/src/Config/Schema.cs) の Linux/macOS 既定）。Windows では `P:`。
 - **ルート inode の `st_mode = 16877 (0o40755)`** は POSIX のディレクトリ + `rwxr-xr-x` を表しています。Windows のジャンクションは `is_junction` 列で区別する設計（[docs/database.md](database.md)）。
 
 これら以外（接続文字列、SQL クエリ、テーブル定義など）はクロスプラットフォームです。
@@ -332,7 +332,7 @@ mkfs は基本的にクロスプラットフォームですが、以下の点は
 - **[Program.cs](../src/mkfs/src/Program.cs)**: `ConfigLoader` で CLI / TOML / Default から `RootConfig` を組み立て（`--clean` 時は `skipToml: true`）→ `Initializer.InitializeAsync` → SaveTo=File の値を TOML に書き出し。
 - **[Initializer.cs](../src/mkfs/src/Initializer.cs)**: 上記「役割」の各ステップを実装。すべて `Pg.ExecuteAsync` / `Pg.QueryAsync` 経由で SQL を発行。テーブル作成は `CreateTableAsync` ヘルパに集約。SaveTo=Db の値は `ConfigStore.Save<T>` で `pgfs_settings` に UPSERT。
 
-設定モデルは [src/lib/src/Config/](../src/lib/src/Config/) の `RootConfig` / `Schema` をそのまま利用しています。mkfs 用の独自設定クラスは作りません。
+設定モデルは [src/core/src/Config/](../src/core/src/Config/) の `RootConfig` / `Schema` をそのまま利用しています。mkfs 用の独自設定クラスは作りません。
 
 ## 参照
 

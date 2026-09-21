@@ -72,7 +72,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<ProjectReference Include="..\lib\Lib.csproj" />
+		<ProjectReference Include="..\core\Core.csproj" />
 		<!--
 			The original Tmds.Fuse (tmds/Tmds.Fuse 0.1.0-190711-50, 2019-07-11) does not expose
 			MountOptions.Options, so there is no way to pass `-o allow_other` / `-o use_ino` /

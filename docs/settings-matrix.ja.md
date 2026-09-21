@@ -1,6 +1,6 @@
 # 設定項目マトリックス
 
-> 各設定項目の真の宣言は [src/lib/src/Config/Schema.cs](../src/lib/src/Config/Schema.cs) に集約 (`Schema.<Scope>.<Key>` の static `Field<T>` 記述子)。本ドキュメントは「CLI フラグ / TOML キー / DB 保存先 / 既定値 / 参照タイミング」を一覧で横串に見るためのもの。**コードと食い違ったら Schema が正**。将来は Schema 由来の自動生成に置き換える案あり。
+> 各設定項目の真の宣言は [src/core/src/Config/Schema.cs](../src/core/src/Config/Schema.cs) に集約 (`Schema.<Scope>.<Key>` の static `Field<T>` 記述子)。本ドキュメントは「CLI フラグ / TOML キー / DB 保存先 / 既定値 / 参照タイミング」を一覧で横串に見るためのもの。**コードと食い違ったら Schema が正**。将来は Schema 由来の自動生成に置き換える案あり。
 
 関連: [docs/Mkfs.ja.md](Mkfs.ja.md) (mkfs.pgfs の CLI 一覧) / [docs/Mount.ja.md](Mount.ja.md) / [docs/Assign.ja.md](Assign.ja.md) / [docs/fstab-support.ja.md](fstab-support.ja.md) (`-o key=val,...` 経由のオプション)
 
@@ -19,7 +19,7 @@
 
 ## 優先順位
 
-[`ConfigLoader`](../src/lib/src/Config/ConfigLoader.cs) は 1 度に CLI / TOML / DB / Default を統合する。優先順位は CLI > TOML > DB > Default。読み込みは `CLI → TOML → DB` の順に走り、「上位ソースが既に値を入れていれば skip」方式で実現する。`AssignPositional` / `ParseDashOOptions` も「未読込時のみ反映」なので、明示 `-c` / `-m` / `-f` が positional より優先される。
+[`ConfigLoader`](../src/core/src/Config/ConfigLoader.cs) は 1 度に CLI / TOML / DB / Default を統合する。優先順位は CLI > TOML > DB > Default。読み込みは `CLI → TOML → DB` の順に走り、「上位ソースが既に値を入れていれば skip」方式で実現する。`AssignPositional` / `ParseDashOOptions` も「未読込時のみ反映」なので、明示 `-c` / `-m` / `-f` が positional より優先される。
 
 ---
 
@@ -42,7 +42,7 @@
 | キー | CLI | TOML | DB | 既定 | 型 | 参照タイミング | 備考 |
 |---|---|---|---|---|---|---|---|
 | `logging.level` | `--log-level` `--log-min-level` `--min-log-level` | ✅ | ❌ | `Information` | `Level.Enum` | 起動時 `Logger.MinLevel` に反映 | `all` `trace` `debug` `information` `warning` `error` `critical` `none` |
-| `logging.output` | `--log-output` | ✅ | ❌ | `stderr` | `SettingLoggingOutput` | 起動時 [LogSink.Configure](../src/lib/src/Logging/LogSink.cs) で `Logger.Output` に反映 | `stdout` / `stderr` / `none` / `<cycle>:<dir>/<pattern>`。cycle = `none\|hourly\|daily\|monthly`、pattern 中の `*` が日付に展開 (hourly=`yyyyMMddHH` / daily=`yyyyMMdd` / monthly=`yyyyMM` / none=空)、`~` はホーム展開。例 `daily:~/pgfs/log/pgfs-*.log`。**Warning 以上は実効シンクが stderr でない限り stderr にも terse 形式 (`pgfs: [Warning] ...`、日時なし) で出る** (file/stdout sink でも警告を見落とさないため)。同様に **起動バナー (プログラム名 + バージョン + Copyright) とプロセス生死マーカー (`started`/`exited`) は常に stderr へ** (`Logger.Lifecycle`、ログがファイルでも起動/終了を追える)。起動時に解釈済みパラメータ (`param: scope.key = value`、接続文字列の Password はマスク) と未知オプション警告も出力 |
+| `logging.output` | `--log-output` | ✅ | ❌ | `stderr` | `SettingLoggingOutput` | 起動時 [LogSink.Configure](../src/core/src/Logging/LogSink.cs) で `Logger.Output` に反映 | `stdout` / `stderr` / `none` / `<cycle>:<dir>/<pattern>`。cycle = `none\|hourly\|daily\|monthly`、pattern 中の `*` が日付に展開 (hourly=`yyyyMMddHH` / daily=`yyyyMMdd` / monthly=`yyyyMM` / none=空)、`~` はホーム展開。例 `daily:~/pgfs/log/pgfs-*.log`。**Warning 以上は実効シンクが stderr でない限り stderr にも terse 形式 (`pgfs: [Warning] ...`、日時なし) で出る** (file/stdout sink でも警告を見落とさないため)。同様に **起動バナー (プログラム名 + バージョン + Copyright) とプロセス生死マーカー (`started`/`exited`) は常に stderr へ** (`Logger.Lifecycle`、ログがファイルでも起動/終了を追える)。起動時に解釈済みパラメータ (`param: scope.key = value`、接続文字列の Password はマスク) と未知オプション警告も出力 |
 
 ## 4. `mount.*`
 

@@ -23,13 +23,13 @@ For mechanically enforceable items, [`.editorconfig`](../.editorconfig) is **aut
 
 | Target | Rule | Example |
 |---|---|---|
-| namespace | the `Pgfs.{Module}.{SubModule}` hierarchy | `Pgfs.Lib.Config`, `Pgfs.Lib.Models`, `Pgfs.Mount`, `Pgfs.Assign` |
+| namespace | the `Pgfs.{Module}.{SubModule}` hierarchy | `Pgfs.Core.Config`, `Pgfs.Core.Models`, `Pgfs.Mount`, `Pgfs.Assign` |
 | file name | matches the primary class name (1 file, 1 primary class) | `RootConfig.cs` ← `class RootConfig` |
 | class / method | PascalCase | `InodeCache`, `GetByPath` |
 | local variable / parameter | camelCase | `var inode`, `string path` |
 | private field | camelCase (no underscore prefix) | `this.cache` |
 | constant / enum value | PascalCase | `Mode.S_IFDIR`, `Level.Trace` |
-| assembly name | lowercase + dot-separated (the csproj `<AssemblyName>`) | `lib.pgfs.dll`, `mkfs.pgfs.exe` |
+| assembly name | lowercase + dot-separated (the csproj `<AssemblyName>`) | `core.pgfs.dll`, `mkfs.pgfs.exe` |
 
 ### Explicit `this.`
 
@@ -124,7 +124,7 @@ The **core branching style** of this repository. To make the intent of flow cont
    - **tail flow-exit form**: the last statement is `return` / `break` / `continue` / `throw` / `goto`. Any statements (side effects, local-variable declarations, nested `if`, etc.) may precede it, **0 or more**.
    - **single statement only**: exactly 1 statement. Any kind (assignment, method call, `+=` etc., nested `if`, a `switch` statement are all fine).
 
-`goto` is accepted as a flow-exit **only for a jump to a label in the same scope**. This permits the structured idiom of jumping to a cleanup label at the end of a loop (a real example exists in [RemoveRange](../src/lib/src/Collections/FirstList.cs)). Using `goto` across function boundaries remains forbidden (C# disallows it anyway).
+`goto` is accepted as a flow-exit **only for a jump to a label in the same scope**. This permits the structured idiom of jumping to a cleanup label at the end of a loop (a real example exists in [RemoveRange](../src/core/src/Collections/FirstList.cs)). Using `goto` across function boundaries remains forbidden (C# disallows it anyway).
 2. **Log output is not counted (free)**. Calls to `Console.Write*` / `Console.Error.Write*` / `Logger.*` / `Debug.Write*` / `Trace.Write*` are not counted as "side effects" — any number of them does not count against the rule. Diagnostic output is orthogonal to logic.
 3. Prefer **negation (fail-fast)** for flow-exit. The affirmative (fast-path) is fine if it is clearly more readable.
 4. **`else` forbidden**.
@@ -243,7 +243,7 @@ if (cond) {
 Any of these calls are exempt from the side-effect count as "log output":
 
 - `Console.Write*` / `Console.WriteLine` / `Console.Error.Write*`
-- `Logger.*` (this repository's in-house logger [`Pgfs.Lib.Logging`](../src/lib/src/Logging/))
+- `Logger.*` (this repository's in-house logger [`Pgfs.Core.Logging`](../src/core/src/Logging/))
 - `System.Diagnostics.Debug.Write*` / `Debug.WriteLine`
 - `System.Diagnostics.Trace.Write*` / `Trace.WriteLine`
 - calls equivalent to the above whose "only side effect is an output message"

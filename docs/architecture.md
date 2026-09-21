@@ -8,7 +8,7 @@ The solution [pgfs.sln](../pgfs.sln) has 4 projects.
 
 | Project | Path | Role | Platform |
 |---|---|---|---|
-| **Lib** | [src/lib/](../src/lib/) | core library (Models / Api / Logging / Collections / Utility / Objects) | cross-platform |
+| **Lib** | [src/core/](../src/core/) | core library (Models / Api / Logging / Collections / Utility / Objects) | cross-platform |
 | **Mkfs** | [src/mkfs/](../src/mkfs/) | CLI that initializes the PostgreSQL-side tables etc. | cross-platform |
 | **Mount** | [src/mount/](../src/mount/) | mount tool for Linux / macOS (uses Tmds.Fuse) | Linux / macOS |
 | **Assign** | [src/assign/](../src/assign/) | mount tool for Windows (uses DokanNet) | Windows |
@@ -18,7 +18,7 @@ All TargetFrameworks are **net10.0**. `PublishAot` / `PublishTrimmed` are enable
 ### Namespaces
 
 - root: `Pgfs.*`
-- library: `Pgfs.Lib.{Api, Models, Logging, Collections, Objects, Utility}`
+- library: `Pgfs.Core.{Api, Models, Logging, Collections, Objects, Utility}`
 - executables: `Pgfs.Mkfs`, `Pgfs.Mount`, `Pgfs.Assign`
 
 ### Output location
@@ -27,7 +27,7 @@ All projects build into the same directory under [bin/](../bin/) (`<BaseOutputPa
 
 ### Assembly names
 
-Namespaces are PascalCase such as `Pgfs.Lib`, `Pgfs.Mkfs`. The output assembly names are unified to **lowercase + dot-separated**: `lib.pgfs.dll`, `mkfs.pgfs.{dll,exe}`, `mount.pgfs.{dll,exe}`, `assign.pgfs.{dll,exe}`. This is set in the csproj via `<AssemblyName>`.
+Namespaces are PascalCase such as `Pgfs.Core`, `Pgfs.Mkfs`. The output assembly names are unified to **lowercase + dot-separated**: `core.pgfs.dll`, `mkfs.pgfs.{dll,exe}`, `mount.pgfs.{dll,exe}`, `assign.pgfs.{dll,exe}`. This is set in the csproj via `<AssemblyName>`.
 
 ---
 
@@ -47,7 +47,7 @@ Namespaces are PascalCase such as `Pgfs.Lib`, `Pgfs.Mkfs`. The output assembly n
 
 ## File structure (Lib)
 
-### Models ([src/lib/src/Models/](../src/lib/src/Models/))
+### Models ([src/core/src/Models/](../src/core/src/Models/))
 
 Where the entity POCOs corresponding to one DB row live. The configuration models live in [Config](#config-srclibsrcconfig).
 
@@ -61,9 +61,9 @@ Where the entity POCOs corresponding to one DB row live. The configuration model
 - `PosixAcl.cs` the codec for the Linux `system.posix_acl_access` xattr binary (Parse/Build of the header + entry array). Design in [permission-interop.md](permission-interop.md)
 
 **LoggingOutput-related enums**: `SettingLoggingKind.cs` (Flags: None/Stderr/Stdout/File), `SettingLoggingCycle.cs` (None/Hourly/Daily/Monthly), `SettingLoggingOutput.cs` (a POCO bundling the previous two)
-- these stay in Models because [`LoggingOutputField`](../src/lib/src/Config/Field.cs) references them as a type (a possible move target is `Pgfs.Lib.Logging`, but this file describes "the log format", not "the log output itself", so the current location is the safer choice)
+- these stay in Models because [`LoggingOutputField`](../src/core/src/Config/Field.cs) references them as a type (a possible move target is `Pgfs.Core.Logging`, but this file describes "the log format", not "the log output itself", so the current location is the safer choice)
 
-### Config ([src/lib/src/Config/](../src/lib/src/Config/))
+### Config ([src/core/src/Config/](../src/core/src/Config/))
 
 The successor to the old `Settings` tree. Composed of **static `Field<T>` descriptors + mutable POCOs + `ConfigLoader` (unifying CLI/TOML/DB/Default) + `ConfigStore` (DB I/O)**.
 
@@ -76,7 +76,7 @@ The successor to the old `Settings` tree. Composed of **static `Field<T>` descri
 
 Persistence convention on change: right after the caller does `config.X.Y = newValue;`, it explicitly calls `store.Save(Schema.X.Y, newValue)` (no setter hook is installed, to keep Loader/Store separated). The concrete pattern will be collected into thin wrappers such as a future `Api.SetVolumeLabel(string)`.
 
-### Api ([src/lib/src/Api/](../src/lib/src/Api/))
+### Api ([src/core/src/Api/](../src/core/src/Api/))
 
 - `Api.cs` the public filesystem-operation API (inode CRUD, data I/O via bytea chunks, xattr, symlink, hard link, volume info — all implemented). `IDisposable`; receives an OS notification bridge through the `OsBridge` property.
 - **cross-client locking**: the private helpers `LockTargets` / `LockData(dataId)` / `LockInode(inodeId)` / `LockInodes(params long[])` take `SELECT ... FOR UPDATE` row locks on `pgfs_lock`. Each mutating method (`WriteData` / `TruncateData` / `ReleaseData` / `Update{Mode,Owner,Size,Timestamps}` / `Rename` / `DeleteInode` / `CreateHardLink`) takes the appropriate lock at the top, released automatically when the tx ends. Multiple lock acquisition is fixed in ascending target_id order to avoid deadlock. Details in [support_for_citus.md §locking](support_for_citus.md).
@@ -86,14 +86,14 @@ Persistence convention on change: right after the caller does `config.X.Y = newV
 
 **Data I/O (bytea chunks) implementation note**: each inode's data body is 1 `pgfs_data` row + multiple `pgfs_data_chunk` rows (1 row = 1 bytea = 1 chunk, default chunk_size = 1MB). WriteData completes with one upsert SQL per chunk (`INSERT ... ON CONFLICT (data_id, chunk_index) DO UPDATE SET payload = CASE ... END`, the CASE handling the 3 cases of "central overlay / tail overwrite / zero-pad + concat"); concurrent WriteFile races are serialized automatically by the PG row lock. ReadData uses `substring(payload from N for M)` to leverage PG 13+'s partial TOAST detoast. Each chunk's payload length equals "the number of bytes written so far". Zero padding uses `decode(repeat('00', N), 'hex')` (because `repeat(bytea, integer)` does not exist in PG).
 
-### Logging ([src/lib/src/Logging/](../src/lib/src/Logging/))
+### Logging ([src/core/src/Logging/](../src/core/src/Logging/))
 
 - An in-house logger implementation (not `Microsoft.Extensions.Logging`).
 - A static API via `Logger.Default`. `Level.Enum` is `All/Trace/Debug/Information/Warning/Error/Critical/None`. The output target is `Logger.Output` (`Action<string>`), the minimum level is `Logger.MinLevel`.
-- **Applying the output-target config**: each Program.cs sets `Logger.MinLevel = config.Logging.MinLevel` and `Logger.Output = LogSink.Create(config.Logging.Output)` at startup. If `logging.output` is `stdout`/`stderr`/`none`, the respective sink; if of the form `<cycle>:<dir>/<pattern>`, the [RotatingFileSink](../src/lib/src/Logging/RotatingFileSink.cs) (date rotation + `~` home expansion + `*`→date stamp + automatic directory creation + AutoFlush). The default with no config is `stderr`. The conversion is in [LogSink.Create](../src/lib/src/Logging/LogSink.cs).
+- **Applying the output-target config**: each Program.cs sets `Logger.MinLevel = config.Logging.MinLevel` and `Logger.Output = LogSink.Create(config.Logging.Output)` at startup. If `logging.output` is `stdout`/`stderr`/`none`, the respective sink; if of the form `<cycle>:<dir>/<pattern>`, the [RotatingFileSink](../src/core/src/Logging/RotatingFileSink.cs) (date rotation + `~` home expansion + `*`→date stamp + automatic directory creation + AutoFlush). The default with no config is `stderr`. The conversion is in [LogSink.Create](../src/core/src/Logging/LogSink.cs).
 - **Guard clause mandatory on hot paths**: `Logger.Trace(...)` is `params object?[]`, which allocates an array and boxes. At sites called 1000+/sec, always test first with e.g. `if (Logger.IsTraceEnabled) { Logger.Trace(...); }`. `IsTraceEnabled` / `IsDebugEnabled` / `IsEnabled(level)` are provided.
 
-### Utility ([src/lib/src/Utility/](../src/lib/src/Utility/))
+### Utility ([src/core/src/Utility/](../src/core/src/Utility/))
 
 - **`PathParser.cs`** decomposes a path into drive / root / name elements, and can rebuild with a different separator, detect wildcard positions, and insert before/after. Each part is lazily evaluated with `Lazy<>`. A relatively well-built component. **Caution**: `PathParser.FromPath(path)` uses the OS default separator (`Path.DirectorySeparatorChar`). Paths flowing to `Api` / `InodeCache` are always normalized to `/`-separated, so when calling it inside Lib always be explicit with `PathParser.FromPath(path, "/")`.
 - **`Pg.cs`** a Dapper + Npgsql wrapper (`Query`, `QueryAsync`, `Execute`, `ExecuteAsync`). Caches an `NpgsqlDataSource` per connection string (the same connection string returns the same data source; pooling is managed inside the data source). `QuoteIdentifier` / `QuoteLiteral` escape. SQL appears in `Logger.Trace` (guarded by an early return on `Logger.IsTraceEnabled` inside `TraceQuery`, skipping `Regex.Replace` / `JsonSerializer.Serialize` when Trace is off). It provides the `Pg.OpenConnection` + `using var tx = conn.BeginTransaction()` pattern and a `Pg.WithTransaction<T>` helper (when dealing with `Span<byte>`, which is a ref struct and cannot be captured in a lambda, use `OpenConnection` directly).
@@ -101,13 +101,13 @@ Persistence convention on change: right after the caller does `config.X.Y = newV
 - **`NameNormalizer.cs`** normalizes owner/group/principal names (fullwidth ASCII → halfwidth + domain stripping of `\` and `@` + lowercasing). Applied to stored names, matching, and caller names so both OSes treat case and width identically (see [permission-interop.md](permission-interop.md)).
 - `Indexer.cs` (`ReadOnlyIndexer<,>` / `ReadOnlyIndexer<,,>` used by `PathParser`, `Pg`), `Fn.cs`, `String.cs`, `Json.cs`, `Retry.cs` — various helpers.
 
-### Collections ([src/lib/src/Collections/](../src/lib/src/Collections/))
+### Collections ([src/core/src/Collections/](../src/core/src/Collections/))
 
 - `RichDictionary<K,V>` a `Dictionary` extension with an `Added` event and `GetOrAdd<W>` derived-type support
 - `FirstList<T>` an advanced list built from a linked list of `Memory<T>` segments. Used in `Inode.Children`
 - `ComparerToEqualityComparer<T>` used internally by `FirstList`
 
-### Objects ([src/lib/src/Objects/](../src/lib/src/Objects/))
+### Objects ([src/core/src/Objects/](../src/core/src/Objects/))
 
 - `Extensions.cs` extensions like `object.To<T>()`, `As<T>()`, `Is<T>()`. Uses the **C# 14 (net10.0) `extension` syntax**.
 
@@ -115,7 +115,7 @@ Persistence convention on change: right after the caller does `config.X.Y = newV
 
 ## Configuration file
 
-[pgfs.toml.example](../pgfs.toml.example) is a sample. TOML format, in sections (`[database]` / `[mount]` / `[logging]` / ...). The runtime search path is defined in [`Schema.Setting.SearchPath`](../src/lib/src/Config/Schema.cs) (see [§Config](#config-srclibsrcconfig) above).
+[pgfs.toml.example](../pgfs.toml.example) is a sample. TOML format, in sections (`[database]` / `[mount]` / `[logging]` / ...). The runtime search path is defined in [`Schema.Setting.SearchPath`](../src/core/src/Config/Schema.cs) (see [§Config](#config-srclibsrcconfig) above).
 
 ---
 
@@ -127,7 +127,7 @@ All projects output under [bin/](../bin/) via the `<BaseOutputPath>$(MSBuildThis
 
 | Command | Output | Contents |
 |---|---|---|
-| `dotnet build -c Debug` | `bin/Debug/` | `lib.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + dependency dlls (framework-dependent) |
+| `dotnet build -c Debug` | `bin/Debug/` | `core.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + dependency dlls (framework-dependent) |
 | `dotnet build -c Release` | `bin/Release/` | the Release version of the above (`DebugType=embedded`, framework-dependent) |
 | `dotnet publish -c Release` | `bin/Publish/` | the 3 **single-file self-contained** executables `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs` (host OS RID auto, ~38 MB each) |
 
@@ -138,7 +138,7 @@ All projects output under [bin/](../bin/) via the `<BaseOutputPath>$(MSBuildThis
 dotnet build pgfs.sln
 
 # build individually
-dotnet build src/lib/Lib.csproj
+dotnet build src/core/Core.csproj
 dotnet build src/mkfs/Mkfs.csproj
 
 # Release publish (single-file for the host OS)

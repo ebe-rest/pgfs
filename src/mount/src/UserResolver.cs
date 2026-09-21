@@ -2,8 +2,8 @@ namespace Pgfs.Mount;
 
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
-using Lib.Logging;
-using Lib.Utility;
+using Core.Logging;
+using Core.Utility;
 
 /// <summary>
 /// P/Invokes the Linux/macOS <c>libc</c> getpwnam/getpwuid/getgrnam/getgrgid to convert between

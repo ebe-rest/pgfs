@@ -14,7 +14,7 @@ The DDL in this directory is **for reference / manual setup**; in normal operati
 | [pgfs_data.sql](pgfs_data.sql) | table | Reference management for file bodies (`id` BIGSERIAL). |
 | [pgfs_data_chunk.sql](pgfs_data_chunk.sql) | table | bytea chunk management for file bodies. PK on `(data_id, chunk_index)`. |
 | [pgfs_lock.sql](pgfs_lock.sql) | table | Lock-token table for cross-client mutual exclusion. PK on `target_id` alone ([docs/support_for_citus.md](../support_for_citus.md)). |
-| [pgfs_settings.sql](pgfs_settings.sql) | table | Settings store (the `SaveTo=Db` persistence target for `Pgfs.Lib.Config`). Flat `(scope, key)` PK. |
+| [pgfs_settings.sql](pgfs_settings.sql) | table | Settings store (the `SaveTo=Db` persistence target for `Pgfs.Core.Config`). Flat `(scope, key)` PK. |
 | [pgfs_audit.sql](pgfs_audit.sql) | table | Audit log. Records metadata changes into an `occurred_at` monthly RANGE partition (no DEFAULT; the app ensures the monthly partition). PK on `(occurred_at, id)`. Opt-in via `audit.enabled` (mkfs `--audit`) ([docs/audit-log.md](../audit-log.md)). |
 
 ## Run order

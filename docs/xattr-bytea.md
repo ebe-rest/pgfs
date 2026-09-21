@@ -11,7 +11,7 @@ of NUL / high bytes (`test_xattr_binary`).
 ## Motivation
 
 The JSONB version held `{ name: Base64(value) }` in `pgfs_inode.xattrs JSONB`
-([Api.EncodeXattrValue/DecodeXattrValue](../src/lib/src/Api/Api.cs)).
+([Api.EncodeXattrValue/DecodeXattrValue](../src/core/src/Api/Api.cs)).
 
 - An xattr value is **an arbitrary byte string at the OS level** (it may contain NUL; the trailing NUL of
   `security.selinux`, and `security.capability` / `system.posix_acl_access` are raw binary). A byte string
@@ -118,7 +118,7 @@ to index-search the two in-memory arrays.
 
 ## In-memory representation (Inode model / cache)
 
-Replace `string xattrs` / `string Xattrs` in [Models/Inode.cs](../src/lib/src/Models/Inode.cs) with
+Replace `string xattrs` / `string Xattrs` in [Models/Inode.cs](../src/core/src/Models/Inode.cs) with
 
 ```csharp
 public string[] xattr_names  { get; set; } = System.Array.Empty<string>();
@@ -127,9 +127,9 @@ public byte[][] xattr_values { get; set; } = System.Array.Empty<byte[]>();
 
 (Dapper maps automatically by column name). Provide one name→value lookup helper (e.g.
 `TryGetXattr(name, out byte[])`). Places to update:
-- [InodeCache.cs](../src/lib/src/Api/InodeCache.cs): change `inode.xattrs` in the central `inodeSelectColumns`
+- [InodeCache.cs](../src/core/src/Api/InodeCache.cs): change `inode.xattrs` in the central `inodeSelectColumns`
   to `inode.xattr_names, inode.xattr_values`. Change the root inode default (`xattrs = "{}"`) to empty arrays.
-- the cross-shard rename INSERT in [Api.cs](../src/lib/src/Api/Api.cs): change `xattrs = old.Xattrs` to
+- the cross-shard rename INSERT in [Api.cs](../src/core/src/Api/Api.cs): change `xattrs = old.Xattrs` to
   `xattr_names = old.xattr_names` / `xattr_values = old.xattr_values` (Npgsql binds the arrays directly). A
   normal `InsertInode` is a fresh row, so it uses empty arrays (leave it to the column DEFAULT).
 

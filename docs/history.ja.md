@@ -45,7 +45,7 @@
 
 ## クロスクライアント排他制御
 
-`pgfs_lock(target_id BIGINT PK)` 上の行ロックを使った cross-client 排他制御を [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) に組み込み。設計の詳細・組み込み箇所・lock 取得 SQL は [support_for_citus.ja.md §排他制御](support_for_citus.ja.md) を正とする。判断:
+`pgfs_lock(target_id BIGINT PK)` 上の行ロックを使った cross-client 排他制御を [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) に組み込み。設計の詳細・組み込み箇所・lock 取得 SQL は [support_for_citus.ja.md §排他制御](support_for_citus.ja.md) を正とする。判断:
 
 - **「自作 TTL テーブル + heartbeat」「`pg_advisory_xact_lock`」を採用しなかった理由**: TTL race / coordinator-local 制約 / Citus 分散できないため (詳細は support_for_citus.ja.md の案比較表)。
 - **namespace 分離を「別テーブル」ではなく「target_id の符号」で実装**: Citus の単一カラム分散制約があるため `pgfs_lock(target_id BIGINT PK)` の 1 列構成にせざるを得ず、namespace は値の符号 (`+data_id` / `-inode_id`) で分離。「pgfs_inode_lock を別テーブルに切り出して parent_id 分散 + co-located にする」案は inode lock が支配的 workload で非対称コストが見えてきたら再編する余地として残す。
@@ -66,7 +66,7 @@
 
 ## 設定モデル
 
-設定は **静的 `Field<T>` 記述子 + mutable POCO + `ConfigLoader` (CLI/TOML/DB/Default 統合) + `ConfigStore` (DB I/O)** で、[src/lib/src/Config/](../src/lib/src/Config/) 配下。Schema は [src/lib/src/Config/Schema.cs](../src/lib/src/Config/Schema.cs) (reflection で全 Field を自動列挙)。
+設定は **静的 `Field<T>` 記述子 + mutable POCO + `ConfigLoader` (CLI/TOML/DB/Default 統合) + `ConfigStore` (DB I/O)** で、[src/core/src/Config/](../src/core/src/Config/) 配下。Schema は [src/core/src/Config/Schema.cs](../src/core/src/Config/Schema.cs) (reflection で全 Field を自動列挙)。
 
 - **POCO で十分 (immutable)**: 現状のコード上、マウント中に書き換える設定は存在しない ([settings-matrix.ja.md](settings-matrix.ja.md) のライフサイクル集約参照)。これが「賢い」変更追跡ツリーではなく素朴な mutable POCO で済むと判断した論拠。
 - **`pgfs_settings` はフラット `(scope, key, value)` PK**: フラットキーは recursive CTE を不要にする (旧来の階層 `(id, parent_id, key, value)` 形は読み取りに recursive CTE が要った)。ルート inode が `id = 0` を使うのも同じ理由 — BIGSERIAL は 0 を返さないので自己参照 `(id=0, parent_id=0)` 行が実在行と衝突せず、cycle 検出も不要。
@@ -92,7 +92,7 @@
 
 ## /etc/fstab と mount(8) 統合
 
-[`ConfigLoader.ParseCli`](../src/lib/src/Config/ConfigLoader.cs) に位置引数 (source=connection or setting.file / target=mount-point) と `-o key=val,flag,...` パーサを内蔵。位置引数 1 つ目は `postgresql:` で始まれば `database.connection` (URL 形)、それ以外は `setting.file` (TOML パス) と分岐するヒューリスティック (`mount.pgfs postgresql://... /mnt/pgfs` と `mount.pgfs /etc/pgfs.toml /mnt/pgfs` を共存可能に。kv 形は判別不能なので `-c` 必須)。
+[`ConfigLoader.ParseCli`](../src/core/src/Config/ConfigLoader.cs) に位置引数 (source=connection or setting.file / target=mount-point) と `-o key=val,flag,...` パーサを内蔵。位置引数 1 つ目は `postgresql:` で始まれば `database.connection` (URL 形)、それ以外は `setting.file` (TOML パス) と分岐するヒューリスティック (`mount.pgfs postgresql://... /mnt/pgfs` と `mount.pgfs /etc/pgfs.toml /mnt/pgfs` を共存可能に。kv 形は判別不能なので `-c` 必須)。
 
 fstab/mount(8) helper 由来の無関係なフラグ (`-i`, `-f`, `-n`, `-s`, `-v`, `-N`, `-t`, `_netdev`, `noauto`, ...) は **helper context 限定** で silent に読み飛ばす。helper context 判定は (a) `args` に positional があり (b) 親プロセスの comm (`/proc/<ppid>/comm`) が `"mount"` の AND 条件。Linux 以外では常に直接実行扱い。これにより `-f` (= setting.file 短縮形) / `-s` (= database.schema 短縮形) は **直接実行時のみ** 効く。
 
@@ -106,7 +106,7 @@ fstab/mount(8) helper 由来の無関係なフラグ (`-i`, `-f`, `-n`, `-s`, `-
 
 ## 接続失敗時の再試行
 
-Polly を入れず軽量自作 ([src/lib/src/Utility/Retry.cs](../src/lib/src/Utility/Retry.cs)) で `Pg.OpenConnection` / `OpenConnectionAsync` を包む。transient 判定は `SocketException` / `TimeoutException` / `PostgresException` の SqlState 一覧 (`57P03` / `57P01` / `57P02` / `08000` / `08003` / `08006` / `08001` / `08004` / `53300`) / その他 `NpgsqlException`。
+Polly を入れず軽量自作 ([src/core/src/Utility/Retry.cs](../src/core/src/Utility/Retry.cs)) で `Pg.OpenConnection` / `OpenConnectionAsync` を包む。transient 判定は `SocketException` / `TimeoutException` / `PostgresException` の SqlState 一覧 (`57P03` / `57P01` / `57P02` / `08000` / `08003` / `08006` / `08001` / `08004` / `53300`) / その他 `NpgsqlException`。
 
 **クエリ実行中の例外は再試行しない** (書き込み idempotency が壊れるため、再試行は接続オープン時点のみに限定)。指数バックオフは `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` (既定 5 / 200ms / 2000ms) で制御、`Api` ctor が読み込んで `Retry.Configure` でグローバルに適用。
 
@@ -114,7 +114,7 @@ Polly を入れず軽量自作 ([src/lib/src/Utility/Retry.cs](../src/lib/src/Ut
 
 ## クロスクライアント変更通知
 
-PostgreSQL `LISTEN` / `NOTIFY` を使った cross-client change propagation ([src/lib/src/Api/NotifyChannel.cs](../src/lib/src/Api/NotifyChannel.cs) + [src/lib/src/Api/RemoteChangeInfo.cs](../src/lib/src/Api/RemoteChangeInfo.cs))。
+PostgreSQL `LISTEN` / `NOTIFY` を使った cross-client change propagation ([src/core/src/Api/NotifyChannel.cs](../src/core/src/Api/NotifyChannel.cs) + [src/core/src/Api/RemoteChangeInfo.cs](../src/core/src/Api/RemoteChangeInfo.cs))。
 
 - **オプトイン**: `database.notify_enabled` (default false)。CLI `--notify`、TOML `[database] notify_enabled = true`、`-o notify-enabled` のどれでも有効化。専用 connection 1 本 + 各書き込みに `SELECT pg_notify(...)` が乗るオーバヘッドがあるため、1 クライアント運用では OFF が望ましい。
 - **チャンネル名**: `{schema}_{prefix}notify` (例 `pgfs_pgfs_notify`)。同一 DB 内に複数 pgfs インスタンスがあっても衝突しない。
@@ -151,11 +151,11 @@ Windows e2e ([tests/windows/](../tests/windows/README.ja.md)) は Linux 版と�
 
 PGFS は認証システムではなく、**名前ベース ACL を保持するストレージ**である。UID/GID/SID/GUID を一切永続化せず、ユーザー/グループ DB も持たない — 名前は各 OS が実行時に解決する。内部モデルは **POSIX ACL を正準**とし、**Windows ACL はその lossy な投影ビュー**として描画する。設計の正は [permission-interop.md](permission-interop.ja.md) (図は [permission-interop-diagram.html](permission-interop-diagram.html))。
 
-- **名前正規化が中核**。owner / group / principal 名 — および呼び出し元自身の名前 — を保存時も照合時も同一に正規化する: ドメイン除去 (`DOMAIN\name` と `name@domain`)、全角 ASCII → 半角、小文字化。これにより Linux 本来の case-sensitive を pgfs 層で上書きし、両 OS で `alice`=`Alice`=`Ａlice` を同一視する。共通ヘルパは [NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs) で、各 resolver と mount FileSystem の保存・解決・呼び出し元 path に挿入。
+- **名前正規化が中核**。owner / group / principal 名 — および呼び出し元自身の名前 — を保存時も照合時も同一に正規化する: ドメイン除去 (`DOMAIN\name` と `name@domain`)、全角 ASCII → 半角、小文字化。これにより Linux 本来の case-sensitive を pgfs 層で上書きし、両 OS で `alice`=`Alice`=`Ａlice` を同一視する。共通ヘルパは [NameNormalizer](../src/core/src/Utility/NameNormalizer.cs) で、各 resolver と mount FileSystem の保存・解決・呼び出し元 path に挿入。
 - **DB は Linux 名で保存**し、各ドライバが well-known principal を双方向にマップする: `root`↔`Administrator(s)`、`nobody`/`nogroup`↔`NT AUTHORITY\ANONYMOUS LOGON`、`other`↔`Everyone` ([WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs))。未解決名は保存上は書き換えず、評価時のみ `nobody`/`nogroup` に解決する。
-- **ACL モデルは POSIX-only / allow のみ**。`mode` が owner/group/other 基本3クラスの正準。named user/group エントリと都度再計算する mask は正準 ACL ドキュメント ([PgfsAcl](../src/lib/src/Models/PgfsAcl.cs)) に置き、`user.pgfs_acl` xattr に JSON で保存 (ディレクトリ継承用の `default[]` も併存)。スキーマ追加なし。
+- **ACL モデルは POSIX-only / allow のみ**。`mode` が owner/group/other 基本3クラスの正準。named user/group エントリと都度再計算する mask は正準 ACL ドキュメント ([PgfsAcl](../src/core/src/Models/PgfsAcl.cs)) に置き、`user.pgfs_acl` xattr に JSON で保存 (ディレクトリ継承用の `default[]` も併存)。スキーマ追加なし。
 - **Windows は投影ビュー**。`GetFileSecurity` は inode (owner/group→SID、mode→owner/group/Everyone allow ACE、named は `user.pgfs_acl`) をセキュリティ記述子へ投影し、`SetFileSecurity` は受領した SD を mode + named ACL + owner/group へ逆投影する。deny ACE・ACE 順・継承フラグは POSIX に等価が無いため投影で落とす — Windows ⇄ Windows の ACL 完全一致は保証しない代わりに、実装が大幅に簡素になる (verbatim 保存・復元が不要)。owner にグループ SID が来たら `owner=nobody` / group フィールドへ振り分け、Linux の owner 解決でグループ情報を失わないようにする。
-- **Linux も同じ正準ストアを往復**する (`system.posix_acl_access` 経由)。[PosixAcl](../src/lib/src/Models/PosixAcl.cs) コーデックが ACL バイナリと `st_mode` 基本3クラス + `user.pgfs_acl` named を相互変換し、mask を都度再計算する。named 無しの最小 ACL は ENODATA を返し、getfacl が mode から導出する慣習に合わせる。`system.posix_acl_default` は現状パススルー (Linux 内 round-trip のみ)。
+- **Linux も同じ正準ストアを往復**する (`system.posix_acl_access` 経由)。[PosixAcl](../src/core/src/Models/PosixAcl.cs) コーデックが ACL バイナリと `st_mode` 基本3クラス + `user.pgfs_acl` named を相互変換し、mask を都度再計算する。named 無しの最小 ACL は ENODATA を返し、getfacl が mode から導出する慣習に合わせる。`system.posix_acl_default` は現状パススルー (Linux 内 round-trip のみ)。
 - **enforcement と保留事項**。両側とも正準ストアを表示・往復する (`ls -l` / Windows の Security タブ / `getfacl` すべて反映)。所有者一致判定は正規化済みの保存名で行う。Linux カーネルでの named ACL の厳密 enforce、`system.posix_acl_default` の Windows 継承変換、cross-OS 往復の自動テストは、ワークロードが要求するまで保留する。
 
 ---

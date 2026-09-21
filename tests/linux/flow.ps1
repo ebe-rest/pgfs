@@ -99,7 +99,7 @@ if (-not $NoBuild) {
 	Step "dotnet publish"
 	# Clean leftover obj/ rsynced from another platform (it remains on the first run even with --exclude).
 	Info "clean stale src/*/bin src/*/obj"
-	bash -c "ssh $SshOpt $Remote rm -rf ${RemoteRepo}/src/lib/bin ${RemoteRepo}/src/lib/obj ${RemoteRepo}/src/mkfs/bin ${RemoteRepo}/src/mkfs/obj ${RemoteRepo}/src/mount/bin ${RemoteRepo}/src/mount/obj ${RemoteRepo}/src/assign/bin ${RemoteRepo}/src/assign/obj"
+	bash -c "ssh $SshOpt $Remote rm -rf ${RemoteRepo}/src/core/bin ${RemoteRepo}/src/core/obj ${RemoteRepo}/src/mkfs/bin ${RemoteRepo}/src/mkfs/obj ${RemoteRepo}/src/mount/bin ${RemoteRepo}/src/mount/obj ${RemoteRepo}/src/assign/bin ${RemoteRepo}/src/assign/obj"
 	# `-p:RestoreDisableParallel=true` works around a symlink race on the remote: when the remote
 	# repo path is reached through a symlink, parallel restore tries to write the same
 	# obj/*.nuget.g.props from two paths and fails.

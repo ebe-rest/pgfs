@@ -14,7 +14,7 @@ PostgreSQL Filesystem (PGFS) のスキーマ / テーブル定義を **テーブ
 | [pgfs_data.sql](pgfs_data.sql) | テーブル | データ本体の参照管理テーブル (`id` BIGSERIAL)。 |
 | [pgfs_data_chunk.sql](pgfs_data_chunk.sql) | テーブル | データ本体の bytea チャンク管理。`(data_id, chunk_index)` で PK。 |
 | [pgfs_lock.sql](pgfs_lock.sql) | テーブル | cross-client 排他制御用 lock token テーブル。`target_id` 単独 PK ([docs/support_for_citus.ja.md](../support_for_citus.ja.md))。 |
-| [pgfs_settings.sql](pgfs_settings.sql) | テーブル | 設定値ストア (`Pgfs.Lib.Config` の `SaveTo=Db` 永続化先)。`(scope, key)` で PK のフラット形。 |
+| [pgfs_settings.sql](pgfs_settings.sql) | テーブル | 設定値ストア (`Pgfs.Core.Config` の `SaveTo=Db` 永続化先)。`(scope, key)` で PK のフラット形。 |
 | [pgfs_audit.sql](pgfs_audit.sql) | テーブル | 監査ログ。メタデータ変更を `occurred_at` 月次 RANGE パーティション (DEFAULT 無し、月パーティションはアプリが ensure) に記録。`(occurred_at, id)` で PK。`audit.enabled` (mkfs `--audit`) で opt-in ([docs/audit-log.ja.md](../audit-log.ja.md))。 |
 
 ## 実行順序

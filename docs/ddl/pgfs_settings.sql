@@ -4,10 +4,10 @@
 -- Settings value store (flat form)
 --
 -- A flat (scope, key) PK key-value store.
--- One row = the value of one Pgfs.Lib.Config.Field. e.g. (scope='mount', key='fallback_uname', value='"nobody"').
+-- One row = the value of one Pgfs.Core.Config.Field. e.g. (scope='mount', key='fallback_uname', value='"nobody"').
 -- value is JSONB, holding the native JSON form: string -> "..." / number -> 42 / bool -> true / false.
 --
--- Reading and writing setting values is handled by Pgfs.Lib.Config.ConfigStore (LoadAll / Save<T>).
+-- Reading and writing setting values is handled by Pgfs.Core.Config.ConfigStore (LoadAll / Save<T>).
 --
 -- Run it with a command like:
 --

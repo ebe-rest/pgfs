@@ -23,13 +23,13 @@ pgfs リポジトリの C# コードに適用される規約です。
 
 | 対象 | 規則 | 例 |
 |---|---|---|
-| namespace | `Pgfs.{Module}.{SubModule}` の階層 | `Pgfs.Lib.Config`, `Pgfs.Lib.Models`, `Pgfs.Mount`, `Pgfs.Assign` |
+| namespace | `Pgfs.{Module}.{SubModule}` の階層 | `Pgfs.Core.Config`, `Pgfs.Core.Models`, `Pgfs.Mount`, `Pgfs.Assign` |
 | ファイル名 | 主要クラス名と一致 (1 ファイル 1 主要クラス) | `RootConfig.cs` ← `class RootConfig` |
 | クラス / メソッド | PascalCase | `InodeCache`, `GetByPath` |
 | ローカル変数 / パラメータ | camelCase | `var inode`, `string path` |
 | private フィールド | camelCase (アンダースコア接頭辞は使わない) | `this.cache` |
 | 定数 / enum 値 | PascalCase | `Mode.S_IFDIR`, `Level.Trace` |
-| アセンブリ名 | 小文字 + ドット区切り (csproj の `<AssemblyName>`) | `lib.pgfs.dll`, `mkfs.pgfs.exe` |
+| アセンブリ名 | 小文字 + ドット区切り (csproj の `<AssemblyName>`) | `core.pgfs.dll`, `mkfs.pgfs.exe` |
 
 ### `this.` の明示
 
@@ -124,7 +124,7 @@ public async Task<int> ProcessAsync(int id) {
    - **末尾フロー脱出形**: 最後の文が `return` / `break` / `continue` / `throw` / `goto`。手前に任意の文 (副作用・ローカル変数宣言・ネスト `if` 等) を **0 個以上**置いて良い
    - **単一文のみ**: 1 文だけ。種類は問わない (代入・メソッド呼び出し・`+=` 等、ネスト `if`、`switch` 文も可)
 
-`goto` は **同一スコープ内のラベルへのジャンプ**に限り flow-exit として認める。ループ末尾の cleanup ラベルに飛ばす構造化イディオム ([RemoveRange](../src/lib/src/Collections/FirstList.cs) で実例あり) を許容するため。`goto` を関数境界を越えて使うのは引き続き禁止 (C# はそもそも不可)。
+`goto` は **同一スコープ内のラベルへのジャンプ**に限り flow-exit として認める。ループ末尾の cleanup ラベルに飛ばす構造化イディオム ([RemoveRange](../src/core/src/Collections/FirstList.cs) で実例あり) を許容するため。`goto` を関数境界を越えて使うのは引き続き禁止 (C# はそもそも不可)。
 2. **ログ出力はカウントしない (自由)**。`Console.Write*` / `Console.Error.Write*` / `Logger.*` / `Debug.Write*` / `Trace.Write*` の呼び出しは「副作用」として数えず、何文あっても規約に対してカウントしない。診断出力はロジックと直交するため
 3. フロー脱出系は **否定 (fail-fast) を優先**。肯定 (fast-path) のほうが明らかに読みやすければ可
 4. **`else` 禁止**
@@ -243,7 +243,7 @@ if (cond) {
 下記いずれかの呼び出しは「ログ出力」として副作用カウントの対象外:
 
 - `Console.Write*` / `Console.WriteLine` / `Console.Error.Write*`
-- `Logger.*` (本リポジトリ自作のロガー [`Pgfs.Lib.Logging`](../src/lib/src/Logging/))
+- `Logger.*` (本リポジトリ自作のロガー [`Pgfs.Core.Logging`](../src/core/src/Logging/))
 - `System.Diagnostics.Debug.Write*` / `Debug.WriteLine`
 - `System.Diagnostics.Trace.Write*` / `Trace.WriteLine`
 - 上記と同等の「副作用が出力先メッセージのみ」である呼び出し

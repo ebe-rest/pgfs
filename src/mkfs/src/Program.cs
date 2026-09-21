@@ -1,8 +1,8 @@
 namespace Pgfs.Mkfs;
 
-using Lib;
-using Lib.Config;
-using Lib.Logging;
+using Core;
+using Core.Config;
+using Core.Logging;
 using Tomlyn;
 using Tomlyn.Model;
 

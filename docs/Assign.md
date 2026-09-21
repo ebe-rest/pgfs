@@ -2,7 +2,7 @@
 
 Specification for `pgfs.assign`, the Windows tool that **mounts a PGFS filesystem via DokanNet**.
 
-This document describes the specification as implemented in [src/assign/](../src/assign/); it is the counterpart of the Linux/macOS [Pgfs.Mount](../src/mount/) (Tmds.Fuse version). All the shared logic is centralized in [`Pgfs.Lib.Api.Api`](../src/lib/src/Api/Api.cs), and Mount/Assign are purely OS-specific adapters.
+This document describes the specification as implemented in [src/assign/](../src/assign/); it is the counterpart of the Linux/macOS [Pgfs.Mount](../src/mount/) (Tmds.Fuse version). All the shared logic is centralized in [`Pgfs.Core.Api.Api`](../src/core/src/Api/Api.cs), and Mount/Assign are purely OS-specific adapters.
 
 A Japanese translation is available in [Assign.ja.md](Assign.ja.md).
 
@@ -13,7 +13,7 @@ It mounts a PostgreSQL database initialized as PGFS (built by [docs/Mkfs.md](Mkf
 ```
 PostgreSQL (pgfs_inode / pgfs_data / pgfs_data_chunk / pgfs_settings)
         ^v Npgsql + Dapper
-    Pgfs.Lib.Api.Api (cross-platform)
+    Pgfs.Core.Api.Api (cross-platform)
         ^v
     Pgfs.Assign.FileSystem : DokanNet.IDokanOperations2 (Windows-specific)
         ^v Dokan2 driver
@@ -65,7 +65,7 @@ It still builds on Linux/macOS (for cross-compilation), but running it hits the 
 
 ## Configuration
 
-The configuration model shares [`Pgfs.Lib.Config.RootConfig`](../src/lib/src/Config/RootConfig.cs). The same TOML settings file and the same command-line options as Mkfs / Mount apply. See [docs/Mkfs.md](Mkfs.md) for details.
+The configuration model shares [`Pgfs.Core.Config.RootConfig`](../src/core/src/Config/RootConfig.cs). The same TOML settings file and the same command-line options as Mkfs / Mount apply. See [docs/Mkfs.md](Mkfs.md) for details.
 
 What pgfs.assign uses in particular:
 
@@ -117,15 +117,15 @@ What pgfs.assign uses in particular:
 +---------------------------------------------------------------+
 | Pgfs.Assign.WindowsUserResolver -- SID <-> NTAccount (Windows) |
 +---------------------------------------------------------------+
-| Pgfs.Lib.Api.Api             -- DB operations (cross-platform) |
+| Pgfs.Core.Api.Api             -- DB operations (cross-platform) |
 |   - GetByPath / ListChildren / CreateDirectory / ...           |
 |   - ReadData / WriteData / TruncateData                        |
 |   - CreateSymlink / CreateHardLink                             |
 |   - GetXAttr / SetXAttr / ListXAttr / RemoveXAttr              |
 +---------------------------------------------------------------+
-| Pgfs.Lib.Api.InodeCache      -- inode memory cache             |
+| Pgfs.Core.Api.InodeCache      -- inode memory cache             |
 +---------------------------------------------------------------+
-| Pgfs.Lib.Utility.Pg          -- Npgsql + Dapper wrapper        |
+| Pgfs.Core.Utility.Pg          -- Npgsql + Dapper wrapper        |
 +---------------------------------------------------------------+
 ```
 
@@ -142,13 +142,13 @@ What pgfs.assign uses in particular:
 | Append mode | offset argument | `info.WriteToEndOfFile` |
 | ACL | st_mode + canonical ACL (via `system.posix_acl_access`) | st_mode + canonical ACL (SD projection via `Get/SetFileSecurity`) |
 
-Both just call [`Pgfs.Lib.Api.Api`](../src/lib/src/Api/Api.cs), so the actual DB operations are shared.
+Both just call [`Pgfs.Core.Api.Api`](../src/core/src/Api/Api.cs), so the actual DB operations are shared.
 
 ## Design decisions / provisional implementation
 
 ### Name normalization + well-known principal mapping
 
-Owner / group / principal names are normalized **on store, on match, and on caller-name** ([NameNormalizer](../src/lib/src/Utility/NameNormalizer.cs): fullwidth ASCII -> halfwidth + domain stripping `\` / `@` + lowercasing). The DB **stores Linux names**, and the well-known names are converted bidirectionally between Windows and Linux via the [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) mapping: `root` <-> `Administrator(s)` / `nobody` / `nogroup` <-> `NT AUTHORITY\ANONYMOUS LOGON` / `other` <-> `Everyone`. This lets files created on Windows resolve to the same name on Linux, and treats case and fullwidth/halfwidth as equivalent (the design of record is [permission-interop.md](permission-interop.md)).
+Owner / group / principal names are normalized **on store, on match, and on caller-name** ([NameNormalizer](../src/core/src/Utility/NameNormalizer.cs): fullwidth ASCII -> halfwidth + domain stripping `\` / `@` + lowercasing). The DB **stores Linux names**, and the well-known names are converted bidirectionally between Windows and Linux via the [WindowsUserResolver](../src/assign/src/WindowsUserResolver.cs) mapping: `root` <-> `Administrator(s)` / `nobody` / `nogroup` <-> `NT AUTHORITY\ANONYMOUS LOGON` / `other` <-> `Everyone`. This lets files created on Windows resolve to the same name on Linux, and treats case and fullwidth/halfwidth as equivalent (the design of record is [permission-interop.md](permission-interop.md)).
 
 ### `Hidden` / `System` / `Archive` attributes
 
@@ -206,7 +206,7 @@ Returns `Success` with `DokanOptions.UserModeLock` set. This makes the Dokan ker
 | POSIX-compatible range lock | not done | Left to the kernel via `DokanOptions.UserModeLock`. |
 | Junction (reparse points) | not done | The DB schema has an `is_junction` column. Referenced only from Mount. The Assign side does not support it. |
 | Notify (cross-client change notification) | done | Enabled with `database.notify_enabled=true` (CLI `--notify`). Receives other clients' writes via PostgreSQL LISTEN/NOTIFY, invalidates the local `InodeCache`, then [FileSystem.PropagateRemoteChange](../src/assign/src/FileSystem.cs) asks Explorer to redraw via `DokanInstance.NotifyUpdate(WindowsPath)`. For the payload spec etc., see "Cross-client change notification (Notify)" in [history.md](history.md). |
-| Reconnection on connection failure | done | Wraps `Pg.OpenConnection`-family calls with [Retry](../src/lib/src/Utility/Retry.cs). Exponential backoff, tuned by `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. Exceptions mid-query are not retried because of idempotency concerns. |
+| Reconnection on connection failure | done | Wraps `Pg.OpenConnection`-family calls with [Retry](../src/core/src/Utility/Retry.cs). Exponential backoff, tuned by `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. Exceptions mid-query are not retried because of idempotency concerns. |
 | Fallback for uname / gname absent on the OS | done | On `NTAccount.Translate` failure, resolves the SID of `mount.fallback_uname` / `mount.fallback_gname` (stored in the DB; defaults `nobody` / `nogroup`) and returns it. `nobody` / `nogroup` resolve to `NT AUTHORITY\ANONYMOUS LOGON` via the well-known mapping. If that itself cannot be resolved to a SID, hardcodes `WellKnownSidType.AnonymousSid` and logs a warning. Implemented in [src/assign/src/WindowsUserResolver.cs](../src/assign/src/WindowsUserResolver.cs). |
 
 ## Verification scenario (Windows)
@@ -244,6 +244,6 @@ dokanctl /u P:
 - [docs/database.md](database.md) — DB schema design.
 - [docs/Mkfs.md](Mkfs.md) — the initializer tool's spec.
 - [docs/Mount.md](Mount.md) — the Linux/macOS mount tool.
-- [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) — the shared API.
+- [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) — the shared API.
 - [Dokan](https://dokan-dev.github.io/) — the Dokan driver.
 - [DokanNet](https://github.com/dokan-dev/dokan-dotnet) — the C# bindings.

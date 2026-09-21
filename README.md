@@ -17,7 +17,7 @@ A project implementing a **FUSE filesystem backed by PostgreSQL storage** in C# 
 
 | Project | Path | Role | Platform | Status |
 |---|---|---|---|---|
-| **Lib** | [src/lib/](src/lib/) | core library (Models / Api / Logging / Collections / Utility / Objects) | cross-platform | implemented |
+| **Lib** | [src/core/](src/core/) | core library (Models / Api / Logging / Collections / Utility / Objects) | cross-platform | implemented |
 | **Mkfs** | [src/mkfs/](src/mkfs/) | CLI that initializes the PostgreSQL-side tables etc. (`mkfs.pgfs`) | cross-platform | implemented, verified on Linux |
 | **Mount** | [src/mount/](src/mount/) | mount tool for Linux/macOS (`mount.pgfs`, Tmds.Fuse) | Linux / macOS | all FUSE operations implemented (incl. data I/O, xattr, symlink, hard link, POSIX ACL), verified on Linux |
 | **Assign** | [src/assign/](src/assign/) | mount tool for Windows (`pgfs.assign`, DokanNet) | Windows | all Dokan operations implemented (ACL via Get/SetFileSecurity projection is supported too; only ADS is unsupported), verified on Windows |
@@ -39,7 +39,7 @@ The whole solution builds cleanly (0 warnings, 0 errors).
 dotnet build pgfs.sln
 
 # individually
-dotnet build src/lib/Lib.csproj
+dotnet build src/core/Core.csproj
 dotnet build src/mkfs/Mkfs.csproj
 dotnet build src/mount/Mount.csproj   # for Linux/macOS execution (only cross-builds on Windows)
 dotnet build src/assign/Assign.csproj # for Windows execution (only cross-builds on Linux/macOS)
@@ -49,11 +49,11 @@ Build artifacts are output under [bin/](bin/) (`<BaseOutputPath>$(MSBuildThisFil
 
 | Configuration | Output | Contents |
 |---|---|---|
-| `dotnet build -c Debug` | `bin/Debug/` | `lib.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + dependency dlls (framework-dependent) |
+| `dotnet build -c Debug` | `bin/Debug/` | `core.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + dependency dlls (framework-dependent) |
 | `dotnet build -c Release` | `bin/Release/` | the Release version of the above (framework-dependent) |
 | `dotnet publish -c Release` | `bin/Publish/` | the 3 single-file self-contained `{mkfs,mount,assign}.pgfs[.exe]` (host RID auto, ~38 MB each) |
 
-Assembly names are all lowercase dot-separated (`lib.pgfs`, `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs`), so a Debug build can be launched directly as e.g. `./bin/Debug/mkfs.pgfs.exe`.
+Assembly names are all lowercase dot-separated (`core.pgfs`, `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs`), so a Debug build can be launched directly as e.g. `./bin/Debug/mkfs.pgfs.exe`.
 
 ### Mount (Linux/macOS)
 

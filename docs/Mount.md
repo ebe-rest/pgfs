@@ -2,7 +2,7 @@
 
 Specification for `mount.pgfs`, the Linux / macOS tool that **mounts a PGFS filesystem via FUSE**.
 
-This document describes the specification as implemented in [src/mount/](../src/mount/); it is a separate executable from the Windows [Pgfs.Assign](../src/assign/) (DokanNet version). All the shared logic is centralized in [`Pgfs.Lib.Api.Api`](../src/lib/src/Api/Api.cs).
+This document describes the specification as implemented in [src/mount/](../src/mount/); it is a separate executable from the Windows [Pgfs.Assign](../src/assign/) (DokanNet version). All the shared logic is centralized in [`Pgfs.Core.Api.Api`](../src/core/src/Api/Api.cs).
 
 A Japanese translation is available in [Mount.ja.md](Mount.ja.md).
 
@@ -13,7 +13,7 @@ It presents a PostgreSQL database initialized as PGFS (built by [docs/Mkfs.md](M
 ```
 PostgreSQL (pgfs_inode / pgfs_data / pgfs_data_chunk / pgfs_settings)
         ^v Npgsql + Dapper
-    Pgfs.Lib.Api.Api (cross-platform)
+    Pgfs.Core.Api.Api (cross-platform)
         ^v
     Pgfs.Mount.FileSystem : Tmds.Fuse.FuseFileSystemBase (Linux/macOS-specific)
         ^v FUSE
@@ -89,7 +89,7 @@ It still builds on Windows (for cross-compilation), but running it hits the `Ope
 
 ## Configuration
 
-The configuration model shares [`Pgfs.Lib.Config.RootConfig`](../src/lib/src/Config/RootConfig.cs). The same TOML settings file and the same command-line options as Mkfs apply. See [docs/Mkfs.md](Mkfs.md) for details.
+The configuration model shares [`Pgfs.Core.Config.RootConfig`](../src/core/src/Config/RootConfig.cs). The same TOML settings file and the same command-line options as Mkfs apply. See [docs/Mkfs.md](Mkfs.md) for details.
 
 What mount.pgfs uses in particular:
 
@@ -140,7 +140,7 @@ There are currently no unimplemented operations (none return `-ENOSYS`).
 
 ## Cross-client change notification (Notify)
 
-Enabling `database.notify_enabled=true` receives other clients' writes via PostgreSQL `LISTEN` / `NOTIFY` and invalidates the local `InodeCache` ([src/lib/src/Api/NotifyChannel.cs](../src/lib/src/Api/NotifyChannel.cs)). When multiple `mount.pgfs` / `pgfs.assign` share-mount the same PG/pgfs, a writing client's changes become visible in other clients' `stat` / `ls`.
+Enabling `database.notify_enabled=true` receives other clients' writes via PostgreSQL `LISTEN` / `NOTIFY` and invalidates the local `InodeCache` ([src/core/src/Api/NotifyChannel.cs](../src/core/src/Api/NotifyChannel.cs)). When multiple `mount.pgfs` / `pgfs.assign` share-mount the same PG/pgfs, a writing client's changes become visible in other clients' `stat` / `ls`.
 
 **Linux-side limitation**: Tmds.Fuse's high-level API exposes nothing equivalent to libfuse's low-level `fuse_lowlevel_notify_inval_*`, so it **cannot actively invalidate the kernel inode/dentry cache**. Practical impact:
 
@@ -162,12 +162,12 @@ For the detailed spec / payload / receive handling, see "Cross-client change not
 |   - FillStat / ResolveOwner    * Linux-specific                |
 |   - CurrentUserNames           * applicable on Windows too     |
 +---------------------------------------------------------------+
-| Pgfs.Lib.Api.Api             -- DB operations (cross-platform) |
+| Pgfs.Core.Api.Api             -- DB operations (cross-platform) |
 |   - GetByPath / ListChildren / CreateDirectory / ...           |
 +---------------------------------------------------------------+
-| Pgfs.Lib.Api.InodeCache      -- inode memory cache             |
+| Pgfs.Core.Api.InodeCache      -- inode memory cache             |
 +---------------------------------------------------------------+
-| Pgfs.Lib.Utility.Pg          -- Npgsql + Dapper wrapper        |
+| Pgfs.Core.Utility.Pg          -- Npgsql + Dapper wrapper        |
 +---------------------------------------------------------------+
 ```
 
@@ -225,7 +225,7 @@ All implemented:
 Round-trips with `setfacl` / `getfacl`. The getxattr/setxattr of `system.posix_acl_access` is special-cased,
 converting between the ACL binary and **`st_mode`'s 3 base classes + the canonical ACL document (`user.pgfs_acl` named entries)**
 (implemented in [src/mount/src/FileSystem.cs](../src/mount/src/FileSystem.cs) `BuildPosixAccessAcl` / `SetPosixAccessAcl`; the codec lives in
-[PosixAcl](../src/lib/src/Models/PosixAcl.cs)).
+[PosixAcl](../src/core/src/Models/PosixAcl.cs)).
 
 - Entry order is USER_OBJ -> USER* -> GROUP_OBJ -> GROUP* -> MASK -> OTHER. The mask is recomputed each time as group_obj union all named entries.
 - A "minimal ACL" with no named entries returns ENODATA, matching the getfacl convention of deriving the ACL from the mode.
@@ -239,7 +239,7 @@ Requirement: the last-access time is not stored, and the same value as `st_mtime
 ### Mount options (`-o key=val,flag,...`)
 
 `-o` is accepted via `mount -t pgfs` / fstab / direct launch. Parsing is done by
-[ConfigLoader.ParseDashOOptions](../src/lib/src/Config/ConfigLoader.cs), which classifies each key into exactly
+[ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs), which classifies each key into exactly
 one of the following **classes** (this method is the source of truth for the compatibility map). For the
 `mount(8)` helper calling convention, the fstab entry format, and boot-time auto-mount details, see
 [fstab-support.md](fstab-support.md).
@@ -249,7 +249,7 @@ one of the following **classes** (this method is the source of truth for the com
 | **(1) FUSE passthrough** | `allow_other` `allow_root` `default_permissions` `ro` `auto_unmount` `kernel_cache` `auto_cache` / with value: `umask=022` `uid=` `gid=` `max_read=` `fsname=` `subtype=` `max_write=` `max_readahead=` `entry_timeout=` `attr_timeout=` | forwarded verbatim to libfuse ([Program.RunFuseMountAsync](../src/mount/src/Program.cs) appends after `attr_timeout=0`; last-wins overridable) |
 | **(2) accept and ignore** | `rw` `nonempty` `direct_io` `defaults` `nofail` `noauto` `_netdev` `user(s)` `owner` `group` `noatime` family `nostrictatime` `lazytime`/`nolazytime` `mand`/`nomand` `iversion`/`noiversion` `comment=` `nosuid`/`nodev`/`noexec`/`exec` `async`/`sync` etc. | kernel mount layer / fstab convention. **Not passed** to FUSE (silently accepted) |
 | **(2′) userspace prefix** | `x-systemd.automount` `x-systemd.requires=` `x-gvfs-show` `x-mount.mkdir` | the `x-` prefix is ignored wholesale, same as (2) (fstab extensions interpreted by systemd / gvfs etc.) |
-| **(3) pgfs setting** | `-o schema=foo` `-o cache-max-entries=2048` | normalize `-`/`_` and feed into the setting [Field](../src/lib/src/Config/Field.cs) (matched by `Scope.Key` / dash-o name) |
+| **(3) pgfs setting** | `-o schema=foo` `-o cache-max-entries=2048` | normalize `-`/`_` and feed into the setting [Field](../src/core/src/Config/Field.cs) (matched by `Scope.Key` / dash-o name) |
 | **(4) unknown** | `-o allwo_other` (typo) | emit a **Warning log** and ignore (so you notice at startup) |
 | **(5) unsupported mount operation** | `remount` `bind` `rbind` `move` | emit a **dedicated Warning** ("unsupported in pgfs") and ignore. Distinguished from a typo (4) to avoid the "I thought I remounted" misunderstanding |
 
@@ -277,8 +277,8 @@ On `Ctrl+C` it attempts `LazyUnmount` (equivalent to `fusermount3 -uz`). If the 
 | POSIX ACL (setfacl/getfacl) | done | `system.posix_acl_access` <-> `st_mode` + canonical ACL (`user.pgfs_acl`). Shares the same canonical store as the Windows DACL. See "POSIX ACL" above / [permission-interop.md](permission-interop.md). Strict named-ACL enforcement is pending requirements. |
 | macOS verification | not done | Depends on Tmds.Fuse's macOS support. Requires macFUSE. |
 | Access check (`Access`) | not done | For now, passing `default_permissions` at mount time lets the kernel decide. |
-| Mount option `-o` | done | Classifies `-o key=val,flag,...` (FUSE passthrough / accept-and-ignore + `x-` prefix / pgfs setting / unknown=Warning / unsupported mount operation=explicit Warning). See "Mount options" above. Implemented in [ConfigLoader.ParseDashOOptions](../src/lib/src/Config/ConfigLoader.cs). |
-| Reconnection on connection failure | done | Wraps `Pg.OpenConnection`-family calls with [Retry](../src/lib/src/Utility/Retry.cs). Exponential backoff, tuned by `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. Exceptions mid-query are not retried because of idempotency concerns. |
+| Mount option `-o` | done | Classifies `-o key=val,flag,...` (FUSE passthrough / accept-and-ignore + `x-` prefix / pgfs setting / unknown=Warning / unsupported mount operation=explicit Warning). See "Mount options" above. Implemented in [ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs). |
+| Reconnection on connection failure | done | Wraps `Pg.OpenConnection`-family calls with [Retry](../src/core/src/Utility/Retry.cs). Exponential backoff, tuned by `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. Exceptions mid-query are not retried because of idempotency concerns. |
 | Fallback for uname / gname absent on the OS | done | On `getpwnam` / `getgrnam` failure, returns the uid/gid resolved from `mount.fallback_uname` / `mount.fallback_gname` (stored in the DB; defaults `nobody` / `nogroup`). If the fallback name itself cannot be resolved, hardcodes uid=65534 (the NFS nobody convention) and logs a warning. Implemented in [src/mount/src/UserResolver.cs](../src/mount/src/UserResolver.cs). |
 | Read/Write streaming | partial | Currently each chunk is upserted/read independently. For heavy I/O there is room to batch multiple chunks per round-trip. |
 | Binary xattr values | done | **Raw byte strings held faithfully** in `xattr_values BYTEA[]` (migrated from the old Base64+JSONB). Any byte string including NUL round-trips unmodified, and it is directly visible as bytea in SQL. Design & verification in [xattr-bytea.md](xattr-bytea.md). |
@@ -341,6 +341,6 @@ fusermount3 -u /mnt/pgfs
 
 - [docs/database.md](database.md) — DB schema design.
 - [docs/Mkfs.md](Mkfs.md) — the initializer tool's spec.
-- [src/lib/src/Api/Api.cs](../src/lib/src/Api/Api.cs) — the shared API.
-- [src/lib/src/Api/InodeCache.cs](../src/lib/src/Api/InodeCache.cs) — the inode cache.
+- [src/core/src/Api/Api.cs](../src/core/src/Api/Api.cs) — the shared API.
+- [src/core/src/Api/InodeCache.cs](../src/core/src/Api/InodeCache.cs) — the inode cache.
 - [Tmds.Fuse](https://github.com/tmds/Tmds.Fuse) — the FUSE library.

@@ -8,14 +8,14 @@
 
 ステータス: **実装済み**。非 Citus フルチェーン / Citus 多 worker 集約 / docker 実マウント越し `df` を実機で検証済み。本書が実装の正。
 
-実装: [Schema.Statfs.Mode](../src/lib/src/Config/Schema.cs) (`--statfs`) / [Initializer.CreateStatfsFunctionsAsync](../src/mkfs/src/Initializer.cs) (関数生成) / [Api.GetStatFs](../src/lib/src/Api/Api.cs) (呼び出し + 数秒キャッシュ + 公称フォールバック) / [mount StatFS](../src/mount/src/FileSystem.cs) + [assign GetDiskFreeSpace](../src/assign/src/FileSystem.cs) の配線。
+実装: [Schema.Statfs.Mode](../src/core/src/Config/Schema.cs) (`--statfs`) / [Initializer.CreateStatfsFunctionsAsync](../src/mkfs/src/Initializer.cs) (関数生成) / [Api.GetStatFs](../src/core/src/Api/Api.cs) (呼び出し + 数秒キャッシュ + 公称フォールバック) / [mount StatFS](../src/mount/src/FileSystem.cs) + [assign GetDiskFreeSpace](../src/assign/src/FileSystem.cs) の配線。
 
 ## 動機 / 現状
 
 素朴な [`FileSystem.StatFS`](../src/mount/src/FileSystem.cs) は次の擬似ディスク情報を返す:
 
-- 容量 = [`Api.GetCapacityBytes`](../src/lib/src/Api/Api.cs) = `file_system.max_file_size` (公称容量 / nominal)
-- 使用 = [`Api.GetTotalUsedBytes`](../src/lib/src/Api/Api.cs) = `pg_database_size(...)`
+- 容量 = [`Api.GetCapacityBytes`](../src/core/src/Api/Api.cs) = `file_system.max_file_size` (公称容量 / nominal)
+- 使用 = [`Api.GetTotalUsedBytes`](../src/core/src/Api/Api.cs) = `pg_database_size(...)`
 - 空き = 容量 − 使用
 
 つまり「公称容量 − DB サイズ」であって、**裏の FS の実空き容量ではない**。`df` を本物にしたい。
@@ -109,7 +109,7 @@ return undef;
 `Api` メソッド経由で `SELECT total, avail FROM {prefix}statfs()` を呼ぶ。
 
 **C# 側でもう一段フォールバック**: 関数が存在しない / エラー / `avail IS NULL` のときは、
-[`GetCapacityBytes`](../src/lib/src/Api/Api.cs) − [`GetTotalUsedBytes`](../src/lib/src/Api/Api.cs)
+[`GetCapacityBytes`](../src/core/src/Api/Api.cs) − [`GetTotalUsedBytes`](../src/core/src/Api/Api.cs)
 (= 公称容量 − DB サイズ) に戻す。これで「素の PG・古い接続先・df 無し」でも壊れない。
 
 全体のフォールバック連鎖:
@@ -173,14 +173,14 @@ default→`auto`。値 `nominal` は既存コードの「公称容量 (nominal)�
 ## 実装サマリ
 
 1. `Schema` に `app.statfs` (`StringField`, `SaveTo=Db`, `AppliesTo=Mkfs`, 既定 `auto`) + mkfs 値検証。
-2. mkfs CLI `--statfs` / `--statfs-mode` 配線 ([Schema.Statfs.Mode](../src/lib/src/Config/Schema.cs))。
+2. mkfs CLI `--statfs` / `--statfs-mode` 配線 ([Schema.Statfs.Mode](../src/core/src/Config/Schema.cs))。
 3. [`Initializer.CreateStatfsFunctionsAsync`](../src/mkfs/src/Initializer.cs):
    - `auto`/`require`: `CREATE EXTENSION IF NOT EXISTS plperlu` (require で不可なら失敗、auto は公称フォールバック)
      → `{prefix}statvfs` (plperlu) / `{prefix}fs_free` / `{prefix}statfs` を作成。**`fs_free`/`statfs` は `SECURITY DEFINER`**。
    - `nominal`: 既存の `{prefix}statfs`/`fs_free`/`statvfs` を **DROP**。`auto`+plperlu 不在: 関数を作らない。
    - Citus 時は `run_command_on_all_nodes` で全ノードに statvfs/fs_free を配置、`statfs` 入口は coordinator のみ
      (worker 集約は `run_command_on_workers`、1 ノードはローカル)。
-4. [`Api.GetStatFs()`](../src/lib/src/Api/Api.cs) (→ `SELECT total, avail FROM {prefix}statfs()`) + 数秒キャッシュ + 関数不在/失敗時の公称フォールバック。
+4. [`Api.GetStatFs()`](../src/core/src/Api/Api.cs) (→ `SELECT total, avail FROM {prefix}statfs()`) + 数秒キャッシュ + 関数不在/失敗時の公称フォールバック。
 5. [`FileSystem.StatFS`](../src/mount/src/FileSystem.cs) (mount) と assign [`GetDiskFreeSpace`](../src/assign/src/FileSystem.cs) を `GetStatFs()` 経由に差し替え。
 6. (将来) replication_factor>1 の二重計上補正 / Windows 実測 / マウント時の全ノード ensure / C 化。
 

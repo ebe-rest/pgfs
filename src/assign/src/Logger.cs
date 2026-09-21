@@ -1,7 +1,7 @@
 namespace Pgfs.Assign;
 
-using Lib;
-using Lib.Logging;
+using Core;
+using Core.Logging;
 using LTRData.Extensions.Native.Memory;
 
 public static class Logger
@@ -22,8 +22,8 @@ public static class Logger
 
 	public static void Log(Level.Enum logLevel, params object?[] messages) => Logger.Default.Log(logLevel, messages!);
 
-	/// <summary>Process lifecycle markers (always stderr). Backed by <see cref="Lib.Logging.Logger.Lifecycle"/>.</summary>
-	public static void Lifecycle(params object?[] messages) => Lib.Logging.Logger.Lifecycle(messages);
+	/// <summary>Process lifecycle markers (always stderr). Backed by <see cref="Core.Logging.Logger.Lifecycle"/>.</summary>
+	public static void Lifecycle(params object?[] messages) => Core.Logging.Logger.Lifecycle(messages);
 
 	public static void Trace(params object?[] messages) => Logger.Log(Level.Trace, messages);
 	public static void Debug(params object?[] messages) => Logger.Log(Level.Debug, messages);
@@ -40,7 +40,7 @@ public static class Logger
 
 	public sealed class Instance(ILogger parent) : ILogger, DokanNet.Logging.ILogger
 	{
-		public Instance() : this(Lib.Logging.Logger.Default) { }
+		public Instance() : this(Core.Logging.Logger.Default) { }
 
 		public bool DebugEnabled => parent.MinLevel <= Level.Debug;
 
