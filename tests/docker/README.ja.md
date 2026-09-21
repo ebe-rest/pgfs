@@ -23,7 +23,7 @@
 ## 実行
 
 ```bash
-# 前提: docker + docker compose v2、submodule 取得済み (vendor/Tmds.Fuse)
+# 前提: docker + docker compose v2
 bash tests/docker/run.sh                 # 全フロー (build → e2e 35/35 → teardown)
 TEST_FILTER=xattr bash tests/docker/run.sh
 KEEP_UP=1 bash tests/docker/run.sh       # 失敗調査用にコンテナを残す
@@ -61,4 +61,3 @@ docker compose -p pgfs-e2e down -v       # 掃除
 
 - **e2e はコンテナ内で実行**: FUSE マウントをホストに見せる方式 (mount namespace 伝播) は脆いので、`e2e.sh` を mount コンテナ内で走らせ、マウントポイントもコンテナ内に置く。
 - **fallback テスト**: `test_fallback_uname_gname` は DB に直接 INSERT する。`run.sh` が `PGFS_TEST_PG_EXEC="psql -h coord ..."` を渡すことで、ssh pgsql_server 経路ではなく compose network 越しの psql を使う。
-- **submodule 必須**: build stage が `vendor/Tmds.Fuse` のソースを COPY するため、`git submodule update --init --recursive` 済みであること。

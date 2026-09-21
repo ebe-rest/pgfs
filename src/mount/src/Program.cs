@@ -16,15 +16,15 @@ using Core.Logging;
 /// Flow:
 ///   1. Build a <see cref="RootConfig"/> from CLI / TOML / DB / defaults via <see cref="ConfigLoader"/>.
 ///   2. Check the Windows / FUSE dependencies.
-///   3. Prepare an <see cref="Api"/>, build a <see cref="FileSystem"/>, and <see cref="Tmds.Fuse.Fuse.Mount"/>.
+///   3. Prepare an <see cref="Api"/>, build a <see cref="Pgfs.Fuse.FileSystem"/>, and <see cref="Pgfs.Fuse.Fuse.Mount"/>.
 ///   4. Wait until unmount.
 ///
 /// Implementation note:
-///   Tmds.Fuse / Tmds.LibC have no Windows runtime, so if <c>Main</c> references those types at JIT time
+///   Pgfs.Fuse / Tmds.LibC have no Windows runtime, so if <c>Main</c> references those types at JIT time
 ///   on Windows it dies with a <c>FileNotFoundException</c>. The Linux-specific mount logic is therefore
 ///   split out into <see cref="RunFuseMountAsync"/> and JITed lazily via
 ///   <c>[MethodImpl(MethodImplOptions.NoInlining)]</c>. Main itself holds no direct reference to
-///   Tmds.Fuse / FileSystem.
+///   Pgfs.Fuse / FileSystem.
 /// </summary>
 public static class Program
 {
@@ -45,7 +45,7 @@ public static class Program
 		try {
 			// When launched as a `mount(8)` helper, the env is stripped down to almost nothing including PATH
 			// (in practice only 8-11 vars: LANG / LOGNAME / PWD / SHLVL / SUDO_* / TERM / USER / _).
-			// Tmds.Fuse's `HasFusermount` searches `$PATH` for `fusermount3`, so without PATH
+			// Pgfs.Fuse's `HasFusermount` searches `$PATH` for `fusermount3`, so without PATH
 			// `CheckDependencies` returns false and we exit immediately with "FUSE dependencies not found".
 			// Supply a minimal PATH right at startup before proceeding. Leave it alone if already set.
 			if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PATH"))) {
@@ -106,7 +106,7 @@ public static class Program
 				return await RunAsParentAsync(args);
 			}
 
-			// From here on it is Linux/macOS only. It references Tmds.Fuse / FileSystem, so it is split into a
+			// From here on it is Linux/macOS only. It references Pgfs.Fuse / FileSystem, so it is split into a
 			// separate method to avoid a JIT error on Windows.
 			var rc = await RunFuseMountAsync(config, isChild);
 			Logger.Lifecycle($"exited (code {rc})");
@@ -212,9 +212,9 @@ public static class Program
 	[MethodImpl(MethodImplOptions.NoInlining)]
 	private static async Task<int> RunFuseMountAsync(RootConfig config, bool isChild) {
 		// Check that libfuse3 / fusermount3 are visible (Linux/macOS-specific).
-		if (!Tmds.Fuse.Fuse.CheckDependencies()) {
+		if (!Pgfs.Fuse.Fuse.CheckDependencies()) {
 			Console.Error.WriteLine("FUSE dependencies not found:");
-			Console.Error.WriteLine(Tmds.Fuse.Fuse.InstallationInstructions);
+			Console.Error.WriteLine(Pgfs.Fuse.Fuse.InstallationInstructions);
 			return 1;
 		}
 
@@ -248,14 +248,14 @@ public static class Program
 		Logger.Information($"mounting PGFS: {mountPoint}");
 		Logger.Information("FUSE options: ", fuseOptionsString);
 
-		using var fileSystem = new FileSystem(api);
-		var mountOptions = new Tmds.Fuse.MountOptions {
+		using var fileSystem = new Pgfs.Fuse.FileSystem(api);
+		var mountOptions = new Pgfs.Fuse.MountOptions {
 			SingleThread = false,
 			Options = fuseOptionsString,
 		};
 
 		try {
-			using var fuseMount = Tmds.Fuse.Fuse.Mount(mountPoint, fileSystem, mountOptions);
+			using var fuseMount = Pgfs.Fuse.Fuse.Mount(mountPoint, fileSystem, mountOptions);
 			Logger.Information("PGFS mounted successfully. To unmount, run fusermount3 -u or stop with Ctrl+C.");
 
 			Console.CancelKeyPress += (_, e) => {

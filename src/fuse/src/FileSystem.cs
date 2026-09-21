@@ -1,4 +1,4 @@
-namespace Pgfs.Mount;
+namespace Pgfs.Fuse;
 
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
@@ -7,12 +7,12 @@ using Core.Api;
 using Core.Logging;
 using Core.Models;
 using Core.Utility;
-using Tmds.Fuse;
+using Pgfs.Fuse;
 using Tmds.Linux;
 using static Tmds.Linux.LibC;
 
 /// <summary>
-/// PGFS FUSE filesystem implementation running on Tmds.Fuse (Linux/macOS).
+/// PGFS FUSE filesystem implementation running on Pgfs.Fuse (Linux/macOS).
 ///
 /// Cross-platform DB operations go through <see cref="Api"/>, and this class is purely a
 /// "FUSE -&gt; Api" adapter.
@@ -864,7 +864,7 @@ public sealed class FileSystem : FuseFileSystemBase
 
 	public override int SymLink(ReadOnlySpan<byte> path, ReadOnlySpan<byte> target) {
 		this.SetAuditContext();
-		// Tmds.Fuse 0.1's FuseMount.Symlink(path*, path*) passes libfuse's (target, linkname) to
+		// Pgfs.Fuse 0.1's FuseMount.Symlink(path*, path*) passes libfuse's (target, linkname) to
 		// IFuseFileSystem.SymLink in reverse order (arg2 -> arg1 at the IL level).
 		// So in this override, arg1 = linkPath (where to create it) and arg2 = linkContent (the link body).
 		// The parameter names path/target come from libfuse and are misleading, so rebind them to meaningful variables here.

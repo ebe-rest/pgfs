@@ -10,7 +10,7 @@ using System.Text.Json;
 /// <summary>
 /// The API that exposes PGFS filesystem operations.
 ///
-/// A shared layer used from both Mount (Linux/macOS, Tmds.Fuse) and Assign (Windows, DokanNet).
+/// A shared layer used from both Mount (Linux/macOS, Pgfs.Fuse) and Assign (Windows, DokanNet).
 /// OS-specific concepts (uid/gid resolution, xattr details, symlinks, etc.) are intentionally left to the
 /// caller; here it handles only DB read/write and inode cache management.
 /// </summary>
@@ -68,7 +68,7 @@ public class Api : System.IDisposable
 	/// <summary>
 	/// The OS bridge called when a change notification from another client is received. On Assign it is used to call
 	/// <c>DokanInstance.NotifyUpdate</c> etc. to ask Explorer to repaint.
-	/// Mount (Linux) leaves it null because the Tmds.Fuse high-level API has no counterpart (the kernel attr cache is
+	/// Mount (Linux) leaves it null because the Pgfs.Fuse high-level API has no counterpart (the kernel attr cache is
 	/// disabled via <c>attr_timeout=0</c>, so just invalidating InodeCache makes stat/ls return the latest).
 	/// </summary>
 	public System.Action<RemoteChangeInfo>? OsBridge { get; set; }

@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<RootNamespace>Pgfs.Fuse</RootNamespace>
+		<AssemblyName>fuse.pgfs</AssemblyName>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<LangVersion>latest</LangVersion>
+		<!--
+			The filesystem mechanism layer for Linux / macOS: an in-house libfuse P/Invoke binding
+			plus the FUSE FileSystem implementation. The binding is derived from Tmds.Fuse
+			(MIT, securefolderfs-community fork) and is credited in NOTICES.md.
+
+			Output layout:
+			  dotnet build -c Debug|Release -> bin/{Debug,Release}/fuse.pgfs.dll
+			  dotnet publish                -> nothing (bundled into the mount.pgfs single file)
+
+			Linux/macOS only, but it still builds on Windows so it can be cross-compiled.
+		-->
+		<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<IsPublishable>false</IsPublishable>
+	</PropertyGroup>
+
+	<PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+		<DebugType>embedded</DebugType>
+	</PropertyGroup>
+
+	<!-- Per-OS symbols. -->
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+		<DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+	</PropertyGroup>
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+		<DefineConstants>$(DefineConstants);LINUX</DefineConstants>
+	</PropertyGroup>
+	<PropertyGroup Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+		<DefineConstants>$(DefineConstants);MACOS</DefineConstants>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="System.Memory" Version="4.6.0" />
+		<PackageReference Include="Tmds.LibC" Version="0.5.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\core\Core.csproj" />
+	</ItemGroup>
+
+</Project>

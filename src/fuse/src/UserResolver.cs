@@ -1,4 +1,4 @@
-namespace Pgfs.Mount;
+namespace Pgfs.Fuse;
 
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;

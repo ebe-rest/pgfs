@@ -21,7 +21,7 @@ public sealed class MountConfig
 	/// <summary>
 	/// The FUSE flags received via `-o key=val,flag,...` (`allow_other`, `default_permissions`, `ro`, `rw`,
 	/// `nonempty`, `auto_unmount`, etc.). <see cref="ConfigLoader"/> accumulates them in `ParseDashOOptions`, and
-	/// mount.pgfs wires them into <c>Tmds.Fuse.MountOptions.Options</c>. Not placed in Schema and not managed by a Field
+	/// mount.pgfs wires them into <c>Pgfs.Fuse.MountOptions.Options</c>. Not placed in Schema and not managed by a Field
 	/// (because it is an arbitrary key set).
 	/// </summary>
 	public System.Collections.Generic.List<string> FuseFlags { get; set; } = new();

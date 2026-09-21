@@ -19,7 +19,7 @@
 		<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>
 		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 		<!--
-			AOT / Trim are disabled because Tmds.Fuse / Dapper / Tomlyn rely on dynamic code generation.
+			AOT / Trim are disabled because Pgfs.Fuse / Dapper / Tomlyn rely on dynamic code generation.
 		-->
 		<PublishAot>false</PublishAot>
 		<PublishTrimmed>false</PublishTrimmed>
@@ -74,13 +74,10 @@
 	<ItemGroup>
 		<ProjectReference Include="..\core\Core.csproj" />
 		<!--
-			The original Tmds.Fuse (tmds/Tmds.Fuse 0.1.0-190711-50, 2019-07-11) does not expose
-			MountOptions.Options, so there is no way to pass `-o allow_other` / `-o use_ino` /
-			`-o attr_timeout=0` to libfuse. The active securefolderfs-community fork adds
-			MountOptions.Options and tracks net10.0, so we vendor it as a submodule under vendor/ and
-			ProjectReference it (the fork is not published on NuGet).
+			The libfuse binding and the FUSE filesystem live in Pgfs.Fuse. The binding is derived
+			from Tmds.Fuse (MIT); see src/fuse/NOTICES.md for the credits.
 		-->
-		<ProjectReference Include="..\..\vendor\Tmds.Fuse\src\Tmds.Fuse\Tmds.Fuse.csproj" />
+		<ProjectReference Include="..\fuse\Fuse.csproj" />
 	</ItemGroup>
 
 </Project>

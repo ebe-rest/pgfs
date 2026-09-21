@@ -26,7 +26,7 @@ rebuild. Rebuild only when `mount.pgfs`/`mkfs.pgfs` itself changes (`run.sh` def
 ## Running
 
 ```bash
-# Prerequisites: docker + docker compose v2, submodule fetched (vendor/Tmds.Fuse)
+# Prerequisites: docker + docker compose v2
 bash tests/docker/run.sh                 # full flow (build -> e2e 35/35 -> teardown)
 TEST_FILTER=xattr bash tests/docker/run.sh
 KEEP_UP=1 bash tests/docker/run.sh       # keep the containers for failure investigation
@@ -67,5 +67,3 @@ All are overridable via `${VAR:-default}`.
 - **The fallback test**: `test_fallback_uname_gname` INSERTs into the DB directly. `run.sh` passes
   `PGFS_TEST_PG_EXEC="psql -h coord ..."`, so it uses psql over the compose network rather than the
   ssh pgsql_server path.
-- **submodule required**: the build stage COPYs the `vendor/Tmds.Fuse` source, so
-  `git submodule update --init --recursive` must have run.

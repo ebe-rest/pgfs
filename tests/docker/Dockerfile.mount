@@ -11,11 +11,9 @@
 # self-contained from build to image (= the primary goal of docker integration = reproducibility).
 #
 # Note: the build context is the **repository root** (compose.yml's build.context = ../..).
-#       The vendor/Tmds.Fuse (submodule) source must be present in it too
-#       (i.e. git submodule update --init --recursive must have run).
 
 # Pin RUNTIME_BASE to bookworm (Debian 12). libfuse 3.17 on trixie (Debian 13) and later
-# bumped its SONAME to libfuse3.so.4, so the libfuse3.so.3 that Tmds.Fuse looks for no longer
+# bumped its SONAME to libfuse3.so.4, so the libfuse3.so.3 that Pgfs.Fuse looks for no longer
 # exists (= CheckDependencies fails with "libfuse not found"). bookworm's fuse3 ships
 # libfuse 3.14 (= libfuse3.so.3), so it works.
 ARG SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0

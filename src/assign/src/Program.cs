@@ -10,7 +10,7 @@ using Core.Logging;
 /// <summary>
 /// pgfs.assign entry point. Mounts PGFS as a drive via DokanNet on Windows.
 ///
-/// On Linux / macOS, use <see cref="Pgfs.Mount"/> (Tmds.Fuse) instead.
+/// On Linux / macOS, use <see cref="Pgfs.Mount"/> (Pgfs.Fuse) instead.
 ///
 /// Flow:
 ///   1. Build a <see cref="RootConfig"/> from CLI / TOML / DB / defaults via <see cref="ConfigLoader"/>.
@@ -54,7 +54,7 @@ public static class Program
 			Logger.Lifecycle($"started (pid {Environment.ProcessId})");
 
 			if (!OperatingSystem.IsWindows()) {
-				Console.Error.WriteLine("pgfs.assign is Windows-only. On Linux/macOS, use mount.pgfs (the Tmds.Fuse version).");
+				Console.Error.WriteLine("pgfs.assign is Windows-only. On Linux/macOS, use mount.pgfs (the Pgfs.Fuse version).");
 				return 1;
 			}
 
@@ -125,7 +125,7 @@ public static class Program
 			The mount point may be a drive letter ("P:") or a directory path
 			("C:\mnt\pgfs").
 
-			On non-Windows platforms use mount.pgfs (Tmds.Fuse). See docs/Assign.md.
+			On non-Windows platforms use mount.pgfs (Pgfs.Fuse). See docs/Assign.md.
 			""";
 		Console.Write(HelpText.Build(Tool.Assign, intro, footer));
 	}
