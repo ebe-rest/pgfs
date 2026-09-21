@@ -4,7 +4,15 @@
     Shared assembly metadata for every project under src (core / fuse / mkfs / mount / assign).
     The startup banner (Pgfs.Core.AppInfo) reads the Version / Product / Copyright set here at runtime.
   -->
+  <!--
+    Check the code style rules in .editorconfig (the IDE#### diagnostics) during the build too.
+    With the default (false) the IDE analyzers never run, so a rule that is configured - such as
+    csharp_prefer_braces = true:warning - is "written down but has no effect".
+    Note that the ternary ban (coding-style.md rule 6) cannot be enforced here; see the matching
+    comment in .editorconfig and docs/coding-style.md.
+  -->
   <PropertyGroup>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <Version>0.1.0</Version>
     <Product>pgfs</Product>
     <Company>ebe-rest</Company>
