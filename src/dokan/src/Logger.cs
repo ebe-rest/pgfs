@@ -1,4 +1,4 @@
-namespace Pgfs.Assign;
+namespace Pgfs.Dokan;
 
 using Core;
 using Core.Logging;

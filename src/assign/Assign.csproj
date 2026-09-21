@@ -67,12 +67,9 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="DokanNet" Version="2.3.0.3" />
-		<PackageReference Include="Npgsql" Version="9.0.4" />
-	</ItemGroup>
-
-	<ItemGroup>
+		<!-- DokanNet and Npgsql come in transitively through Dokan / Core. -->
 		<ProjectReference Include="..\core\Core.csproj" />
+		<ProjectReference Include="..\dokan\Dokan.csproj" />
 	</ItemGroup>
 
 </Project>

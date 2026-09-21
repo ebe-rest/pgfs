@@ -6,6 +6,8 @@ using Core;
 using Core.Api;
 using Core.Config;
 using Core.Logging;
+using Dokan;
+using Logger = Pgfs.Dokan.Logger;
 
 /// <summary>
 /// pgfs.assign entry point. Mounts PGFS as a drive via DokanNet on Windows.

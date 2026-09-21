@@ -1,4 +1,4 @@
-namespace Pgfs.Assign;
+namespace Pgfs.Dokan;
 
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
