@@ -5,13 +5,18 @@
 --
 -- One row = one lock target (inode_id / data_id etc.). A row lock is taken with
 -- `SELECT 1 FROM pgfs_lock WHERE target_id = @id FOR UPDATE` and released automatically when the
--- transaction ends. Under Citus the table is distributed by `target_id` to avoid a coordinator
--- bottleneck (see [docs/support_for_citus.md](../support_for_citus.md)).
+-- transaction ends.
+-- **Under Citus it is not distributed** - it is placed on the coordinator as a single copy with
+-- citus_add_local_table_to_metadata, because a distributed table refuses a row lock once
+-- shard_replication_factor > 1. Every row lock is gathered in this one table
+-- (see [docs/design/support_for_citus.md](../design/support_for_citus.md)).
 --
 -- Why a single BIGINT (target_id):
 --   Citus's create_distributed_table is hash-distributed, and the hash input is a single column.
---   To make pgfs_lock distributed (avoiding a coordinator-local bottleneck) the distribution key must
---   be one column, so a (kind, id) composite is not possible. Hence the single target_id BIGINT column.
+--   Distributing pgfs_lock was the original premise (avoiding a coordinator-local bottleneck), and the
+--   distribution key then had to be one column, so a (kind, id) composite was not possible. Hence the
+--   single target_id BIGINT column. **The distribution itself was dropped in the end**, but the
+--   single-column shape is still what is used.
 --   The consequence is that inode_id and data_id (both BIGSERIAL) can collide in the same numeric
 --   space, which must be handled.
 --
@@ -22,8 +27,8 @@
 --   is expressed on the value side (the sign).
 --
 -- An alternative would be to split pgfs_inode_lock into a separate table distributed by parent_id, so it
--- is co-located with inode operations and saves a cross-shard hop. The operational pattern is not settled,
--- so we start with a single pgfs_lock + sign namespace.
+-- is co-located with inode operations and saves a cross-shard hop. The operational pattern was not settled,
+-- so it starts with a single pgfs_lock plus the sign namespace.
 --
 -- It carries no audit columns because it holds lock tokens, not data (it accumulates, but at ~50 bytes/row
 -- that is under 100MB for a million files, and the policy is to grow via `INSERT ON CONFLICT DO NOTHING`

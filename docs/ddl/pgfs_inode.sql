@@ -24,8 +24,8 @@ CREATE TABLE pgfs.pgfs_inode
 	st_mode     INTEGER   NOT NULL,
 	st_nlink    INTEGER   NOT NULL DEFAULT 1,
 	st_size     BIGINT    NOT NULL DEFAULT 0,
-	st_mtime    TIMESTAMP NOT NULL DEFAULT current_timestamp,
-	st_ctime    TIMESTAMP NOT NULL DEFAULT current_timestamp,
+	st_mtime    TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
+	st_ctime    TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
 	link_target TEXT      NULL,
 	is_junction BOOLEAN   NOT NULL DEFAULT FALSE,
 	data_id     BIGINT    NULL,
@@ -33,9 +33,9 @@ CREATE TABLE pgfs.pgfs_inode
 	-- Values are kept faithfully as bytea (any byte sequence including NUL round-trips unmodified). Design: ../xattr-bytea.md.
 	xattr_names  TEXT[]   NOT NULL DEFAULT '{}'::TEXT[],
 	xattr_values BYTEA[]  NOT NULL DEFAULT '{}'::BYTEA[],
-	created_at  TIMESTAMP NOT NULL DEFAULT current_timestamp,
+	created_at  TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
 	created_by  TEXT      NOT NULL,
-	updated_at  TIMESTAMP NOT NULL DEFAULT current_timestamp,
+	updated_at  TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
 	updated_by  TEXT      NOT NULL
 )
 ;

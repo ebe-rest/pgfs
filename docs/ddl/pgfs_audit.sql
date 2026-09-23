@@ -24,7 +24,7 @@ DROP TABLE IF EXISTS pgfs.pgfs_audit CASCADE
 CREATE TABLE pgfs.pgfs_audit
 (
 	id            BIGSERIAL NOT NULL,
-	occurred_at   TIMESTAMP NOT NULL DEFAULT current_timestamp,
+	occurred_at   TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
 	op            TEXT      NOT NULL,
 	target_id     BIGINT    NULL,
 	parent_id     BIGINT    NULL,

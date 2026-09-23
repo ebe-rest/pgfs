@@ -22,9 +22,9 @@ CREATE TABLE pgfs.pgfs_data_chunk
 	data_id     BIGINT    NOT NULL,
 	chunk_index INTEGER   NOT NULL,
 	payload     BYTEA     NOT NULL,
-	created_at  TIMESTAMP NOT NULL DEFAULT current_timestamp,
+	created_at  TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
 	created_by  TEXT      NOT NULL,
-	updated_at  TIMESTAMP NOT NULL DEFAULT current_timestamp,
+	updated_at  TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
 	updated_by  TEXT      NOT NULL
 )
 ;

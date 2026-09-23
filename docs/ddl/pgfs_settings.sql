@@ -22,9 +22,9 @@ CREATE TABLE pgfs.pgfs_settings
 	scope      TEXT      NOT NULL,
 	key        TEXT      NOT NULL,
 	value      JSONB     NOT NULL DEFAULT 'null'::JSONB,
-	created_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+	created_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
 	created_by TEXT      NOT NULL,
-	updated_at TIMESTAMP NOT NULL DEFAULT current_timestamp,
+	updated_at TIMESTAMP NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC'),
 	updated_by TEXT      NOT NULL
 )
 ;

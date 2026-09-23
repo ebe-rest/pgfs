@@ -1,59 +1,98 @@
 # pgfs
 
-A project implementing a **FUSE filesystem backed by PostgreSQL storage** in C# (.NET 10). The goal is to provide the same behavior on Linux / macOS / Windows.
+> **Route**: **this document is the entrance to the public repository** › [docs/README.md](docs/README.md)
+> (the documentation index) › each document
+>
+> **What this document is the source of truth for**: what pgfs is, the shortest path to running it, and the
+> list of the released documents.
+>
+> **The neighbouring documents and what they cover**:
+>
+> | Document | What goes there |
+> |---|---|
+> | [docs/README.md](docs/README.md) | **The index of every document** |
+> | [CHANGELOG.md](CHANGELOG.md) | The differences per release, the migration steps and the known limitations |
+> | [docs/Mkfs.md](docs/Mkfs.md) / [docs/Mount.md](docs/Mount.md) / [docs/Assign.md](docs/Assign.md) | The user-facing specification of each CLI |
 
-[日本語版 README はこちら](README.ja.md)
+A project implementing **a FUSE filesystem that uses PostgreSQL as its backing store** in C# (.NET 10). The
+goal is to offer the same behaviour on Linux, macOS and Windows.
 
-## Overview
+## The overview
 
-- The entire filesystem (directory entries, inode attributes, file data, settings) is stored in **PostgreSQL tables** (`bytea` chunks).
-- Mounted via **FUSE (`Tmds.Fuse`)** on Linux / macOS, and via **Dokan (`DokanNet`)** on Windows.
-- Settings are read from **TOML** (`pgfs.toml`) and the DB `pgfs_settings` table, and can be overridden with CLI arguments.
-- For the DB schema, see [docs/database.md](docs/database.md).
+- The whole filesystem (the directory entries, the inode attributes, the file data and the settings) is stored
+  in **PostgreSQL tables** (`bytea` chunks).
+- It is mounted with **FUSE (an in-house libfuse binding)** on Linux (the runtime compatibility on macOS is
+  unverified) and with **Dokan (`DokanNet`)** on Windows.
+- The settings are read from **TOML** (`pgfs.toml`) and the `pgfs_settings` table in the database, and can be
+  overridden with the CLI arguments.
+- For the database schema see [docs/design/database.md](docs/design/database.md).
 
-> **Status**: all three pillars (Mkfs / Mount / Assign) are implemented, passing Linux e2e 35/35 + Windows e2e 26/26 + the race verification 4/4 on multi-node Citus + the audit-log dedicated suite 12/12. Citus (horizontal distribution) and the audit log are complete, and the Linux↔Windows interop for permissions/ownership/ACLs is implemented as well ([docs/permission-interop.md](docs/permission-interop.md)). For the list of what to do next, see [docs/next.md](docs/next.md).
+> **Where it stands**: on top of Mkfs / Mount / Assign, the caches, the write-back,
+> `pgfsctl config` / `status` / `prune` and a read-only GUI are implemented.
+> **Every finding raised against Linux and the shared Core is closed**, and
+> **the Windows acceptance with the write-back (data and metadata) enabled is done too**.
+> **What remains is not "a defect not yet fixed" but a limitation chosen deliberately** - the list is in
+> [CHANGELOG.md, the known limitations](CHANGELOG.md). **[docs/tests.md](docs/tests.md) is the source of truth
+> for the test counts and the verification records.**
 
-## Solution layout
+> **The groundwork so far**: all three pillars (Mkfs / Mount / Assign) are implemented. The Linux and Windows
+> e2e suites, the race verification on a multi-node Citus and the suite dedicated to the audit log all pass
+> (**the counts grow, so they are not written here; [docs/tests.md](docs/tests.md) is authoritative**). Citus
+> (the horizontal distribution) is done through Phase 1+2+3, the audit log is done, and the interoperability of
+> the ACLs and the permissions between Linux and Windows is implemented
+> ([docs/design/permission-interop.md](docs/design/permission-interop.md)).
+> **v0.2.0 split `Lib` into the OS mechanism layers (`Core` / `Fuse` / `Dokan`) and brought the libfuse binding
+> in house** (re-verified with the e2e green on both operating systems -
+> [docs/design/v0.2.0-plan.md](docs/design/v0.2.0-plan.md)). For what comes next see
+> [docs/next.md](docs/next.md).
 
-| Project | Path | Role | Platform | Status |
+## The solution structure
+
+| Project | Path | Role | Platform | State |
 |---|---|---|---|---|
-| **Lib** | [src/core/](src/core/) | core library (Models / Api / Logging / Collections / Utility / Objects) | cross-platform | implemented |
-| **Mkfs** | [src/mkfs/](src/mkfs/) | CLI that initializes the PostgreSQL-side tables etc. (`mkfs.pgfs`) | cross-platform | implemented, verified on Linux |
-| **Mount** | [src/mount/](src/mount/) | mount tool for Linux/macOS (`mount.pgfs`, Tmds.Fuse) | Linux / macOS | all FUSE operations implemented (incl. data I/O, xattr, symlink, hard link, POSIX ACL), verified on Linux |
-| **Assign** | [src/assign/](src/assign/) | mount tool for Windows (`pgfs.assign`, DokanNet) | Windows | all Dokan operations implemented (ACL via Get/SetFileSecurity projection is supported too; only ADS is unsupported), verified on Windows |
+| **Core** | [src/core/](src/core/) | The core library independent of the OS and the mechanism (Models / Api / Config / Logging / Collections / Utility / Objects) | Cross-platform | Implemented |
+| **Fuse** | [src/fuse/](src/fuse/) | The FS mechanism layer for Linux and macOS (the in-house libfuse binding + the FUSE FileSystem + the PosixAcl projection) | Linux / macOS | Implemented, verified on Linux |
+| **Dokan** | [src/dokan/](src/dokan/) | The FS mechanism layer for Windows (the Dokan FileSystem + the Windows SID/ACL projection) | Windows | Implemented, verified on Windows |
+| **Mkfs** | [src/mkfs/](src/mkfs/) | The CLI that initialises the tables and so on on the PostgreSQL side (`mkfs.pgfs`, a thin exe over Core) | Cross-platform | Implemented, verified on Linux |
+| **Mount** | [src/mount/](src/mount/) | The mount tool for Linux and macOS (`mount.pgfs`, a thin exe over Fuse) | Linux / macOS | The main operations and the ACL projection are implemented; there are known limitations and unsupported operations |
+| **Assign** | [src/assign/](src/assign/) | The mount tool for Windows (`assign.pgfs`, a thin exe over Dokan) | Windows | The main operations and the ACL projection are implemented; links, ADS and so on are unsupported |
+| **Ctl** | [src/ctl/](src/ctl/) | `pgfsctl config` / `status` / `prune` | Cross-platform | Implemented |
+| **Gui** | [src/gui/](src/gui/) | The `pgfsgui` operations screen | Cross-platform | A read-only MVP; editing the settings and the distribution are unfinished |
 
-## Requirements
+## What you need
 
-- **.NET 10 SDK** or later ([download](https://dotnet.microsoft.com/download))
-- **PostgreSQL 17** (the database side)
-- **Linux**: libfuse3 (for Tmds.Fuse) — only if you use the Mount project
-- **Windows**: [Dokan 2.x](https://github.com/dokan-dev/dokany/releases) — only if you use the Assign project
-- **macOS**: macFUSE (limited support)
+- **The .NET 10 SDK** or later ([download](https://dotnet.microsoft.com/download))
+- **PostgreSQL 17** (on the database side)
+- **Linux**: libfuse3 (`fuse3` or your distribution's equivalent), only if you use Mount. `mount.pgfs` `dlopen`s
+  `libfuse3.so.3` at runtime (it is not bundled)
+- **Windows**: [Dokan 2.x](https://github.com/dokan-dev/dokany/releases), only if you use the Assign project
+- **macOS**: the runtime compatibility is unverified. The current binding assumes `libfuse3.so.3`, so installing
+  macFUSE alone is not guaranteed to work
 
-## Build
-
-The whole solution builds cleanly (0 warnings, 0 errors).
+## Building
 
 ```pwsh
-# all projects at once
+# Every project at once
 dotnet build pgfs.sln
 
-# individually
+# Individually
 dotnet build src/core/Core.csproj
 dotnet build src/mkfs/Mkfs.csproj
-dotnet build src/mount/Mount.csproj   # for Linux/macOS execution (only cross-builds on Windows)
-dotnet build src/assign/Assign.csproj # for Windows execution (only cross-builds on Linux/macOS)
+dotnet build src/mount/Mount.csproj   # for running on Linux/macOS (on Windows only the cross-build passes)
+dotnet build src/assign/Assign.csproj # for running on Windows (on Linux/macOS only the cross-build passes)
 ```
 
-Build artifacts are output under [bin/](bin/) (`<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>`):
+The build artifacts go under [bin/](bin/) (the
+`<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>` setting):
 
 | Configuration | Output | Contents |
 |---|---|---|
-| `dotnet build -c Debug` | `bin/Debug/` | `core.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + dependency dlls (framework-dependent) |
-| `dotnet build -c Release` | `bin/Release/` | the Release version of the above (framework-dependent) |
-| `dotnet publish -c Release` | `bin/Publish/` | the 3 single-file self-contained `{mkfs,mount,assign}.pgfs[.exe]` (host RID auto, ~38 MB each) |
+| `dotnet build -c Debug` | `bin/Debug/` | `core.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + the dependency dlls (framework-dependent) |
+| `dotnet build -c Release` | `bin/Release/` | The same in Release (framework-dependent) |
+| `dotnet publish -c Release` | `bin/Publish/` | The CLIs as single-file self-contained `{mkfs,mount,assign}.pgfs[.exe]` and `pgfsctl[.exe]` (the host RID is detected automatically). The publish settings for the GUI in the same form are not in place yet |
 
-Assembly names are all lowercase dot-separated (`core.pgfs`, `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs`), so a Debug build can be launched directly as e.g. `./bin/Debug/mkfs.pgfs.exe`.
+Every assembly name is lower case separated by dots (`core.pgfs`, `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs`), so
+a Debug build can be started directly as `./bin/Debug/mkfs.pgfs.exe`.
 
 ### Mount (Linux/macOS)
 
@@ -61,7 +100,12 @@ Assembly names are all lowercase dot-separated (`core.pgfs`, `mkfs.pgfs`, `mount
 dotnet build src/mount/Mount.csproj
 ```
 
-The build also works on Windows (for cross-compilation); execution is Linux/macOS only. See [docs/Mount.md](docs/Mount.md) for details. All FUSE operations are implemented, including data read/write, extended attributes, symbolic links, and hard links.
+The build also passes on Windows (for cross-compilation); it only runs on Linux and macOS. For the details see
+[docs/Mount.md](docs/Mount.md). The entry points for the data I/O, the xattrs, the links and so on are
+implemented. `Access` is **deliberately not implemented** - deciding whether an access is allowed is left to
+the kernel through `default_permissions` at mount time. `FAllocate` is unimplemented (it returns `-ENOSYS`).
+**The list of the limitations chosen deliberately is in
+[CHANGELOG.md, the known limitations](CHANGELOG.md).**
 
 ### Assign (Windows)
 
@@ -69,108 +113,123 @@ The build also works on Windows (for cross-compilation); execution is Linux/macO
 dotnet build src/assign/Assign.csproj
 ```
 
-The build also works on Linux/macOS (for cross-compilation); execution is Windows only. The Dokan2 kernel driver must be installed beforehand. See [docs/Assign.md](docs/Assign.md) for details.
+The build also passes on Linux and macOS (for cross-compilation); it only runs on Windows. The Dokan2 kernel
+driver has to be installed beforehand. For the details see [docs/Assign.md](docs/Assign.md).
 
-### Publishing self-contained executables
+### Publishing a self-contained executable
 
-`dotnet publish` outputs **single-file self-contained** executables for the host OS under [bin/Publish/](bin/Publish/) (~38 MB each).
+`dotnet publish` produces a **single-file self-contained** executable for the host OS under
+[bin/Publish/](bin/Publish/) (about 38 MB each).
 
 ```pwsh
-# individually
+# Individually
 dotnet publish src/mkfs/Mkfs.csproj -c Release
 dotnet publish src/mount/Mount.csproj -c Release
 dotnet publish src/assign/Assign.csproj -c Release
 
-# the whole solution (the 3 exes Mkfs/Mount/Assign end up in bin/Publish/)
+# The whole solution (the publish settings differ between the CLIs and the GUI)
 dotnet publish pgfs.sln -c Release
 ```
 
-The RID is **auto-detected from the host OS** via `UseCurrentRuntimeIdentifier=true`. To build for another OS, override with `-r <RID>` (e.g. `dotnet publish ... -c Release -r linux-x64`).
+The RID is **detected from the host OS** through `UseCurrentRuntimeIdentifier=true`. To build for another OS,
+override it with `-r <RID>` (for example `dotnet publish ... -c Release -r linux-x64`).
 
-> AOT publish (`PublishAot=true`) does not work for now because Dapper / Tomlyn / Tmds.Fuse / DokanNet depend on reflection. All projects are set to `PublishAot=false` / `PublishTrimmed=false`.
+> AOT publishing (`PublishAot=true`) does not work for now, because of the reflection and P/Invoke dependencies
+> of Dapper, Tomlyn, the in-house libfuse binding and DokanNet. The CLI projects are set to `PublishAot=false`
+> and `PublishTrimmed=false`. Distributing the GUI is a separate matter.
 
-## Usage
+## Using it
 
 ### 1. Prepare PostgreSQL
 
-Start PostgreSQL 17 and make it connectable as a superuser (usually `postgres`).
+Start PostgreSQL 17 and make it reachable as a superuser (usually `postgres`).
 
-### 2. Initialize PGFS
+### 2. Initialise PGFS
 
-`mkfs.pgfs` creates the user / database / schema / tables / initial data that PGFS uses.
+`mkfs.pgfs` creates the user, the database, the schema, the tables and the initial data that PGFS uses.
 
 ```bash
-# initialize with defaults (localhost:5432 / postgres superuser / create a new pgfs user + DB)
+# With the defaults (localhost:5432 / the postgres superuser / creating the pgfs user and database)
 dotnet run --project src/mkfs
 
-# specify the superuser connection explicitly
+# Giving the superuser connection explicitly
 dotnet run --project src/mkfs -- \
     --super-connection "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=template1"
 
-# specify the PGFS user connection explicitly
+# Giving the PGFS user connection explicitly
 dotnet run --project src/mkfs -- \
     --connection "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs"
 
-# change the schema / prefix
+# Changing the schema and the prefix
 dotnet run --project src/mkfs -- -s myschema -x myfs_
 
-# help
+# Help
 dotnet run --project src/mkfs -- --help
 ```
 
-When done, `pgfs.toml` (the settings file) is written to the current directory. See [docs/Mkfs.md](docs/Mkfs.md) for details.
+When it finishes, `pgfs.toml` (the settings file) is written into the current directory. For the details see
+[docs/Mkfs.md](docs/Mkfs.md).
 
 ### 3. Mount
 
-On Linux/macOS, mount with `mount.pgfs`.
+On Linux you mount it with `mount.pgfs`. macOS is unverified.
 
 ```bash
-# prepare the mount point
+# Prepare the mount point
 sudo mkdir -p /mnt/pgfs
 sudo chown $USER /mnt/pgfs
 
-# mount
+# Mount
 dotnet run --project src/mount -- -m /mnt/pgfs
 
-# in another terminal
+# From another terminal
 ls -la /mnt/pgfs
 
-# unmount
+# Unmount
 fusermount3 -u /mnt/pgfs
 ```
 
-Data I/O, extended attributes, symbolic links, and hard links are all supported. See [docs/Mount.md](docs/Mount.md) for details.
+The data I/O, the extended attributes, the symlinks and the hardlinks are all supported. For the details see
+[docs/Mount.md](docs/Mount.md).
 
-On Windows, mount to a drive with `pgfs.assign` (the Dokan2 driver is required):
+On Windows you mount it onto a drive with `assign.pgfs` (the Dokan2 driver is required):
 
 ```pwsh
 dotnet run --project src\assign -- -m P:
-# in another terminal:
+# From another terminal:
 Get-ChildItem P:\
 ```
 
-See [docs/Assign.md](docs/Assign.md) for details.
+For the details see [docs/Assign.md](docs/Assign.md).
 
-## Documentation
+## The documentation
 
-Each document has an English (`.md`) and a Japanese (`.ja.md`) version.
+- [docs/README.md](docs/README.md) - the documentation index and the reading order
+- [docs/next.md](docs/next.md) - **what comes next** (in priority order)
+- [docs/architecture.md](docs/architecture.md) - the project structure / the dependency packages / the inside of
+  Core / building and running
+- [docs/Mkfs.md](docs/Mkfs.md) - the specification of `mkfs.pgfs`
+- [docs/Mount.md](docs/Mount.md) - the specification of `mount.pgfs` (Linux/macOS)
+- [docs/Assign.md](docs/Assign.md) - the specification of `assign.pgfs` (Windows)
+- [docs/Pgfsctl.md](docs/Pgfsctl.md) - the specification of `pgfsctl` (the CLI of the runtime control plane -
+  `config` / `status` / `prune`)
+- [docs/design/database.md](docs/design/database.md) - the PostgreSQL schema design
+- [docs/ddl/](docs/ddl/README.md) - the DDL per table
+- [docs/design/windows-parity.md](docs/design/windows-parity.md) - the design for taking the Linux features to
+  Windows (the candidates, the recommendations and the acceptance conditions)
+- [docs/design/coding-style.md](docs/design/coding-style.md) - the C# coding conventions
+- [docs/design/performance.md](docs/design/performance.md) - the implementation and measurement records of the
+  performance work, and the remaining candidates
+- [docs/design/support_for_citus.md](docs/design/support_for_citus.md) - the design notes for Citus (the
+  horizontal distribution; Phase 1+2+3 done)
+- [docs/design/fstab-support.md](docs/design/fstab-support.md) - the `/etc/fstab` support (the past records of
+  verifying a mount at boot and the current constraints)
+- [docs/history.md](docs/history.md) - how the current design came about (the model
+  rearrangement / the Tmds.Fuse fork / fstab / Retry / the race fixes / Citus and so on)
+- [docs/tests.md](docs/tests.md) - **the hub of the tests** (the list of every test / how to run them / the
+  environment requirements). For each runner see [tests/linux/](tests/linux/README.md) /
+  [tests/windows/](tests/windows/README.md) / [tests/citus/](tests/citus/README.md)
 
-- [docs/next.md](docs/next.md) — **what's next** (in priority order, updated per piece of work)
-- [docs/architecture.md](docs/architecture.md) — project layout / dependency packages / Lib internals / build & run
-- [docs/Mkfs.md](docs/Mkfs.md) — the `mkfs.pgfs` specification
-- [docs/Mount.md](docs/Mount.md) — the `mount.pgfs` specification (Linux/macOS)
-- [docs/Assign.md](docs/Assign.md) — the `pgfs.assign` specification (Windows)
-- [docs/database.md](docs/database.md) — the PostgreSQL schema design
-- [docs/ddl/](docs/ddl/README.md) — the per-table DDL
-- [docs/coding-style.md](docs/coding-style.md) — the C# coding conventions
-- [docs/settings-matrix.md](docs/settings-matrix.md) — the settings matrix (CLI / TOML / DB / default / read timing)
-- [docs/performance.md](docs/performance.md) — performance improvement candidates
-- [docs/support_for_citus.md](docs/support_for_citus.md) — the design notes for Citus (horizontal distribution)
-- [docs/history.md](docs/history.md) — the key design decisions behind the current design
-- [docs/fstab-support.md](docs/fstab-support.md) — `/etc/fstab` support
-- [docs/audit-log.md](docs/audit-log.md) — the audit log
-- [docs/tests.md](docs/tests.md) — **the test hub** (the full catalog / how to run / environment requirements / docker integration). For each runner, see [tests/linux/](tests/linux/README.md) / [tests/windows/](tests/windows/README.md) / [tests/citus/](tests/citus/README.md)
+## The licence
 
-## License
-
-See [LICENSE](LICENSE) (the MIT license).
+See [LICENSE](LICENSE) (the MIT licence).

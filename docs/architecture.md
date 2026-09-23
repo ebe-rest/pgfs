@@ -1,164 +1,323 @@
-# Architecture
+# The architecture
 
-A document collecting the solution layout, dependency packages, the file structure inside Lib, and the build/run procedures of pgfs.
+> **Route**: [docs/README.md](README.md) › **this document**
+>
+> **What this document is the source of truth for**: **the structure of the project** (the split into Core /
+> Fuse / Dokan plus the thin executables, the file structure inside Core, the dependencies between the
+> assemblies) and **how to build and run it**.
+> The first page to look at when finding "which code is where".
+>
+> **The neighbouring documents and what they cover**:
+>
+> | Document | What goes there |
+> |---|---|
+> | [Mkfs.md](Mkfs.md) / [Mount.md](Mount.md) / [Assign.md](Assign.md) / [Pgfsctl.md](Pgfsctl.md) | **The specification** of each CLI (the options and the behaviour) |
+> | [design/database.md](design/database.md) | The database schema |
+> | [design/coding-style.md](design/coding-style.md) | The coding conventions |
+> | [design/performance.md](design/performance.md) | The performance measurements and the improvement candidates |
+> | [design/support_for_citus.md](design/support_for_citus.md) | Citus (horizontal distribution) support |
+> | [design/fuse-binding.md](design/fuse-binding.md) | The structure of the in-house FUSE binding |
+> | [next.md](next.md) / [history.md](history.md) | What to do next / how the completed work came about |
 
-## Solution layout
+A document gathering pgfs's solution structure, its package dependencies, the file structure inside Core and how
+to build and run it.
 
-The solution [pgfs.sln](../pgfs.sln) has 4 projects.
+## The solution structure
 
-| Project | Path | Role | Platform |
+The solution [pgfs.sln](../pgfs.sln) has 8 projects (v0.2.0 split the old `Lib` by the OS mechanism layer).
+
+| The project | The path | Its role | The platform |
 |---|---|---|---|
-| **Lib** | [src/core/](../src/core/) | core library (Models / Api / Logging / Collections / Utility / Objects) | cross-platform |
-| **Mkfs** | [src/mkfs/](../src/mkfs/) | CLI that initializes the PostgreSQL-side tables etc. | cross-platform |
-| **Mount** | [src/mount/](../src/mount/) | mount tool for Linux / macOS (uses Tmds.Fuse) | Linux / macOS |
-| **Assign** | [src/assign/](../src/assign/) | mount tool for Windows (uses DokanNet) | Windows |
+| **Core** | [src/core/](../src/core/) | The core library, independent of the OS and the mechanism (Models / Api / Config / Logging / Collections / Utility / Objects). No `#if` | Cross-platform |
+| **Fuse** | [src/fuse/](../src/fuse/) | The FS mechanism layer for Linux/macOS: the in-house libfuse binding plus the FUSE FileSystem plus the PosixAcl projection | Linux / macOS |
+| **Dokan** | [src/dokan/](../src/dokan/) | The FS mechanism layer for Windows: the Dokan FileSystem plus the Windows SID/ACL projection plus the WindowsUserResolver | Windows |
+| **Mkfs** | [src/mkfs/](../src/mkfs/) | The CLI that initializes the tables and the rest on the PostgreSQL side (a thin exe -> Core) | Cross-platform |
+| **Mount** | [src/mount/](../src/mount/) | The mount tool for Linux/macOS (a thin exe -> Fuse plus Core) | Linux / macOS |
+| **Assign** | [src/assign/](../src/assign/) | The mount tool for Windows (a thin exe -> Dokan plus Core) | Windows |
+| **Ctl** | [src/ctl/](../src/ctl/) | The runtime control-plane CLI `pgfsctl` (the config / status subcommands; a thin exe -> Core only) | Cross-platform |
+| **Gui** | [src/gui/](../src/gui/) | The operations GUI `pgfsgui` (an Avalonia desktop app; a thin front for status/config -> Core only. **Phase 5, being implemented**) | Cross-platform |
 
-All TargetFrameworks are **net10.0**. `PublishAot` / `PublishTrimmed` are enabled (except for Lib). `ImplicitUsings` and `Nullable` are enabled. Per-OS `DefineConstants` (`WINDOWS` / `LINUX` / `MACOS`) are defined.
+The dependencies run one way: **the tools (mkfs/mount/assign) -> the mechanism layer (Fuse/Dokan) -> Core ->
+PostgreSQL**. `pgfsctl` (the CLI) and `pgfsgui` (the Avalonia GUI) are administration tools that skip the
+mechanism layer and depend on **Core only** (they need neither FUSE nor Dokan, so they run on both operating
+systems). The design of the split is in [v0.2.0-plan.md](design/v0.2.0-plan.md) /
+[fuse-binding.md](design/fuse-binding.md), and `pgfsctl` / `pgfsgui` are in
+[control-plane.md](design/control-plane.md) / [gui.md](design/gui.md).
 
-### Namespaces
+Every TargetFramework is **net10.0**. `PublishAot` and `PublishTrimmed` are disabled on the CLI executables
+(Gui does not carry the same publish settings) because Dapper, Tomlyn, the in-house binding and DokanNet depend
+on dynamic code generation. `ImplicitUsings` and `Nullable` are enabled too. Per-OS `DefineConstants`
+(`WINDOWS` / `LINUX` / `MACOS`) are defined.
 
-- root: `Pgfs.*`
-- library: `Pgfs.Core.{Api, Models, Logging, Collections, Objects, Utility}`
-- executables: `Pgfs.Mkfs`, `Pgfs.Mount`, `Pgfs.Assign`
+### The namespaces
 
-### Output location
+- The root: `Pgfs.*`
+- The core library: `Pgfs.Core.{Api, Models, Config, Logging, Collections, Objects, Utility}`
+- The mechanism libraries: `Pgfs.Fuse` (Linux/macOS FUSE) / `Pgfs.Dokan` (Windows)
+- The executables: `Pgfs.Mkfs`, `Pgfs.Mount`, `Pgfs.Assign`, `Pgfs.Ctl` (producing `pgfsctl`), `Pgfs.Gui`
+  (producing `pgfsgui`, Avalonia) - `pgfsctl` and `pgfsgui` are deliberate exceptions to the `{role}.pgfs`
+  convention (admin tool names)
 
-All projects build into the same directory under [bin/](../bin/) (`<BaseOutputPath>$(SolutionDir)bin\</BaseOutputPath>`).
+### Where the output goes
 
-### Assembly names
+Every project builds into the same directory under [bin/](../bin/)
+(`<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>`).
 
-Namespaces are PascalCase such as `Pgfs.Core`, `Pgfs.Mkfs`. The output assembly names are unified to **lowercase + dot-separated**: `core.pgfs.dll`, `mkfs.pgfs.{dll,exe}`, `mount.pgfs.{dll,exe}`, `assign.pgfs.{dll,exe}`. This is set in the csproj via `<AssemblyName>`.
+### The assembly names
+
+The namespaces are PascalCase such as `Pgfs.Core` and `Pgfs.Mkfs` (`RootNamespace`). The output assembly names
+are unified as **lowercase with dots** (`AssemblyName`): `core.pgfs.dll`, `fuse.pgfs.dll`, `dokan.pgfs.dll`,
+`mkfs.pgfs.{dll,exe}`, `mount.pgfs.{dll,exe}`, `assign.pgfs.{dll,exe}`. **The exception**: the control-plane CLI
+is `pgfsctl.{dll,exe}` (a single systemctl-like word, deliberately breaking the `{role}.pgfs` convention;
+[control-plane.md, Phase 3](design/control-plane.md)). For the details of the naming convention see
+[fuse-binding.md, section 3-8](design/fuse-binding.md).
 
 ---
 
-## Dependency packages
+## The package dependencies
 
-| Package | Use | Used by |
+| The package | What it is for | Where it is used |
 |---|---|---|
-| `Npgsql` 9.0.4 | PostgreSQL client | all projects |
-| `Dapper` 2.1.66 | lightweight ORM | Lib |
-| `Tomlyn` 0.20.0 | TOML configuration file | Lib |
-| `Tmds.Fuse` (fork) | Linux/macOS FUSE | Mount |
-| `DokanNet` 2.3.0.3 | Windows DokanNet | Assign |
+| `Npgsql` 9.0.4 | The PostgreSQL client | Every project |
+| `Dapper` 2.1.66 | A lightweight ORM | Core |
+| `Tomlyn` 0.20.0 | The TOML settings file | Core |
+| `Tmds.LibC` 0.5.0 | The libc primitives (stat / statvfs / timespec / dlopen / errno) | Fuse |
+| `DokanNet` 2.3.0.3 | DokanNet for Windows | Dokan |
+| `Avalonia` / `Avalonia.Desktop` / `Avalonia.Themes.Fluent` 12.0.5 | The read-only operations GUI | Gui |
 
-`Tmds.Fuse` is not upstream `tmds/Tmds.Fuse 0.1.0-190711-50`, but the **`securefolderfs-community/Tmds.Fuse` fork**, held as a submodule in [vendor/Tmds.Fuse/](../vendor/Tmds.Fuse/) and referenced via `ProjectReference` (for the added `MountOptions.Options` and the `use_ino` downstream patch). See [fstab-support.md §Adopting the Tmds.Fuse fork](fstab-support.md) for the background.
+The libfuse binding was **brought in house into `Pgfs.Fuse`** in v0.2.0 (the old
+`securefolderfs-community/Tmds.Fuse` fork was ported preserving the behaviour, and the `vendor/Tmds.Fuse`
+submodule was retired). `libfuse3.so.3` is not bundled but linked dynamically with `dlopen` at runtime (LGPL;
+the user provides it). The credits are in [src/fuse/NOTICES.md](../src/fuse/NOTICES.md) and the design is in
+[fuse-binding.md](design/fuse-binding.md).
 
 ---
 
-## File structure (Lib)
+## The file structure (Core)
 
 ### Models ([src/core/src/Models/](../src/core/src/Models/))
 
-Where the entity POCOs corresponding to one DB row live. The configuration models live in [Config](#config-srclibsrcconfig).
+Where the entity POCOs corresponding to one database row live. The settings models (the old `*Settings.cs` set)
+were **removed** and moved into [Config](#config-srccoresrcconfig).
 
-**DB entities**: `Base.cs`, `Inode.cs`, `Data.cs`, `Chunk.cs`
-- the audit fields (`id`, `created_at`, `created_by`, `updated_at`, `updated_by`) are shared in `Base` (it exposes both lowercase and uppercase properties for Dapper)
-- `Inode.cs` / `Data.cs` / `Chunk.cs` are the POCOs representing one row of `pgfs_inode` / `pgfs_data` / `pgfs_data_chunk` respectively
+**The database entities**: `Base.cs`, `Inode.cs`, `Data.cs`, `Chunk.cs`
+- The audit fields (`id`, `created_at`, `created_by`, `updated_at`, `updated_by`) are shared through `Base`
+  (both lowercase and uppercase properties are exposed for Dapper)
+- `Inode.cs` / `Data.cs` / `Chunk.cs` are the POCOs for one row of `pgfs_inode` / `pgfs_data` /
+  `pgfs_data_chunk` respectively
 
-**Audit / ACL models**: `AuditOp.cs`, `AuditContext.cs`, `PgfsAcl.cs`, `PosixAcl.cs`
-- `AuditOp.cs` (op string constants) / `AuditContext.cs` (caller ambient context) — for the audit log ([audit-log.md](audit-log.md))
-- `PgfsAcl.cs` the canonical ACL document (the JSON of the `user.pgfs_acl` xattr: named `entries[]` / `default[]`). The common canonical model bridging Windows DACL ⇔ Linux POSIX ACL
-- `PosixAcl.cs` the codec for the Linux `system.posix_acl_access` xattr binary (Parse/Build of the header + entry array). Design in [permission-interop.md](permission-interop.md)
+**The audit and ACL types**: `AuditOp.cs`, `AuditContext.cs`, `PgfsAcl.cs` (the canonical ACL)
+- `AuditOp.cs` (the op string constants) / `AuditContext.cs` (the caller's ambient context) - the audit log
+  ([audit-log.md](design/audit-log.md))
+- `PgfsAcl.cs` is the canonical ACL document (the JSON of the `user.pgfs_acl` xattr: the named `entries[]` and
+  `default[]`). It is the common canonical model between a Windows DACL and a Linux POSIX ACL
+- Note: the POSIX ACL binary codec `PosixAcl.cs` **was moved into `Pgfs.Fuse`
+  ([src/fuse/src/PosixAcl.cs](../src/fuse/src/PosixAcl.cs)) in v0.2.0** (separating the canonical form in Core
+  from the OS projection in the Fuse mechanism layer). The design is in
+  [permission-interop.md](design/permission-interop.md)
 
-**LoggingOutput-related enums**: `SettingLoggingKind.cs` (Flags: None/Stderr/Stdout/File), `SettingLoggingCycle.cs` (None/Hourly/Daily/Monthly), `SettingLoggingOutput.cs` (a POCO bundling the previous two)
-- these stay in Models because [`LoggingOutputField`](../src/core/src/Config/Field.cs) references them as a type (a possible move target is `Pgfs.Core.Logging`, but this file describes "the log format", not "the log output itself", so the current location is the safer choice)
+**The enums around LoggingOutput**: `SettingLoggingKind.cs` (Flags: None/Stderr/Stdout/File),
+`SettingLoggingCycle.cs` (None/Hourly/Daily/Monthly), `SettingLoggingOutput.cs` (a POCO tying the two together)
+- They stay in Models because [`LoggingOutputField`](../src/core/src/Config/Field.cs) references them as types
+  (the candidate destination would be `Pgfs.Core.Logging`, but these files describe "the format of the log"
+  rather than "the log output itself", so where they are now is the safer place)
+
+> **🗒 Every old `*Settings.cs` was removed**: the 13 files `RootSettings.cs` /
+> `MountSettings.cs` / `DatabaseSettings.cs` / `FileSystemSettings.cs` / `LoggingSettings.cs` /
+> `SettingSettings.cs` / `Setting.cs` / `Settings.cs` / `BoolSetting.cs` / `SettingStorage.cs` /
+> `BeforeChangeEventArgs.cs` / `DatabaseConnectionSetting.cs` / `Primitive.cs` were deleted. `Base.cs` was also
+> rewritten into a minimal form with the `BaseProvider<A>` / `Statics` / `ChangingEventArgs` /
+> `Created` / `Updated` machinery removed.
 
 ### Config ([src/core/src/Config/](../src/core/src/Config/))
 
-The successor to the old `Settings` tree. Composed of **static `Field<T>` descriptors + mutable POCOs + `ConfigLoader` (unifying CLI/TOML/DB/Default) + `ConfigStore` (DB I/O)**.
+The successor to the old `Settings` tree. It consists of **static `Field<T>` descriptors plus mutable POCOs plus
+`ConfigLoader` (which merges the CLI/TOML/database/defaults) plus `ConfigStore` (the database I/O)**.
 
-- **`Field<T>` (abstract base + derived types)**: the descriptor for a single setting. It carries Scope / Key / CliOptions / DashOName / SaveTo (`None`/`File`/`Db`) / DefaultFn / Comment, and per type a `Parse(string) → T` / `Format(T) → string`. Derived types: `StringField` / `IntField` / `LongField` / `BoolField` / `StringListField` / `LogLevelField` / `LoggingOutputField` / `ConnectionField`. For help generation it also carries `AppliesTo` (`[Flags] enum Tool`, which tools' `--help` it appears in / default `All`) and `ArgName` (overrides the value placeholder).
-- **`Schema` (static class)**: declares every `Field<T>` in nested static classes such as `Schema.Mount.MountPoint`. `Schema.AllFields` enumerates all fields automatically via reflection (a newly added Field is included automatically).
-- **`HelpText` (static class)**: generates the `--help` text from `Schema.AllFields` (walking `CliOptions` / `Comment` / type / default value). Each Program (mkfs/mount/assign) passes only an intro line + tool-specific footer prose; the option list is auto-generated. `Field.AppliesTo` selects which options appear per tool (a help-only filter, non-interfering with CLI parsing). The hand-written `ShowHelp` has been retired.
-- **POCOs**: `MountConfig` / `DatabaseConfig` / `FileSystemConfig` / `LoggingConfig` / `SettingFileConfig`. Properties are `{ get; set; }` (mutable, in anticipation of future dynamic rewrites such as volume_label). The aggregate `RootConfig` bundles them all + holds `Help` / `Clean` directly.
-- **`ConfigLoader`**: assembles a `RootConfig` by unifying CLI / TOML / DB / Default in one pass. The order is **CLI → TOML → DB**, with "skip if a higher source already set it" (priority `CLI > TOML > DB > Default`). The TOML path is searched internally from the CLI-resolved `setting.file`. Only in the `mount(8)` helper context (parent comm = `mount` AND positionals present) does it silently swallow `-i -f -n -s -v -N -t`.
-- **`ConfigStore`**: DB read/write of `(scope, key) → value` against the flat `pgfs_settings(scope, key, value)`. `LoadAll` is a simple `SELECT scope, key, value FROM table` full read + allow-list filter. `Save<T>` UPSERTs with `INSERT ... ON CONFLICT (scope, key) DO UPDATE`. The JSON representation goes through `Field<T>.FormatJson(value)` (Int/Long/Bool are native JSON; everything else encodes `Format(value)` as a JSON string).
+- **`Field<T>` (an abstract base plus derived types)**: the descriptor for one setting. It holds the Scope, the
+  Key, the CliOptions, the DashOName, the SaveTo (`None`/`File`/`Db`), the DefaultFn and the Comment, and per
+  type a `Parse(string) -> T` and a `Format(T) -> string`. The derived types are `StringField` / `IntField` /
+  `LongField` / `BoolField` / `StringListField` / `LogLevelField` / `LoggingOutputField` / `ConnectionField`.
+  For generating the help it also holds `AppliesTo` (a `[Flags] enum Tool` saying which tools' `--help` it
+  appears in; `All` by default) and `ArgName` (an override for the value placeholder).
+- **`Schema` (a static class)**: every `Field<T>` is declared in a nested static class, as in
+  `Schema.Mount.MountPoint`. `Schema.AllFields` enumerates them all automatically through reflection (a new
+  Field is included automatically).
+- **`HelpText` (a static class)**: the `--help` text is generated from `Schema.AllFields` (walking the
+  `CliOptions` / the `Comment` / the type / the default). Each Program (mkfs/mount/assign) passes only the
+  introduction and its own tool-specific footer prose, and the option list is generated. `Field.AppliesTo`
+  selects per tool (a help-only filter that does not interfere with the CLI parsing). The hand-written
+  `ShowHelp` is gone.
+- **The POCOs**: `MountConfig` / `DatabaseConfig` / `FileSystemConfig` / `LoggingConfig` / `SettingFileConfig`.
+  The properties are `{ get; set; }`. They are used for changing the Live settings, although the volume_label
+  cannot be changed because it is Format.
+  The aggregate `RootConfig` gathers them all and holds `Help` and `Clean` directly.
+- **`ConfigLoader`**: it merges the CLI, the TOML, the database and the defaults in one go to assemble a
+  `RootConfig`. The phases are **CLI -> TOML -> the database** in that order, with "skip if something higher has
+  already put it in" (the priority is `CLI > TOML > the database > the default`). The TOML path is searched for
+  internally from the CLI-resolved `setting.file`. Only in a `mount(8)` helper context (the parent comm is
+  `mount` AND there are positional arguments) does it silently swallow `-i -f -n -s -v -N -t`.
+- **`ConfigStore`**: the database read and write of `(scope, key) -> value` against the flat
+  `pgfs_settings(scope, key, value)`. `LoadAll` is a plain `SELECT scope, key, value FROM table` of everything
+  plus an allow-list filter. `Save<T>` UPSERTs with `INSERT ... ON CONFLICT (scope, key) DO UPDATE`.
+  The JSON representation goes through `Field<T>.FormatJson(value)` (Int/Long/Bool are native JSON, and anything
+  else is `Format(value)` encoded as a JSON string).
 
-Persistence convention on change: right after the caller does `config.X.Y = newValue;`, it explicitly calls `store.Save(Schema.X.Y, newValue)` (no setter hook is installed, to keep Loader/Store separated). The concrete pattern will be collected into thin wrappers such as a future `Api.SetVolumeLabel(string)`.
+The convention for persisting a change: right after the caller does `config.X.Y = newValue;`, it explicitly
+calls `store.Save(Schema.X.Y, newValue)` (no setter hook was put in, to keep the Loader and the Store separate).
+The concrete cases are to be gathered into thin wrappers such as a future `Api.SetVolumeLabel(string)`.
 
 ### Api ([src/core/src/Api/](../src/core/src/Api/))
 
-- `Api.cs` the public filesystem-operation API (inode CRUD, data I/O via bytea chunks, xattr, symlink, hard link, volume info — all implemented). `IDisposable`; receives an OS notification bridge through the `OsBridge` property.
-- **cross-client locking**: the private helpers `LockTargets` / `LockData(dataId)` / `LockInode(inodeId)` / `LockInodes(params long[])` take `SELECT ... FOR UPDATE` row locks on `pgfs_lock`. Each mutating method (`WriteData` / `TruncateData` / `ReleaseData` / `Update{Mode,Owner,Size,Timestamps}` / `Rename` / `DeleteInode` / `CreateHardLink`) takes the appropriate lock at the top, released automatically when the tx ends. Multiple lock acquisition is fixed in ascending target_id order to avoid deadlock. Details in [support_for_citus.md §locking](support_for_citus.md).
-- `InodeCache.cs` an in-memory cache of inodes + SELECT/INSERT via Dapper. Searchable by `byId` / `byPath`. The root is fixed at `id = 0`. `TryGetPath(id, out path)` resolves a full path by walking the parent chain (used on the Notify path).
-- `Mode.cs` POSIX `st_mode` constants (S_IFDIR, S_IRWXU etc.)
-- `NotifyChannel.cs` / `RemoteChangeInfo.cs` notify other clients of changes (active only when `database.notify_enabled=true`). It streams `{inode_ids, parent_ids, path_prefixes}` from the writing client to receivers via PostgreSQL `LISTEN` / `NOTIFY`. The receiver invalidates `InodeCache`, and on Assign additionally asks Explorer to repaint via `DokanInstance.NotifyUpdate`. Mount (Linux) leaves the OS bridge unimplemented due to a constraint of the Tmds.Fuse high-level API (`attr_timeout=0` disables the kernel attr cache + InodeCache invalidation alone makes stat/ls return the latest).
+- `Api.cs` is the public API of the filesystem operations (the inode CRUD, the data I/O through bytea chunks,
+  xattr, symlinks, hardlinks, the volume information). It is `IDisposable` and takes the OS notification bridge
+  through the `OsBridge` property.
+- **The cross-client exclusion**: the private helpers `LockTargets` / `LockData(dataId)` /
+  `LockInode(inodeId)` / `LockInodes(params long[])` take a `SELECT ... FOR UPDATE` row lock on `pgfs_lock`.
+  Each mutating method (`WriteData` / `TruncateData` / `ReleaseData` / `Update{Mode,Owner,Size,Timestamps}` /
+  `Rename` / `DeleteInode` / `CreateHardLink`) takes the appropriate lock at its head, and it is released
+  automatically at the end of the tx. Taking several locks is fixed in ascending target_id order to avoid a
+  deadlock. For the details see [support_for_citus.md, Phase 3](design/support_for_citus.md).
+- `InodeCache.cs` is the in-memory cache of the inodes plus the SELECT/INSERT through Dapper. It can be searched
+  on two routes, `byId` and `byPath`. The root is fixed at `id = 0`. `TryGetPath(id, out path)` resolves a full
+  path by walking the parent chain (used on the Notify path).
+- `Mode.cs` holds the POSIX `st_mode` constants (S_IFDIR, S_IRWXU and so on).
+- `ContentCache.cs` / `DirtySet.cs`: the read LRU of the bodies and the dirty chunks. `DirtyNamespace.cs` /
+  `IdReservation.cs` / `Api.WriteBackMetadata.cs`: the pending inodes, the id reservation, the metadata
+  materialization, the audit and the drain at exit. For the implementation contracts and the unfixed points see
+  [metadata-write-back.md](design/metadata-write-back.md) /
+  [metadata-write-back-reviews.md](design/metadata-write-back-reviews.md).
+- `NotifyChannel.cs` / `RemoteChangeInfo.cs`: the control LISTEN is always started and only the data-change
+  notifications are controlled by `database.notify_enabled`. On receipt the InodeCache and the ContentCache are
+  invalidated according to the inode/path/parent and the data_id. Active invalidation towards the kernel from
+  Linux is not implemented. `attr_timeout=0` alone does not guarantee the freshness of Core, of the body or of
+  another mount.
+- `HandleTable.cs` / `OpenFileContext.cs` / `OpenInodes.cs` / `Api.Handle.cs`: **the handle context**
+  (handle-context stages A to C). `HandleTable` issues a unique `fh` per open (starting at 1, monotonically
+  increasing, never reused), and `OpenFileContext` holds "the inode id settled at that open". `OpenInodes` holds
+  **the reference count of the bodies**, and the final release in `Api.Handle.cs` drops a body whose name is
+  gone (`DropOrphanData`). The design and the as-built are in [handle-context.md](design/handle-context.md).
+- `PruneAdmin.cs`: **cleaning up what an abnormal exit left behind** (the substance of `pgfsctl prune`). It
+  removes the old rows of `{prefix}mounts`, the orphan data and libfuse's `.fuse_hidden*`, **with a different
+  liveness decision per kind**. The specification is in [Pgfsctl.md, prune](Pgfsctl.md).
+- `ConfigAdmin` (Config) / `StatusAdmin` (Api): the administration logic shared by pgfsctl and the GUI. The
+  mount registration, the 30-second heartbeat and the snapshot of the effective settings and the statistics are
+  Api's responsibility.
 
-**Data I/O (bytea chunks) implementation note**: each inode's data body is 1 `pgfs_data` row + multiple `pgfs_data_chunk` rows (1 row = 1 bytea = 1 chunk, default chunk_size = 1MB). WriteData completes with one upsert SQL per chunk (`INSERT ... ON CONFLICT (data_id, chunk_index) DO UPDATE SET payload = CASE ... END`, the CASE handling the 3 cases of "central overlay / tail overwrite / zero-pad + concat"); concurrent WriteFile races are serialized automatically by the PG row lock. ReadData uses `substring(payload from N for M)` to leverage PG 13+'s partial TOAST detoast. Each chunk's payload length equals "the number of bytes written so far". Zero padding uses `decode(repeat('00', N), 'hex')` (because `repeat(bytea, integer)` does not exist in PG).
+**An implementation note on the data I/O (bytea chunks)**: the body of each inode is one `pgfs_data` row plus
+several `pgfs_data_chunk` rows (one row = one bytea = one chunk, with a default chunk_size of 1 MB). The large
+object version was replaced with bytea in **Citus Phase 1** (for the details see
+[docs/support_for_citus.md](design/support_for_citus.md)). The write-through WriteData is complete in one upsert
+per chunk (`INSERT ... ON CONFLICT (data_id, chunk_index) DO UPDATE SET payload = CASE ... END`, with the CASE
+covering the three cases of "a central overlay / overwriting the tail / zero padding plus concatenation"), and a
+concurrent WriteFile race is serialized automatically by PG's row lock. ReadData fetches the full chunk if the
+content cache or write-back is enabled, and fetches only the range needed with
+`substring(payload from N for M)` when both are off. write-back gathers the dirty chunks in memory and saves
+them in a per-file tx at the flush. The payload length of each chunk is equal to "the number of bytes written so
+far" (following the large object semantics). The zero padding is `decode(repeat('00', N), 'hex')` (because
+`repeat(bytea, integer)` does not exist in PG).
 
 ### Logging ([src/core/src/Logging/](../src/core/src/Logging/))
 
 - An in-house logger implementation (not `Microsoft.Extensions.Logging`).
-- A static API via `Logger.Default`. `Level.Enum` is `All/Trace/Debug/Information/Warning/Error/Critical/None`. The output target is `Logger.Output` (`Action<string>`), the minimum level is `Logger.MinLevel`.
-- **Applying the output-target config**: each Program.cs sets `Logger.MinLevel = config.Logging.MinLevel` and `Logger.Output = LogSink.Create(config.Logging.Output)` at startup. If `logging.output` is `stdout`/`stderr`/`none`, the respective sink; if of the form `<cycle>:<dir>/<pattern>`, the [RotatingFileSink](../src/core/src/Logging/RotatingFileSink.cs) (date rotation + `~` home expansion + `*`→date stamp + automatic directory creation + AutoFlush). The default with no config is `stderr`. The conversion is in [LogSink.Create](../src/core/src/Logging/LogSink.cs).
-- **Guard clause mandatory on hot paths**: `Logger.Trace(...)` is `params object?[]`, which allocates an array and boxes. At sites called 1000+/sec, always test first with e.g. `if (Logger.IsTraceEnabled) { Logger.Trace(...); }`. `IsTraceEnabled` / `IsDebugEnabled` / `IsEnabled(level)` are provided.
+- A static API through `Logger.Default`. `Level.Enum` is
+  `All/Trace/Debug/Information/Warning/Error/Critical/None`. The destination is `Logger.Output`
+  (`Action<string>`) and the minimum level is `Logger.MinLevel`.
+- **Applying the destination setting**: each Program.cs sets `Logger.MinLevel = config.Logging.MinLevel` and
+  `Logger.Output = LogSink.Create(config.Logging.Output)` at startup. If `logging.output` is `stdout`, `stderr`
+  or `none` it is the corresponding sink, and if it is of the form `<cycle>:<dir>/<pattern>` it is
+  [RotatingFileSink](../src/core/src/Logging/RotatingFileSink.cs) (date rotation plus `~` home expansion plus
+  `*` -> a date stamp plus automatic directory creation plus AutoFlush). With nothing configured the default is
+  `stderr`. The conversion is in [LogSink.Create](../src/core/src/Logging/LogSink.cs).
+- **A guard clause is mandatory on a hot path**: `Logger.Trace(...)` takes `params object?[]`, which allocates
+  an array and boxes. Anywhere called 1000+ times a second must check first, as in
+  `if (Logger.IsTraceEnabled) { Logger.Trace(...); }`. `IsTraceEnabled` / `IsDebugEnabled` / `IsEnabled(level)`
+  are provided.
 
 ### Utility ([src/core/src/Utility/](../src/core/src/Utility/))
 
-- **`PathParser.cs`** decomposes a path into drive / root / name elements, and can rebuild with a different separator, detect wildcard positions, and insert before/after. Each part is lazily evaluated with `Lazy<>`. A relatively well-built component. **Caution**: `PathParser.FromPath(path)` uses the OS default separator (`Path.DirectorySeparatorChar`). Paths flowing to `Api` / `InodeCache` are always normalized to `/`-separated, so when calling it inside Lib always be explicit with `PathParser.FromPath(path, "/")`.
-- **`Pg.cs`** a Dapper + Npgsql wrapper (`Query`, `QueryAsync`, `Execute`, `ExecuteAsync`). Caches an `NpgsqlDataSource` per connection string (the same connection string returns the same data source; pooling is managed inside the data source). `QuoteIdentifier` / `QuoteLiteral` escape. SQL appears in `Logger.Trace` (guarded by an early return on `Logger.IsTraceEnabled` inside `TraceQuery`, skipping `Regex.Replace` / `JsonSerializer.Serialize` when Trace is off). It provides the `Pg.OpenConnection` + `using var tx = conn.BeginTransaction()` pattern and a `Pg.WithTransaction<T>` helper (when dealing with `Span<byte>`, which is a ref struct and cannot be captured in a lambda, use `OpenConnection` directly).
-- **`ServiceResolver.cs`** service-name ↔ port conversion via `/etc/services` or Win32 `getservbyname`.
-- **`NameNormalizer.cs`** normalizes owner/group/principal names (fullwidth ASCII → halfwidth + domain stripping of `\` and `@` + lowercasing). Applied to stored names, matching, and caller names so both OSes treat case and width identically (see [permission-interop.md](permission-interop.md)).
-- `Indexer.cs` (`ReadOnlyIndexer<,>` / `ReadOnlyIndexer<,,>` used by `PathParser`, `Pg`), `Fn.cs`, `String.cs`, `Json.cs`, `Retry.cs` — various helpers.
+- **`PathParser.cs`** breaks a path into the drive, the root and the name elements, and can rebuild it with a
+  different separator, find the position of a wildcard and insert before or after. Each part is evaluated
+  lazily through `Lazy<>`. A comparatively well-written component. **A caution**: `PathParser.FromPath(path)`
+  uses the OS default separator (`Path.DirectorySeparatorChar`). The paths flowing into `Api` and `InodeCache`
+  are always normalized to `/`, so when calling it inside the library, always be explicit with
+  `PathParser.FromPath(path, "/")`.
+- **`Pg.cs`** is the wrapper around Dapper plus Npgsql (`Query`, `QueryAsync`, `Execute`, `ExecuteAsync`). It
+  caches an `NpgsqlDataSource` per connection string (the same connection string returns the same data source;
+  the pool is managed inside the data source). `QuoteIdentifier` / `QuoteLiteral` escape. The SQL goes to
+  `Logger.Trace` (with an early-return guard on `Logger.IsTraceEnabled` inside `TraceQuery`, so that
+  `Regex.Replace` and `JsonSerializer.Serialize` are skipped when Trace is disabled). It provides the
+  `Pg.OpenConnection` plus `using var tx = conn.BeginTransaction()` pattern as well as a
+  `Pg.WithTransaction<T>` helper (when handling a `Span<byte>` it is a ref struct and cannot go in a lambda, so
+  `OpenConnection` is used directly).
+- **`ServiceResolver.cs`** converts between a service name and a port through `/etc/services` or the Win32
+  `getservbyname`.
+- **`NameNormalizer.cs`** normalizes an owner/group/principal name (full-width ASCII -> half-width, plus
+  stripping the domain at `\` or `@`, plus lowercasing). It is applied to the stored names, the comparisons and
+  the caller names alike, so that case and width are treated the same on both operating systems
+  ([permission-interop.md](design/permission-interop.md), decisions [1] and [2]).
+- `Indexer.cs` (`ReadOnlyIndexer<,>` / `ReadOnlyIndexer<,,>`, used by `PathParser` and `Pg`), `Fn.cs`,
+  `String.cs`, `Json.cs` and `Retry.cs` are assorted helpers.
 
 ### Collections ([src/core/src/Collections/](../src/core/src/Collections/))
 
-- `RichDictionary<K,V>` a `Dictionary` extension with an `Added` event and `GetOrAdd<W>` derived-type support
-- `FirstList<T>` an advanced list built from a linked list of `Memory<T>` segments. Used in `Inode.Children`
-- `ComparerToEqualityComparer<T>` used internally by `FirstList`
+- `RichDictionary<K,V>` is a `Dictionary` extension with an `Added` event and support for a `GetOrAdd<W>`
+  derived type
+- `FirstList<T>` is an advanced list made of a linked list of `Memory<T>` segments. Used by `Inode.Children`
+- `ComparerToEqualityComparer<T>` is used inside `FirstList`
 
 ### Objects ([src/core/src/Objects/](../src/core/src/Objects/))
 
-- `Extensions.cs` extensions like `object.To<T>()`, `As<T>()`, `Is<T>()`. Uses the **C# 14 (net10.0) `extension` syntax**.
+- `Extensions.cs` holds the extensions `object.To<T>()`, `As<T>()`, `Is<T>()` and so on. It uses
+  **C# 14's (net10.0's) `extension` syntax**.
 
 ---
 
-## Configuration file
+## The settings file
 
-[pgfs.toml.example](../pgfs.toml.example) is a sample. TOML format, in sections (`[database]` / `[mount]` / `[logging]` / ...). The runtime search path is defined in [`Schema.Setting.SearchPath`](../src/core/src/Config/Schema.cs) (see [§Config](#config-srclibsrcconfig) above).
+[pgfs.toml.example](../pgfs.toml.example) is the sample. It is TOML in section form (`[database]` / `[mount]` /
+`[logging]` / ...). The search path at runtime is defined in
+[`Schema.Setting.SearchPath`](../src/core/src/Config/Schema.cs) (see [Config](#config-srccoresrcconfig) above).
 
 ---
 
-## Build and run
+## Building and running
 
-### Output paths
+### The output paths
 
-All projects output under [bin/](../bin/) via the `<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>` setting. Debug / Release / Publish are placed separately:
+The single-file publish in the table below covers Mkfs / Mount / Assign / Ctl. The distribution settings for Gui
+are not in place, and a solution-wide publish does not necessarily give it the same layout or form. Building and
+publishing it was not verified this time.
 
-| Command | Output | Contents |
+Every project outputs under [bin/](../bin/) through the
+`<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>` setting. Debug / Release / Publish land
+in separate places:
+
+| The command | Where it goes | What is there |
 |---|---|---|
-| `dotnet build -c Debug` | `bin/Debug/` | `core.pgfs.dll` + `{mkfs,mount,assign}.pgfs.{dll,exe}` + dependency dlls (framework-dependent) |
-| `dotnet build -c Release` | `bin/Release/` | the Release version of the above (`DebugType=embedded`, framework-dependent) |
-| `dotnet publish -c Release` | `bin/Publish/` | the 3 **single-file self-contained** executables `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs` (host OS RID auto, ~38 MB each) |
+| `dotnet build -c Debug` | `bin/Debug/` | `core.pgfs.dll` plus `{mkfs,mount,assign}.pgfs.{dll,exe}` plus the dependency dlls (framework-dependent) |
+| `dotnet build -c Release` | `bin/Release/` | The same in Release (`DebugType=embedded`, framework-dependent) |
+| `dotnet publish -c Release` | `bin/Publish/` | The **single-file self-contained** executables `mkfs.pgfs`, `mount.pgfs`, `assign.pgfs` and `pgfsctl` (the host OS's RID automatically, about 38 MB each) |
 
-`PublishAot=false` / `PublishTrimmed=false` are set on all projects (AOT is not possible because Dapper / Tomlyn / Tmds.Fuse / DokanNet depend on dynamic code generation). `UseCurrentRuntimeIdentifier` and `SelfContained` are enabled only in a Target with `_IsPublishing=true`, so they do not apply at `dotnet build -c Release` time (to avoid laying out 200 framework dlls at build time).
+The CLI publish sets `PublishAot=false` / `PublishTrimmed=false` (AOT is impossible because Dapper, Tomlyn, the
+in-house libfuse binding and DokanNet depend on dynamic code generation and P/Invoke).
+`UseCurrentRuntimeIdentifier` and `SelfContained` are enabled only in a Target with `_IsPublishing=true` so that
+they do not apply to `dotnet build -c Release` (to stop 200 framework dlls lining up at build time).
 
 ```pwsh
-# build the whole solution
+# Build the whole solution
 dotnet build pgfs.sln
 
-# build individually
+# Build one project
 dotnet build src/core/Core.csproj
 dotnet build src/mkfs/Mkfs.csproj
 
-# Release publish (single-file for the host OS)
+# A Release publish (single-file for the host OS)
 dotnet publish src/mkfs/Mkfs.csproj -c Release
-# or the whole solution at once
+# Or the whole solution
 dotnet publish pgfs.sln -c Release
 ```
 
-**.NET 10 SDK required** (uses the `extension` syntax etc.).
+**The .NET 10 SDK is required** (the `extension` syntax and so on are used).
 
 ---
-
-## Related
-
-- [Mkfs.md](Mkfs.md) — the `mkfs.pgfs` specification
-- [Mount.md](Mount.md) — the `mount.pgfs` (Linux/macOS) specification
-- [Assign.md](Assign.md) — the `pgfs.assign` (Windows) specification
-- [database.md](database.md) — the DB schema
-- [coding-style.md](coding-style.md) — the coding conventions
-- [performance.md](performance.md) — performance improvement candidates
-- [support_for_citus.md](support_for_citus.md) — the design notes for Citus (horizontal distribution)
-- [next.md](next.md) — the list of what to do next
-- [history.md](history.md) — the decisions that led to the current design
