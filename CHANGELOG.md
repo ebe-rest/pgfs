@@ -17,7 +17,7 @@ This file records the changes **per release tag**. The granularity is "a differe
 internal refactors are not listed as a rule ([docs/history.md](docs/history.md) and the design documents are
 authoritative for how things came about).
 
-## [Unreleased] v0.2.0
+## [v0.2.0] - 2026-09-23
 
 > **The difference from v0.1.0**. The pillars are (1) rebuilding the project structure (bringing
 > libfuse in house), (2) the operations phase = the caches / write-back / `pgfsctl` / the GUI, (3) raising the

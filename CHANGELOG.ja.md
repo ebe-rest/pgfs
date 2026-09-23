@@ -1,6 +1,6 @@
 # 変更履歴
 
-> **道順**: [docs/README.md](docs/README.md) › **本書**
+> **道順**: [docs/README.ja.md](docs/README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **リリースタグ単位**の利用者向け差分。移行が必要な変更・既知の制限・
 > データが壊れ得た修正を必ず書く。**内部リファクタは載せない**。
@@ -9,13 +9,13 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [docs/history.md](docs/history.md) | 専用 doc を持たない完了項目の**経緯** |
+> | [docs/history.ja.md](docs/history.ja.md) | 専用 doc を持たない完了項目の**経緯** |
 > | 各 `docs/design/*.md` | 機能ごとの設計と as-built |
 
 このファイルは**リリースタグ単位**の変更を記録する。粒度は「利用者が見て分かる差分」で、
-内部リファクタは原則載せない (経緯は [docs/history.md](docs/history.md) と各設計 doc が正)。
+内部リファクタは原則載せない (経緯は [docs/history.ja.md](docs/history.ja.md) と各設計 doc が正)。
 
-## [未リリース] v0.2.0
+## [v0.2.0] - 2026-09-23
 
 > **v0.1.0 からの差分**。柱は ① プロジェクト構成の作り直し (libfuse 内製化)
 > ② 運用フェーズ = キャッシュ / write-back / `pgfsctl` / GUI ③ Windows 実装の底上げ
@@ -43,7 +43,7 @@
 
 ### 追加
 
-- **`pgfsctl`** — 実行時コントロールプレーンの CLI ([docs/Pgfsctl.md](docs/Pgfsctl.md))。
+- **`pgfsctl`** — 実行時コントロールプレーンの CLI ([docs/Pgfsctl.ja.md](docs/Pgfsctl.ja.md))。
   - `pgfsctl config get / list / set` — **稼働中のマウントへライブ反映**できる
     (制御チャネルは常時 ON なので `--notify` を付けていないマウントにも届く)。
   - `pgfsctl status [--json]` — クラスタ稼働一覧 / FS 統計 / 稼働プロセスのキャッシュ統計と実効設定。
@@ -57,9 +57,9 @@
     残骸と判定するのは libfuse の厳密な書式 (`.fuse_hidden` + 16 桁の 16 進) だけで、利用者が
     `.fuse_hidden_notes.txt` と名付けたファイルは触らない。**喪失を記録した行 (墓標) は消さない。**
     マウントは自分の登録行が消えていたら heartbeat の周期で登録し直す。安全弁の詳細は
-    [docs/Pgfsctl.md](docs/Pgfsctl.md)。
+    [docs/Pgfsctl.ja.md](docs/Pgfsctl.ja.md)。
 - **write-back キャッシュ** (`mount.write_back`・**既定 off**)。実測 `dd bs=128k` で **6.1×**、
-  `rsync` で 1.4×。正は [docs/design/write-back.md](docs/design/write-back.md)。
+  `rsync` で 1.4×。正は [docs/design/write-back.ja.md](docs/design/write-back.ja.md)。
 - **メタデータ write-back** (`mount.write_back_metadata`・**既定 off**)。close の同期 flush をやめ、
   pending inode をまとめて 1 tx で書く。`fsync` / `fsyncdir` が唯一の硬いバリアになる。
   同期化ヒューリスティック (rename-over-existing / `O_TRUNC` / `O_EXCL`) を内蔵。
@@ -81,18 +81,18 @@
 
 - **プロジェクトを 4 つに分割した** — `Pgfs.Core` (SQL 共通・OS 分岐ゼロ) / `Pgfs.Fuse` (Linux) /
   `Pgfs.Dokan` (Windows) / 薄い実行ファイル。正は
-  [docs/design/v0.2.0-plan.md](docs/design/v0.2.0-plan.md) と
-  [docs/design/fuse-binding.md](docs/design/fuse-binding.md)。
+  [docs/design/v0.2.0-plan.ja.md](docs/design/v0.2.0-plan.ja.md) と
+  [docs/design/fuse-binding.ja.md](docs/design/fuse-binding.ja.md)。
 - **タイムスタンプを UTC に統一**した (`TIMESTAMP` 列は常に UTC で保存)。
 - **`st_blocks` が実占有バイトを返す**ようになった (`du` が実際のサイズを見る)。
 - ドキュメントを `docs/design/` に階層化した。索引は
-  [docs/README.md](docs/README.md)。
+  [docs/README.ja.md](docs/README.ja.md)。
 
 ### 修正
 
 - **開いたファイルの識別がパス優先だった問題を直した**。開いている最中に rename / 同名再作成が
   起きると、以後の読み書きが別のファイルに着弾していた。**open 時に確定した inode id** で引き直す
-  ようにした。設計と実測は [docs/design/handle-context.md](docs/design/handle-context.md)。
+  ようにした。設計と実測は [docs/design/handle-context.ja.md](docs/design/handle-context.ja.md)。
 - **URL 形式の接続文字列 (`postgresql://user:pass@host:port/db`) で起動できなかった問題を直した**。
   ドキュメントと fstab の例は URL 形式を前提にしていたが、Npgsql は URL を解釈しないため、`-c` や
   fstab の 1 列目に URL を書くと **`Format of the initialization string does not conform to specification`
@@ -106,7 +106,7 @@
   **テーブル形式**で書いていたが、**設定ファイルは `スコープ.キー = 値` の 2 段しか解釈しない**。
   コピーして使うと接続文字列が化け、**`Format of the initialization string does not conform to
   specification` という原因を指さない例外**で起動に失敗した。サンプルを **1 行の接続文字列**に直し、
-  [docs/Mkfs.md](docs/Mkfs.md) の「設定ファイル側で個別に書ける」という記述も削除した。
+  [docs/Mkfs.ja.md](docs/Mkfs.ja.md) の「設定ファイル側で個別に書ける」という記述も削除した。
   **テーブル形式を書いた場合は、値を採らずに「1 行で書いてください」と警告する**ようにしたので、
   古いサンプルをコピー済みでも何が悪いか分かる。
 - **変更通知が届かないと、他クライアントが永久に古い値を返し続ける問題を直した**。
@@ -123,7 +123,7 @@
   `database.notify_enabled` を有効にしていても、通知が着くまでの窓で同じことが起きた。
   **単一マウントでの読み書きには影響しない。**
 - **ハードリンクの実体共有が壊れる問題を直した** (詳細は
-  [docs/design/data-id-lifecycle.md](docs/design/data-id-lifecycle.md))。同じ根から 3 つ出ていた:
+  [docs/design/data-id-lifecycle.ja.md](docs/design/data-id-lifecycle.ja.md))。同じ根から 3 つ出ていた:
   - `truncate` / `>` によるゼロ化が**共有実体を消し、兄弟のリンクにデータ消失と壊れた参照を残す**
     (`cat` が NUL を返す・`st_nlink` も壊れる)。
   - **空ファイルのハードリンクがリンクにならない** (`st_nlink` が両方 1 のまま)。
@@ -151,7 +151,7 @@
   (既定 1 MiB) が対象になる。**`--notify` を付けても防げない** (通知は内容キャッシュを落とすが
   dirty は意図的に残すため)。**既定は off** なので、明示的に on にしていなければ影響しない。
   単一マウントからの読み書き、マウントごとに書くファイルが分かれている構成も影響を受けない。
-  詳細は [docs/Mount.md](docs/Mount.md) §`mount.write_back` を on にしたまま…。
+  詳細は [docs/Mount.ja.md](docs/Mount.ja.md) §`mount.write_back` を on にしたまま…。
 - **未 flush を残して終了した記録 (墓標) は、SQL でしか消せない。** write-back が書き戻せないまま
   マウントが終わると、`{prefix}mounts` の行を**削除せず**に残して失われた件数を記録する
   (`endedAt` は UTC で末尾に `Z` が付く。ログ行の時刻はローカルなので読み替えること)。これは
@@ -166,7 +166,7 @@
   超える書き込みは複数コールバックに分割され、**その隙間に他マウントの追記が挟まり得る**
   (バイトは失われないが、連続した領域になることは保証しない)。**write-back 有効時は保証しない** —
   相手のバイトがまだ DB に無いので原理的に不可分にできない。**自前でシークしてから書くアプリ
-  (.NET の `FileMode.Append` など) は対象外**。詳細は [docs/Mount.md §append の契約](docs/Mount.md)。
+  (.NET の `FileMode.Append` など) は対象外**。詳細は [docs/Mount.ja.md §append の契約](docs/Mount.ja.md)。
 - **Windows の削除は遅延する** — `Remove-Item` が返っても、Windows は最後のハンドルが閉じるまで
   ファイルシステムに削除を伝えない。pgfs 側は受け取り次第消して通知する (実測 0.95 秒で他マウントへ
   着弾)。NTFS でも同じ挙動で、pgfs 固有ではない。
@@ -196,7 +196,7 @@
   (作ってすぐ消す等) が起きると、監査行が一度キューに載る。**取り消しの作成・削除の対だけは同期で書く**
   ので残るが、**それ以外のキュー分は書き戻しを待つ**ので、**待っているあいだに異常終了するとその監査行は
   残らない**。**操作が成功したことは、監査行がその時点で永続化されたことを意味しない。**
-  **既定のまま (off) なら発生しない。** 詳細は [docs/design/audit-log.md](docs/design/audit-log.md)。
+  **既定のまま (off) なら発生しない。** 詳細は [docs/design/audit-log.ja.md](docs/design/audit-log.ja.md)。
 - **Linux では、未 flush を残して終わったことが終了コードで伝わらない** — `mount.pgfs` は**未 flush を
   残したままアンマウントすると `exit 4`** で終わる。ただし **`mount(8)` / `/etc/fstab` 経由の既定
   (デーモン化) では、親プロセスがマウント成立の時点で `0` を返して先に終了する**ので、**この `4` は
