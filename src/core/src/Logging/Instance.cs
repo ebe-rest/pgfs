@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Logging;
+namespace Pgfs.Core.Logging;
 
 using System.Text;
 

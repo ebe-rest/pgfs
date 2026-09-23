@@ -11,7 +11,7 @@ using Core.Models;
 /// Translates PGFS's Linux-style inode attributes (st_mode, etc.) into Windows <see cref="FileAttributes"/>.
 /// Windows-specific logic (root -&gt; administrator name resolution, SetOwnership, etc.) also lives here.
 ///
-/// Uses constants from <see cref="Core.Api.Mode"/> such as S_IFDIR / S_IFREG / S_IFLNK / S_IRWXU.
+/// Uses the S_IFDIR / S_IFREG / S_IFLNK / S_IRWXU and other constants of <see cref="Core.Api.Mode"/>.
 /// </summary>
 [SupportedOSPlatform("windows")]
 public static class FileSystemUtils
@@ -25,6 +25,50 @@ public static class FileSystemUtils
 
 	/// <summary>The bits held in the xattr. The rest (ReadOnly / Directory / ReparsePoint / Normal) are managed via other routes.</summary>
 	public const FileAttributes WinAttrsMask = FileAttributes.Hidden | FileAttributes.System | FileAttributes.Archive;
+
+	/// <summary>The MS-DOS device names. They stay reserved even with an extension (`CON.txt` counts as `CON` too).</summary>
+	private static readonly string[] ReservedDeviceNames = [
+		"CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+	];
+
+	/// <summary>
+	/// <b>Whether this is a name Windows must not be allowed to create</b>. Used only on creation - **the
+	/// existing ones can still be opened** (a name created from Linux is not made unreadable on Windows).
+	/// <para>
+	/// The reason for rejecting them is to "close at the Windows entrance the hole the Win32 layer opened"
+	/// (<c>docs/design/namespace-policy.md</c>). The concrete harm that has been measured:
+	/// </para>
+	/// <list type="bullet">
+	///   <item><b>A reserved name</b>: create a single <c>NUL</c> and that directory can no longer be deleted
+	///     with <c>Remove-Item -Recurse</c> (<c>ERROR_INVALID_FUNCTION</c>). Recovering it needs an individual
+	///     delete through <c>\\?\</c>.</item>
+	///   <item><b>A trailing space or dot</b>: <c>dot</c> and <c>dot.</c> can coexist as separate things, and
+	///     giving <c>dot.</c> in a Win32 path normalizes it so the contents of <c>dot</c> come back.
+	///     <b>It is not an error</b>, so the user has no way of noticing they read the wrong data.</item>
+	/// </list>
+	/// </summary>
+	public static bool IsUnsafeWindowsName(string? name) {
+		if (string.IsNullOrEmpty(name)) {
+			return false;
+		}
+		// `.` / `..` are legitimate path elements. Do not drag them into the trailing-dot check.
+		if (name == "." || name == "..") {
+			return false;
+		}
+		var last = name[name.Length - 1];
+		if (last == ' ' || last == '.') {
+			return true;
+		}
+		// The reserved-name check is done on **what comes before the first dot** (`CON.txt` turns into the device from Win32 as well).
+		var stem = name;
+		var dot = stem.IndexOf('.');
+		if (dot >= 0) {
+			stem = stem.Substring(0, dot);
+		}
+		return System.Array.IndexOf(FileSystemUtils.ReservedDeviceNames, stem.ToUpperInvariant()) >= 0;
+	}
 
 	/// <summary>
 	/// Builds Windows FileAttributes from an inode's st_mode and name.
@@ -166,7 +210,10 @@ public static class FileSystemUtils
 	/// plus the named entries of the canonical ACL document. deny / inheritance / ACE order are not held (POSIX projection).
 	/// </summary>
 	public static FileSystemSecurity BuildSecurity(Inode inode, WindowsUserResolver users, Api api) {
-		FileSystemSecurity sec = inode.IsDirectory ? new DirectorySecurity() : new FileSecurity();
+		FileSystemSecurity sec = inode.IsDirectory switch {
+			true  => new DirectorySecurity(),
+			false => new FileSecurity(),
+		};
 		var ownerSid = users.UserSidOf(inode.UserName);
 		var groupSid = users.GroupSidOf(inode.GroupName);
 		sec.SetOwner(ownerSid);
@@ -184,7 +231,10 @@ public static class FileSystemUtils
 		var acl = LoadPgfsAcl(api, inode.Id);
 		if (acl != null) {
 			foreach (var e in acl.Entries) {
-				var sid = e.PrincipalType == "group" ? users.GroupSidOf(e.PrincipalName) : users.UserSidOf(e.PrincipalName);
+				var sid = e.PrincipalType switch {
+					"group" => users.GroupSidOf(e.PrincipalName),
+					_ => users.UserSidOf(e.PrincipalName),
+				};
 				AddAllow(sec, sid, e.CanRead, e.CanWrite, e.CanExecute, isDir);
 			}
 		}

@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Api;
+namespace Pgfs.Core.Api;
 
 public static class Mode
 {

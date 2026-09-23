@@ -13,7 +13,29 @@ namespace Pgfs.Core.Config;
 public sealed class MountConfig
 {
 	public string MountPoint { get; set; } = "";
+	/// <summary>The maximum number of bytes in one FUSE WRITE request (0 = the libfuse default). Only effective on Linux (FUSE).</summary>
+	public int MaxWrite { get; set; }
 	public int CacheMaxEntries { get; set; }
+	public long CacheDataMaxBytes { get; set; }
+	/// <summary>The TTL (in milliseconds) of the negative lookup (ENOENT) cache. 0 disables it.</summary>
+	public int NegativeCacheTtlMs { get; set; }
+	/// <summary>Whether to enable the write-back cache (the default false is the traditional write-through).</summary>
+	public bool WriteBack { get; set; }
+	/// <summary>The cap on dirty bytes. A write that exceeds it waits until the flush is done (back-pressure).</summary>
+	public long WriteBackMaxBytes { get; set; }
+	/// <summary>How long dirty data may be left alone (in milliseconds). 0 disables the time trigger.</summary>
+	public int WriteBackIntervalMs { get; set; }
+	/// <summary>Whether metadata (create/mkdir/symlink and the attribute changes to them) is written back as well. <see cref="WriteBack"/> is a prerequisite.</summary>
+	public bool WriteBackMetadata { get; set; }
+	/// <summary>
+	/// How a create with <c>O_EXCL</c> is treated (<c>write_through</c> / <c>defer</c>).
+	/// <c>defer</c> loses cross-client exclusion. <see cref="WriteBackMetadata"/> is a prerequisite.
+	/// </summary>
+	public string WriteBackMetadataExclusiveCreate { get; set; } = "write_through";
+	/// <summary>The cap on the number of pending inodes. A create that exceeds it waits until the flush is done (back-pressure).</summary>
+	public int WriteBackMaxInodes { get; set; }
+	/// <summary>The blocking limit for back-pressure / the flush deadline at unmount (in milliseconds). 0 = do not wait.</summary>
+	public int WriteBackFlushTimeoutMs { get; set; }
 	public string FallbackUname { get; set; } = "";
 	public string FallbackGname { get; set; } = "";
 	public bool Foreground { get; set; }

@@ -1,53 +1,87 @@
-# Sample pgfs settings file. Copy to pgfs.toml and edit.
+# A sample pgfs settings file. Copy it to pgfs.toml and edit it.
 #
-# Every value is optional; when omitted, the Schema default is used.
-# CLI arguments (`-c`, `-m`, etc.) take precedence over this file.
+# Every value may be omitted; when it is, the default from Pgfs.Core.Config.Schema is used
+# (the full list of items is in docs/design/settings-matrix.md).
+# CLI arguments (`-c`, `-m` and so on) take precedence over this file.
 # Details: docs/Mkfs.md
+#
+# ⚠ **Only two levels can be written: "scope.key = value".**
+#   A table form such as `database.connection.host = "..."` cannot be read
+#   (it is ignored and a warning is emitted). Write the connection as **a one-line connection string**,
+#   as below.
 
 # ----- database connection -----
-database.connection.host = "localhost"
-database.connection.port = "5432"
-database.connection.username = "pgfs"
-database.connection.password = "pgfs"
-database.connection.database = "pgfs"
-database.connection.ssl_mode = "Prefer"
+# Both the kv form and the URL form are accepted.
+database.connection = "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs;SslMode=Prefer"
+# database.connection = "postgresql://pgfs:pgfs@localhost:5432/pgfs"
+#
+# The super connection mkfs uses to DROP / CREATE DATABASE (when omitted it inherits the Host / Port /
+# SslMode above and takes the default postgres / template1 only for the credentials and the maintenance DB).
+# database.super_connection = "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=template1"
 
 # ----- database structure -----
 database.schema = "public"
 database.prefix = "pgfs_"
-# database.tablespace / database.tablespace_path are SaveTo=DB fs-identifying info (set via mkfs
-# `--tablespace` / `--tablespace-path` → stored in pgfs_settings). They are not written to the generated
-# toml. Overriding them via a config file is not intended (same handling as the file_system keys below).
+# database.tablespace / database.tablespace_path are **SaveTo=DB** fs-identifying information (given with
+# mkfs `--tablespace` / `--tablespace-path` -> stored in pgfs_settings). They are not written into the
+# generated toml. Overriding them from a settings file is not intended (the same treatment as the
+# file_system keys below).
 
-# ----- file system settings (fixed at FS creation) -----
+# ----- file system settings (fixed when the FS is created) -----
 # file_system.* (cluster_size / default_chunk_size / max_file_size / volume_label / version) and
-# app.statfs / database.citus / app.plperlu are SaveTo=DB fs-identifying info. They are stored into
-# pgfs_settings at mkfs time and read from there by all clients. **Not written to toml** (and not
-# emitted to the generated toml). In particular, a mismatch of cluster_size / default_chunk_size across
-# clients can corrupt data, so a single DB authority is correct.
-# NB: if you hand-write them, they are read per spec and the TOML value takes precedence, but breakage
-#     is at your own risk (an escape hatch for temporarily changing a value during development).
-#     Details: docs/settings-and-plperlu.md
+# app.statfs / database.citus / app.plperlu are **SaveTo=DB** FS-identifying information. They are stored
+# into pgfs_settings at mkfs time and every client reads them from there. **They are not written in the
+# toml** (and are not emitted into the generated toml either). cluster_size / default_chunk_size in
+# particular can corrupt data when the value differs between clients, so the single copy in the DB is
+# authoritative.
+# NB: if you do hand-write them they are read as the current spec says and the TOML value wins, but any
+#     accident is on you (an escape hatch for changing a value temporarily during development).
+#     Details: docs/design/settings-and-plperlu.md
 
 # ----- mount -----
-# mount.mount_point = "/mnt/pgfs"             # Linux/macOS. On Windows, e.g. "P:"
+# mount.mount_point = "/mnt/pgfs"             # Linux/macOS. On Windows, "P:" and the like
 # mount.cache_max_entries = 1024
-# mount.fallback_uname = "nobody"             # fallback when uname resolution fails (on Windows, e.g. "Guest")
-# mount.fallback_gname = "nogroup"            # fallback when gname resolution fails (on Windows, "Guests")
+# mount.cache_data_max_bytes = 67108864       # the byte budget of the file body (data_chunk) read cache (64MiB). 0 disables it
+# mount.negative_cache_ttl_ms = 0             # caches ENOENT for a TTL (ms). Note that a file another client creates stays invisible for up to one TTL
+# mount.write_back = false                    # accumulates writes in memory and writes one file = one transaction
+#                                             #   it is fast (measured 6.1x with dd bs=128k / 1.4x with rsync), but
+#                                             #   whatever is unflushed is lost if it crashes before fsync/close. Off by default.
+# mount.write_back_max_bytes = 67108864       # the cap on dirty bytes (64MiB). A write above it waits for a flush (back-pressure)
+# mount.write_back_interval_ms = 1000         # background-flushes a file that has stayed dirty longer than this. 0 disables it
+# mount.write_back_metadata = false           # defers metadata too (create/mkdir/symlink and the attribute changes to them)
+#                                             #   mount.write_back = true is a prerequisite (on alone = a warning + disabled).
+#                                             #   it folds things into one file = one transaction, but during the loss
+#                                             #   window whole files disappear even after they were closed. Off by default.
+#                                             #   for the contract on what is lost, read the write-back section of docs/Mount.md.
+# mount.write_back_metadata_exclusive_create = "write_through"
+#                                             # how a create with O_EXCL / CREATE_NEW is treated.
+#                                             #   write_through (the default) = creates synchronously rather than
+#                                             #     deferring, and leaves the exclusion decision to the database's
+#                                             #     unique constraint (a lock file works cross-client).
+#                                             #   defer = defers it. rsync / cp get about 3 times faster, at the cost
+#                                             #     of **losing cross-client exclusion** (two clients' exclusive
+#                                             #     creates both succeed). Exclusion within the same mount is kept.
+#                                             #   do not choose defer if several clients use the same FS.
+# mount.write_back_max_inodes = 4096          # the cap on the number of pending inodes. A create above it waits for a flush (back-pressure)
+# mount.write_back_flush_timeout_ms = 30000   # the longest back-pressure may block / the deadline for writing everything out at unmount.
+#                                             #   0 means do not wait. Whatever could not be written within the deadline
+#                                             #   is enumerated in the Error log and mount.pgfs exits with 4.
+# mount.fallback_uname = "nobody"             # the fallback when uname resolution fails (on Windows, "Guest" or similar is recommended)
+# mount.fallback_gname = "nogroup"            # the fallback when gname resolution fails (on Windows, "Guests")
 # Note: fallback_uname / fallback_gname are SaveTo=DB, so they are read from pgfs_settings.
-# Specifying them in pgfs.toml takes precedence over the DB value (like a CLI argument), but when
-# mounting the same FS from multiple machines, the intended operation is to manage them centrally on
-# the DB side (at mkfs time or via a later UPDATE).
+# Giving them in pgfs.toml makes them win over the DB value, just as a CLI argument does, but when the same
+# FS is mounted from several machines the intended operation is to manage them centrally on the DB side
+# (at mkfs time, or with a later UPDATE).
 
 # ----- database connection retry -----
-# database.retry_max_attempts = 5             # max attempts (including the first) on a transient failure at connection open
-# database.retry_initial_delay_ms = 200       # initial backoff delay (ms)
-# database.retry_max_delay_ms = 2000          # exponential-backoff ceiling (ms)
+# database.retry_max_attempts = 5             # the maximum number of attempts for a transient failure when opening a connection (including the first)
+# database.retry_initial_delay_ms = 200       # the initial backoff delay (ms)
+# database.retry_max_delay_ms = 2000          # the cap of the exponential backoff (ms)
 
 # ----- logging -----
 # logging.level = "information"               # all / trace / debug / information / warning / error / critical / none
 # logging.output = "stderr"                   # stdout / stderr / none / "<cycle>:<dir>/<pattern>"
-#   example of file output (date rotation):
-#     logging.output = "daily:~/pgfs/log/pgfs-*.log"     # ~/pgfs/log/pgfs-YYYYMMDD.log (daily)
-#   cycle = none / hourly / daily / monthly. A "*" in the pattern is replaced by the date
-#     (hourly=yyyyMMddHH / daily=yyyyMMdd / monthly=yyyyMM / none=empty). "~" expands to home.
+#   an example of file output (rotated by date):
+#     logging.output = "daily:~/pgfs/log/pgfs-*.log"     # ~/pgfs/log/pgfs-20260527.log (daily)
+#   cycle = none / hourly / daily / monthly. The "*" in the pattern is replaced by the date
+#     (hourly=yyyyMMddHH / daily=yyyyMMdd / monthly=yyyyMM / none=empty). "~" expands to the home directory.

@@ -12,7 +12,7 @@ using Tmds.Linux;
 using static Tmds.Linux.LibC;
 
 /// <summary>
-/// PGFS FUSE filesystem implementation running on Pgfs.Fuse (Linux/macOS).
+/// The PGFS FUSE filesystem implementation running on Pgfs.Fuse (Linux/macOS).
 ///
 /// Cross-platform DB operations go through <see cref="Api"/>, and this class is purely a
 /// "FUSE -&gt; Api" adapter.
@@ -80,20 +80,39 @@ public sealed class FileSystem : FuseFileSystemBase
 		return Encoding.UTF8.GetString(path);
 	}
 
-	/// <summary>Splits a path into "parent path + leaf element".</summary>
-	// Windows-shareable: path splitting is OS-independent if the separator is parameterized. Here it is fixed to `/`.
-	private static (string parentPath, string name) SplitParent(string path) {
-		if (path == "/" || string.IsNullOrEmpty(path)) {
-			return ("/", "");
-		}
-		var i = path.LastIndexOf('/');
-		if (i < 0) {
-			return ("/", path);
-		}
-		if (i == 0) {
-			return ("/", path[1..]);
-		}
-		return (path[..i], path[(i + 1)..]);
+	/// <summary>Splits a path into "the parent path + the last element".</summary>
+	// Windows-shareable: splitting a path is OS-independent once the separator is a parameter. Fixed to `/` here.
+
+	// ------------------------------------------------------------------
+	// Resolving the handle context (handle-context stage B)
+	// ------------------------------------------------------------------
+
+	/// <summary>
+	/// Looks the handle context up from <c>fi</c>. **Null when there is none on it.**
+	/// <para>
+	/// In stage B <c>fh</c> is "the id in the handle table" and is **the primary means of identification**
+	/// (docs/design/handle-context.md, the acceptance criteria and API surface of stage B). The callbacks that
+	/// arrive with a null <c>fi</c> (GetAttr / ChMod / Chown / Truncate / UpdateTimestamps) get null from here
+	/// and the caller falls back to the path.
+	/// </para>
+	/// </summary>
+	private OpenFileContext? ContextOf(FuseFileInfoRef fiRef) {
+		if (fiRef.IsNull) { return null; }
+		return this.api.Handles.Get(fiRef.Value.fh);
+	}
+
+	/// <summary>
+	/// Gathers the contract of ⑤ - "**with <c>fh</c>, start from the ctx's <c>InodeId</c>; without <c>fh</c>, resolve path -> id once**" - into one place.
+	/// <para>
+	/// The one and only point at which the two see different things is **"a rename plus a re-create under the
+	/// same name"**, and **it is right that they differ there** (the fd points at the inode as it was at open
+	/// time, the path points at the new inode).
+	/// </para>
+	/// </summary>
+	private Inode? ResolveByHandleOrPath(FuseFileInfoRef fiRef, string path) {
+		var context = this.ContextOf(fiRef);
+		if (context != null) { return this.api.TryResolveHandle(context); }
+		return this.api.GetByPath(path);
 	}
 
 	// ------------------------------------------------------------------
@@ -156,7 +175,8 @@ public sealed class FileSystem : FuseFileSystemBase
 	public override int GetAttr(ReadOnlySpan<byte> path, ref stat stat, FuseFileInfoRef fiRef) {
 		var p = PathToString(path);
 		try {
-			var inode = this.api.GetByPath(p);
+			// Stage B: if there is an fh it is the primary source (the contract of ⑤). Without one, resolve from the path as before.
+			var inode = this.ResolveByHandleOrPath(fiRef, p);
 			if (inode == null) {
 				return -ENOENT;
 			}
@@ -171,19 +191,19 @@ public sealed class FileSystem : FuseFileSystemBase
 	/// <summary>Fills a POSIX stat struct from an inode. Linux-specific.</summary>
 	private void FillStat(Inode inode, ref stat s) {
 		var (uid, gid) = this.ResolveOwner(inode);
-		// Tmds.Linux wrapper structs have fixed implicit-cast source types (mode_t is ushort,
-		// uid/gid_t is uint, nlink_t/ino_t/fs*cnt_t is ulong, off_t/blk* is long).
-		// Assignments must be explicitly converted to the implicit-cast source type first.
-		// st_ino must match across hard links per POSIX, but the pgfs schema keeps inode rows under
-		// separate ids, so when the data body is shared (DataId != null) we return a value based on data_id.
-		// Directories etc. (DataId == null) use inode.Id directly. To avoid collisions between inode.Id and
-		// data_id, the file side sets the sign bit (0x8000_0000_0000_0000) to separate the namespaces.
-		// For the kernel to use this value, Mount/Program.cs must pass `-o use_ino`.
-		ulong inoValue;
+		// Each wrapper struct of Tmds.Linux has a fixed type it casts implicitly from (mode_t is ushort,
+		// uid/gid_t are uint, nlink_t/ino_t/fs*cnt_t are ulong, off_t/blk* are long).
+		// An assignment is converted explicitly to that source type before being handed over.
+		// POSIX wants st_ino to agree across hardlinks, but the pgfs schema keeps the inode rows under separate
+		// ids, so when the data body is shared (DataId != null) the same value is derived from the data_id.
+		// Directories and the like (DataId == null) use inode.Id as-is. To keep inode.Id and data_id from
+		// colliding, the file side gets the sign bit (0x8000_0000_0000_0000) set, which splits the two namespaces.
+		// For the kernel to use this value, Mount/Program.cs has to pass `-o use_ino`.
+		// The default is the directory path (inode.Id as-is). For a file, the sign bit is set on the data_id.
+		var inoValue = 0UL;
+		if (inode.Id >= 0) { inoValue = (ulong)inode.Id; }
 		if (inode.DataId is long dataId && dataId >= 0) {
 			inoValue = (ulong)dataId | 0x8000_0000_0000_0000UL;
-		} else {
-			inoValue = inode.Id >= 0 ? (ulong)inode.Id : 0UL;
 		}
 		s.st_ino = inoValue;
 		s.st_mode = (ushort)(inode.Mode & 0xFFFF);
@@ -195,10 +215,19 @@ public sealed class FileSystem : FuseFileSystemBase
 		// InodeCache with a DB round-trip per getattr, and maintaining it on write would intrude on every mutating op.
 		// Not worth it for cosmetics, so it stays 0. See docs/database.md (pgfs_inode note).
 		s.st_size = inode.Size;
-		s.st_blocks = (inode.Size + 511) / 512;
+		// st_blocks is "the number of blocks actually occupied" = the value du looks at. Deriving it from st_size
+		// would report a thousand times the real thing for a sparse file (which has no chunk rows for its holes),
+		// so it comes from {prefix}data.total_size (the actually occupied bytes). The details are in docs/design/database.md.
+		s.st_blocks = (this.api.GetOccupiedBytes(inode) + 511) / 512;
 		s.st_blksize = 4096L;
-		var mtime = inode.Mtime == default ? DateTime.UtcNow : DateTime.SpecifyKind(inode.Mtime, DateTimeKind.Utc);
-		var ctime = inode.Ctime == default ? mtime : DateTime.SpecifyKind(inode.Ctime, DateTimeKind.Utc);
+		var mtime = (inode.Mtime == default) switch {
+			true  => DateTime.UtcNow,
+			false => DateTime.SpecifyKind(inode.Mtime, DateTimeKind.Utc),
+		};
+		var ctime = (inode.Ctime == default) switch {
+			true  => mtime,
+			false => DateTime.SpecifyKind(inode.Ctime, DateTimeKind.Utc),
+		};
 		s.st_mtim = mtime.ToTimespec();
 		s.st_ctim = ctime.ToTimespec();
 		// Per docs/database.md, there is no st_atime, so return mtime.
@@ -218,7 +247,16 @@ public sealed class FileSystem : FuseFileSystemBase
 		if (!inode.IsDirectory) {
 			return -ENOTDIR;
 		}
-		// We could stash the inode id in fi.fh for later calls, but we do not for now.
+		// **Borrow an id from the handle table and put it on fh** (handle-context stage A).
+		// It used to carry the raw inode id, but **the root inode has id = 0**, so it could not be told apart from
+		// "nothing on it" and FSyncDir's reverse lookup was dead at the root.
+		// The handle table's ids start at 1 and 0 is the sentinel, so that trap is gone.
+		// **Whatever is borrowed must be returned in ReleaseDir** (otherwise the OpenFileContext leaks).
+		// **Stage C-1: raise the body's reference count separately from the registration in the handle table.**
+		// Do not fold it into `Rent` / `Return` (Dokan does not go through the table, and it also builds throwaway contexts).
+		var context = new OpenFileContext(inode, null);
+		this.api.OpenHandle(context);
+		fi.fh = this.api.Handles.Rent(context);
 		return 0;
 	}
 
@@ -245,7 +283,51 @@ public sealed class FileSystem : FuseFileSystemBase
 	}
 
 	public override int ReleaseDir(ReadOnlySpan<byte> path, ref FuseFileInfo fi) {
+		// Return the handle borrowed in OpenDir (leaving it in the table leaks the OpenFileContext).
+		// **Stage C-1: drop the reference count here as well. The `Release` family is the only release point.**
+		var context = this.api.Handles.Return(fi.fh);
+		if (context != null) { this.api.CloseHandle(context); }
 		return 0;
+	}
+
+	/// <summary>
+	/// <c>fsync(2)</c> on a directory fd. With metadata write-back this is the only synchronization point that
+	/// materializes "the pending children directly under this directory plus its own pending ancestors", and
+	/// without it the standard idiom of "fsync the file, then fsync the parent dir" does not hold.
+	/// <para>
+	/// Leaving it to the base -ENOSYS makes **the kernel learn "no fsyncdir is needed from now on" and never
+	/// call it again** (turning it silently into a no-op), so the override itself has been in place since the write-through days.
+	/// </para>
+	/// <para>
+	/// **When the path cannot be resolved, it is looked up in reverse from the handle borrowed in
+	/// <see cref="OpenDir"/> (<c>fi.fh</c>)**: if another client renames this directory, the state becomes "the
+	/// directory and its pending children are alive but the old path no longer resolves", and looking only at
+	/// the path makes **fsyncdir return success without flushing a single pending child** (fail-open). It is
+	/// the same shape of hole that was closed in <see cref="FlushPath"/>.
+	/// </para>
+	/// </summary>
+	public override int FSyncDir(ReadOnlySpan<byte> path, bool onlyData, ref FuseFileInfo fi) {
+		var p = PathToString(path);
+		try {
+			// **Stage B: the handle borrowed in OpenDir became primary and the path secondary.**
+			// The ctx version is TryResolveHandle, so when it is gone this is a no-op that returns 0
+			// (the pending work was discarded by the deleting side = "there is nothing to write", not an error).
+			var context = this.api.Handles.Get(fi.fh);
+			if (context != null) {
+				this.api.FlushDirectory(context);
+				return 0;
+			}
+			// Only the path with no fh on it falls back to the path.
+			var inode = this.api.GetByPath(p);
+			if (inode == null) {
+				return 0;
+			}
+			this.api.FlushDirectory(inode);
+			return 0;
+		} catch (Exception ex) {
+			Logger.Error("FSyncDir failed: ", p, " ", ex);
+			return -EIO;
+		}
 	}
 
 	// ------------------------------------------------------------------
@@ -256,7 +338,7 @@ public sealed class FileSystem : FuseFileSystemBase
 		this.SetAuditContext();
 		var p = PathToString(path);
 		try {
-			var (parentPath, name) = SplitParent(p);
+			var (parentPath, name) = Pgfs.Core.Utility.PathParser.SplitParent(p);
 			if (string.IsNullOrEmpty(name)) {
 				return -EINVAL;
 			}
@@ -280,6 +362,9 @@ public sealed class FileSystem : FuseFileSystemBase
 			// Cache it under the full path so the immediately following getattr does not hit the DB.
 			this.api.InodeCache.Put(inode, p);
 			return 0;
+		} catch (Pgfs.Core.Api.Api.ParentVanishedException) {
+			// The parent was deleted by another client just before the creation. This is neither EEXIST (= a null return) nor EIO.
+			return -ENOENT;
 		} catch (Exception ex) {
 			Logger.Error("MkDir failed: ", p, " ", ex);
 			return -EIO;
@@ -319,7 +404,7 @@ public sealed class FileSystem : FuseFileSystemBase
 		this.SetAuditContext();
 		var p = PathToString(path);
 		try {
-			var (parentPath, name) = SplitParent(p);
+			var (parentPath, name) = Pgfs.Core.Utility.PathParser.SplitParent(p);
 			if (string.IsNullOrEmpty(name)) {
 				return -EINVAL;
 			}
@@ -335,11 +420,29 @@ public sealed class FileSystem : FuseFileSystemBase
 			}
 
 			var (uname, gname) = this.CurrentUserNames();
-			var inode = this.api.CreateFile(parent.Id, name, uname, gname, (int)ModeToUInt32(mode));
+			// O_EXCL is a **locking primitive**, as in `git index.lock`. Even with metadata write-back it is created
+			// synchronously rather than deferred, and the exclusion decision is left to the database's unique
+			// constraint (synchronization heuristic c).
+			// O_EXCL is octal 0200 = 0x80 across Linux.
+			const int O_EXCL = 0x80;
+			var exclusive = (fi.flags & O_EXCL) != 0;
+			Pgfs.Core.Models.Inode? inode;
+			try {
+				inode = this.api.CreateFile(parent.Id, name, uname, gname, (int)ModeToUInt32(mode), exclusive);
+			} catch (Pgfs.Core.Api.Api.ParentVanishedException) {
+				// The parent was deleted by another client just before the creation. It means something different from EEXIST (= a null return).
+				return -ENOENT;
+			}
 			if (inode == null) {
 				return -EEXIST;
 			}
 			this.api.InodeCache.Put(inode, p);
+			// As in Open, borrow an id from the handle table and put it on (handle-context stage A).
+			// **Stage C-1: raise the body's reference count separately from the registration in the handle table.**
+			// Do not fold it into `Rent` / `Return` (Dokan does not go through the table, and it also builds throwaway contexts).
+			var context = new OpenFileContext(inode, null);
+			this.api.OpenHandle(context);
+			fi.fh = this.api.Handles.Rent(context);
 			return 0;
 		} catch (Exception ex) {
 			Logger.Error("Create failed: ", p, " ", ex);
@@ -377,12 +480,20 @@ public sealed class FileSystem : FuseFileSystemBase
 		this.SetAuditContext();
 		var oldP = PathToString(path);
 		var newP = PathToString(newPath);
+		// The only flag supported is RENAME_NOREPLACE. Silently ignoring RENAME_EXCHANGE (2) / RENAME_WHITEOUT (4)
+		// or an unknown flag would commit an exchange request as "delete the target + move the source" in a single
+		// tx, and the target would be lost irreversibly. Unsupported flags are refused with -EINVAL.
+		const int RENAME_NOREPLACE = 1;
+		if ((flags & ~RENAME_NOREPLACE) != 0) {
+			Logger.Warning("Rename: unsupported flags 0x", flags.ToString("x"), " ", oldP, " -> ", newP);
+			return -EINVAL;
+		}
 		try {
 			var inode = this.api.GetByPath(oldP);
 			if (inode == null) {
 				return -ENOENT;
 			}
-			var (newParentPath, newName) = SplitParent(newP);
+			var (newParentPath, newName) = Pgfs.Core.Utility.PathParser.SplitParent(newP);
 			if (string.IsNullOrEmpty(newName)) {
 				return -EINVAL;
 			}
@@ -396,23 +507,31 @@ public sealed class FileSystem : FuseFileSystemBase
 			// Check for an existing target.
 			var existing = this.api.GetByPath(newP);
 			if (existing != null) {
-				// If the RENAME_NOREPLACE flag (Linux-specific, 1) is set, replacement is forbidden.
-				const int RENAME_NOREPLACE = 1;
+				// Replacement is forbidden when the RENAME_NOREPLACE flag (Linux-specific, 1) is set
 				if ((flags & RENAME_NOREPLACE) != 0) {
 					return -EEXIST;
 				}
 				// The two must be of the same kind.
 				if (existing.IsDirectory != inode.IsDirectory) {
-					return existing.IsDirectory ? -EISDIR : -ENOTDIR;
+					return existing.IsDirectory switch {
+						true  => -EISDIR,
+						false => -ENOTDIR,
+					};
 				}
 				// An existing directory target must be empty.
 				if (existing.IsDirectory && !this.api.IsDirectoryEmpty(existing.Id)) {
 					return -ENOTEMPTY;
 				}
-				this.api.DeleteInode(existing);
+				// Persist the source's unflushed work before the replacement erases the old target
+				// (replacing while still holding write-back's dirty data would lose both the old and the new one on a crash).
+				// A failure throws -> the catch below turns it into -EIO. The target is left untouched.
+				// **A pending source is not flushed here** - the Api side does "delete the target + materialize + dirty
+				// data + audit" in a single tx (synchronization heuristic a).
+				this.api.PrepareRenameReplace(inode);
 			}
 
-			if (!this.api.Rename(inode.Id, newParent.Id, newName)) {
+			// Deleting what is being replaced and the rename happen in the same tx on the Api side (deleting first in a separate tx would open a crash window)
+			if (!this.api.Rename(inode.Id, newParent.Id, newName, existing)) {
 				return -EIO;
 			}
 			this.api.InodeCache.InvalidatePrefix(oldP);
@@ -432,7 +551,8 @@ public sealed class FileSystem : FuseFileSystemBase
 		this.SetAuditContext();
 		var p = PathToString(path);
 		try {
-			var inode = this.api.GetByPath(p);
+			// Stage B: if there is an fh it is the primary source (the contract of ⑤).
+			var inode = this.ResolveByHandleOrPath(fiRef, p);
 			if (inode == null) {
 				return -ENOENT;
 			}
@@ -452,14 +572,21 @@ public sealed class FileSystem : FuseFileSystemBase
 		this.SetAuditContext();
 		var p = PathToString(path);
 		try {
-			var inode = this.api.GetByPath(p);
+			// Stage B: if there is an fh it is the primary source (the contract of ⑤).
+			var inode = this.ResolveByHandleOrPath(fiRef, p);
 			if (inode == null) {
 				return -ENOENT;
 			}
-			// Resolve uid/gid to names and write them back to the DB.
+			// Resolve the uid/gid to names and write them back to the database.
 			// uid == 0xFFFFFFFF (-1) is the Linux convention for "do not change".
-			var newUname = uid == uint.MaxValue ? inode.UserName : this.users.UnameOf(uid);
-			var newGname = gid == uint.MaxValue ? inode.GroupName : this.users.GnameOf(gid);
+			var newUname = (uid == uint.MaxValue) switch {
+				true  => inode.UserName,
+				false => this.users.UnameOf(uid),
+			};
+			var newGname = (gid == uint.MaxValue) switch {
+				true  => inode.GroupName,
+				false => this.users.GnameOf(gid),
+			};
 			if (!this.api.UpdateOwner(inode.Id, newUname, newGname)) {
 				return -EIO;
 			}
@@ -473,6 +600,17 @@ public sealed class FileSystem : FuseFileSystemBase
 	public override int Truncate(ReadOnlySpan<byte> path, ulong length, FuseFileInfoRef fiRef) {
 		var p = PathToString(path);
 		try {
+			// Stage B: with an fh, go to the ctx version. **If it is gone, -ESTALE** (thrown by ResolveHandle).
+			var context = this.ContextOf(fiRef);
+			if (context != null) {
+				if (this.api.ResolveHandle(context).IsDirectory) {
+					return -EISDIR;
+				}
+				if (!this.api.TruncateData(context, (long)length)) {
+					return -EIO;
+				}
+				return 0;
+			}
 			var inode = this.api.GetByPath(p);
 			if (inode == null) {
 				return -ENOENT;
@@ -485,6 +623,9 @@ public sealed class FileSystem : FuseFileSystemBase
 				return -EIO;
 			}
 			return 0;
+		} catch (Api.StaleHandleException ex) {
+			Logger.Warning("Truncate: the inode the handle points at, ", ex.InodeId, ", is already gone: ", p);
+			return -ESTALE;
 		} catch (Exception ex) {
 			Logger.Error("Truncate failed: ", p, " ", ex);
 			return -EIO;
@@ -494,7 +635,8 @@ public sealed class FileSystem : FuseFileSystemBase
 	public override int UpdateTimestamps(ReadOnlySpan<byte> path, ref timespec atime, ref timespec mtime, FuseFileInfoRef fiRef) {
 		var p = PathToString(path);
 		try {
-			var inode = this.api.GetByPath(p);
+			// Stage B: if there is an fh it is the primary source (the contract of ⑤).
+			var inode = this.ResolveByHandleOrPath(fiRef, p);
 			if (inode == null) {
 				return -ENOENT;
 			}
@@ -506,7 +648,10 @@ public sealed class FileSystem : FuseFileSystemBase
 			if (mtime.IsOmit()) {
 				return 0; // Neither mtime nor atime changes, so do nothing.
 			}
-			var newMtime = mtime.IsNow() ? DateTime.UtcNow : mtime.ToDateTime();
+			var newMtime = mtime.IsNow() switch {
+				true  => DateTime.UtcNow,
+				false => mtime.ToDateTime(),
+			};
 			if (!this.api.UpdateTimestamps(inode.Id, newMtime)) {
 				return -EIO;
 			}
@@ -541,46 +686,188 @@ public sealed class FileSystem : FuseFileSystemBase
 				return -EIO;
 			}
 		}
+		// **Borrow an id from the handle table and put it on fh** (handle-context stage A).
+		// Flush / FSync / Release look the context up by this id. **Whatever is borrowed must be returned in Release.**
+		// **Stage C-1: raise the body's reference count separately from the registration in the handle table.**
+		// Do not fold it into `Rent` / `Return` (Dokan does not go through the table, and it also builds throwaway contexts).
+		var context = new OpenFileContext(inode, null);
+		this.api.OpenHandle(context);
+		fi.fh = this.api.Handles.Rent(context);
 		return 0;
 	}
 
+	/// <summary>
+	/// Called on every <c>close(2)</c> (several times when the fd has been duplicated).
+	/// <para>
+	/// When <c>write_back_metadata</c> is **disabled**, the unflushed work is committed synchronously here, as
+	/// it is with data write-back alone (the base implementation returns <c>-ENOSYS</c>, and the kernel
+	/// **treats an ENOSYS from fsync as success** and remembers "no_fsync from now on", so removing the
+	/// override makes <c>fsync(2)</c> lie silently).
+	/// </para>
+	/// <para>
+	/// When <c>write_back_metadata</c> is **enabled**, **close does not flush synchronously** (decision 2 =
+	/// close-no-flush). The decision is concentrated in <see cref="Pgfs.Core.Api.Api.CloseInode"/>, which
+	/// degrades to a synchronous flush plus an <c>-EIO</c> report only on an error latch, an already truncated
+	/// file, or an error state.
+	/// </para>
+	/// </summary>
+	public override int Flush(ReadOnlySpan<byte> path, ref FuseFileInfo fi) {
+		return this.FlushPath(path, fi.fh, "Flush", onClose: true);
+	}
+
+	/// <summary>
+	/// <c>fsync(2)</c>. pgfs does not distinguish <paramref name="onlyData"/> (everything is written in the same tx).
+	/// **With metadata write-back close is loosened, so this and <see cref="FSyncDir"/> are the only hard barriers.**
+	/// </summary>
+	public override int FSync(ReadOnlySpan<byte> path, bool onlyData, ref FuseFileInfo fi) {
+		return this.FlushPath(path, fi.fh, "FSync", onClose: false);
+	}
+
+	/// <summary>
+	/// Writes out write-back's unflushed work. On a failure, <c>-EIO</c> (because it cannot be returned at write time).
+	/// When <paramref name="onClose"/> is true (close / release), the close-no-flush decision is left to the Api.
+	/// </summary>
+	private int FlushPath(ReadOnlySpan<byte> path, ulong fh, string op, bool onClose) {
+		var p = PathToString(path);
+		try {
+			// **Stage B: the handle became primary and the path secondary.**
+			// The ctx version is TryResolveHandle (a no-op when it is gone), so stage A's behaviour of "return 0 when
+			// it really is gone" is preserved as-is. Aligning this with ResolveHandle would regress into
+			// **every close of an unlinked file returning -EIO**.
+			var context = this.api.Handles.Get(fh);
+			if (context != null) {
+				if (onClose) {
+					this.api.CloseInode(context);
+					return 0;
+				}
+				this.api.FlushInode(context);
+				return 0;
+			}
+			// Only the paths with no fh on them (an environment without Flush, or one already Returned) fall back to the path.
+			var inode = this.api.GetByPath(p);
+			if (inode == null) {
+				return 0; // It really is gone (unlinked and so on) = the dirty data was discarded by the deleting side
+			}
+			if (onClose) {
+				this.api.CloseInode(inode);
+				return 0;
+			}
+			this.api.FlushInode(inode);
+			return 0;
+		} catch (Exception ex) {
+			Logger.Error(op, " failed: ", p, " ", ex);
+			return -EIO;
+		}
+	}
+
 	public override void Release(ReadOnlySpan<byte> path, ref FuseFileInfo fi) {
-		// no-op
+		// Flush is called on every close, so normally nothing is left here. This is a best-effort safety net for
+		// what slips through (an environment without Flush, or after an error). The return value is ignored by the
+		// kernel, so it is swallowed.
+		// It is triggered by a close, so it is treated like Flush (with metadata write-back it only marks, as a rule).
+		this.FlushPath(path, fi.fh, "Release", onClose: true);
+		// **The handle borrowed in Open / Create is returned here.** Flush is called once per duplicated fd, but
+		// Release is only called on the last close, so this is where it has to be returned.
+		// **Stage C-1's reference count is dropped here for the same reason** - dropping it in `Flush` would give
+		// the count back **the moment bash's `exec 9< file` closes the intermediate fd**
+		// (measured in the leak regression of §⑥).
+		var context = this.api.Handles.Return(fi.fh);
+		if (context != null) { this.api.CloseHandle(context); }
 	}
 
 	public override int Read(ReadOnlySpan<byte> path, ulong offset, Span<byte> buffer, ref FuseFileInfo fi) {
-		var p = PathToString(path);
 		try {
-			var inode = this.api.GetByPath(p);
-			if (inode == null) {
-				return -ENOENT;
+			// **Stage B: fh is the primary means of identification**. libfuse always passes fi to Read / Write, so the
+			// path is only consulted here in the abnormal case where the handle has vanished from the table (the
+			// fallback below).
+			// PathToString (a UTF-8 decode plus a string allocation) disappearing from the hot path is a by-product of
+			// this inversion (docs/design/performance.md, improvement candidate 5).
+			var context = this.api.Handles.Get(fi.fh);
+			if (context != null) {
+				return this.api.ReadData(context, (long)offset, buffer);
 			}
-			if (inode.IsDirectory) {
-				return -EISDIR;
-			}
-			return this.api.ReadData(inode, (long)offset, buffer);
+			return this.ReadByPath(path, offset, buffer);
+		} catch (Api.StaleHandleException ex) {
+			// **-ESTALE rather than -EIO**. The handle has been left dangling by a rename plus a re-create under the
+			// same name, or by another client's unlink, and unless the kind points at the cause the reproduction test
+			// cannot be read.
+			Logger.Warning("Read: the inode the handle points at, ", ex.InodeId, ", is already gone");
+			return -ESTALE;
 		} catch (Exception ex) {
-			Logger.Error("Read failed: ", p, " ", ex);
+			Logger.Error("Read failed: ", PathToString(path), " ", ex);
 			return -EIO;
 		}
 	}
 
-	public override int Write(ReadOnlySpan<byte> path, ulong off, ReadOnlySpan<byte> span, ref FuseFileInfo fi) {
+	/// <summary>
+	/// The safety net taken only when <c>fh</c> could not be resolved in the handle table. **It falls back to
+	/// stage A's behaviour (starting from the path)**, so coming through here opens the window in which "an
+	/// open fd lands on a different file". If it happens, investigate the cause.
+	/// </summary>
+	private int ReadByPath(ReadOnlySpan<byte> path, ulong offset, Span<byte> buffer) {
 		var p = PathToString(path);
+		Logger.Warning("Read: fh is not in the handle table, falling back to the path: ", p);
+		var inode = this.api.GetByPath(p);
+		if (inode == null) {
+			return -ENOENT;
+		}
+		if (inode.IsDirectory) {
+			return -EISDIR;
+		}
+		return this.api.ReadData(inode, (long)offset, buffer);
+	}
+
+	public override int Write(ReadOnlySpan<byte> path, ulong off, ReadOnlySpan<byte> span, ref FuseFileInfo fi) {
 		try {
-			var inode = this.api.GetByPath(p);
-			if (inode == null) {
-				return -ENOENT;
+			// **Stage B: fh is the primary means of identification** (the same as Read; the reasoning is in that comment).
+			var context = this.api.Handles.Get(fi.fh);
+			if (context != null) {
+				// **With O_APPEND the off that came down is thrown away** (docs/Mount.md, the append contract).
+				// On Linux **the kernel decides** the write offset for `O_APPEND` (`generic_write_checks` reads
+				// `i_size_read(inode)`), but that `i_size` **knows nothing about another mount's appends**, so using it
+				// as-is tramples the other side's bytes (measured: 120 bytes lost).
+				// **Core decides where the end is** - during write-back the dirty size is authoritative, so `Inode.Size`
+				// must not be consulted here (in the adapter).
+				if (IsAppend(fi.flags)) { return this.api.AppendData(context, span); }
+				return this.api.WriteData(context, (long)off, span);
 			}
-			if (inode.IsDirectory) {
-				return -EISDIR;
-			}
-			var written = this.api.WriteData(inode, (long)off, span);
-			return written;
+			return this.WriteByPath(path, off, span, IsAppend(fi.flags));
+		} catch (Api.StaleHandleException ex) {
+			Logger.Warning("Write: the inode the handle points at, ", ex.InodeId, ", is already gone");
+			return -ESTALE;
 		} catch (Exception ex) {
-			Logger.Error("Write failed: ", p, " ", ex);
+			Logger.Error("Write failed: ", PathToString(path), " ", ex);
 			return -EIO;
 		}
+	}
+
+	/// <summary>
+	/// Whether this is a write from a handle opened with <c>O_APPEND</c>.
+	/// <para>**`O_APPEND` is octal 02000 = 0x400 across Linux**. `fi.flags` is filled in not only by `Open` but
+	/// **in the `Write` callback as well** (measured: the handle of a `>>` is `0x8401`, a non-append one is
+	/// `0x8001`). That is why deciding whether this is an append needs no state from `OpenFileContext`.</para>
+	/// </summary>
+	private static bool IsAppend(int flags) {
+		const int O_APPEND = 0x400;
+		return (flags & O_APPEND) != 0;
+	}
+
+	/// <summary>The write version of <see cref="ReadByPath"/>. **Coming through here means it has fallen back to stage A's behaviour.**</summary>
+	private int WriteByPath(ReadOnlySpan<byte> path, ulong off, ReadOnlySpan<byte> span, bool append) {
+		var p = PathToString(path);
+		Logger.Warning("Write: fh is not in the handle table, falling back to the path: ", p);
+		var inode = this.api.GetByPath(p);
+		if (inode == null) {
+			return -ENOENT;
+		}
+		if (inode.IsDirectory) {
+			return -EISDIR;
+		}
+		// **The meaning of the append is preserved** even without a handle (a throwaway context goes through the same core in Core).
+		if (append) {
+			return this.api.AppendData(new OpenFileContext(inode, null), span);
+		}
+		return this.api.WriteData(inode, (long)off, span);
 	}
 
 	// ------------------------------------------------------------------
@@ -864,14 +1151,15 @@ public sealed class FileSystem : FuseFileSystemBase
 
 	public override int SymLink(ReadOnlySpan<byte> path, ReadOnlySpan<byte> target) {
 		this.SetAuditContext();
-		// Pgfs.Fuse 0.1's FuseMount.Symlink(path*, path*) passes libfuse's (target, linkname) to
-		// IFuseFileSystem.SymLink in reverse order (arg2 -> arg1 at the IL level).
-		// So in this override, arg1 = linkPath (where to create it) and arg2 = linkContent (the link body).
-		// The parameter names path/target come from libfuse and are misleading, so rebind them to meaningful variables here.
+		// Pgfs.Fuse 0.1's FuseMount.Symlink(path*, path*) hands libfuse's (target, linkname) to
+		// IFuseFileSystem.SymLink in the reverse order (arg2 then arg1 in the IL).
+		// So in this override arg1 = linkPath (where it is created) and arg2 = linkContent (what the link holds).
+		// The parameter names path/target come from libfuse and are misleading, so they are rebound here to
+		// variables that mean something.
 		var linkPath = PathToString(path);
 		var linkContent = PathToString(target);
 		try {
-			var (parentPath, name) = SplitParent(linkPath);
+			var (parentPath, name) = Pgfs.Core.Utility.PathParser.SplitParent(linkPath);
 			if (string.IsNullOrEmpty(name)) {
 				return -EINVAL;
 			}
@@ -892,6 +1180,8 @@ public sealed class FileSystem : FuseFileSystemBase
 			}
 			this.api.InodeCache.Put(inode, linkPath);
 			return 0;
+		} catch (Pgfs.Core.Api.Api.ParentVanishedException) {
+			return -ENOENT;
 		} catch (Exception ex) {
 			Logger.Error("SymLink failed: ", linkContent, " -> ", linkPath, " ", ex);
 			return -EIO;
@@ -914,10 +1204,10 @@ public sealed class FileSystem : FuseFileSystemBase
 				// If it does not fit, write a truncated prefix (still reserving the NUL terminator).
 				bytes.AsSpan(0, buffer.Length - 1).CopyTo(buffer);
 				buffer[buffer.Length - 1] = 0;
-			} else {
-				bytes.AsSpan().CopyTo(buffer);
-				buffer[bytes.Length] = 0;
+				return 0;
 			}
+			bytes.AsSpan().CopyTo(buffer);
+			buffer[bytes.Length] = 0;
 			return 0;
 		} catch (Exception ex) {
 			Logger.Error("ReadLink failed: ", p, " ", ex);
@@ -941,7 +1231,7 @@ public sealed class FileSystem : FuseFileSystemBase
 			if (source.IsDirectory) {
 				return -EPERM; // Hard links to directories are forbidden.
 			}
-			var (parentPath, name) = SplitParent(dst);
+			var (parentPath, name) = Pgfs.Core.Utility.PathParser.SplitParent(dst);
 			if (string.IsNullOrEmpty(name)) {
 				return -EINVAL;
 			}
@@ -961,6 +1251,8 @@ public sealed class FileSystem : FuseFileSystemBase
 			}
 			this.api.InodeCache.Put(linked, dst);
 			return 0;
+		} catch (Pgfs.Core.Api.Api.ParentVanishedException) {
+			return -ENOENT;
 		} catch (Exception ex) {
 			Logger.Error("Link failed: ", src, " -> ", dst, " ", ex);
 			return -EIO;

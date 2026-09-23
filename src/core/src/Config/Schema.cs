@@ -17,7 +17,7 @@ using System.Reflection;
 /// </summary>
 public static class Schema
 {
-	private static IReadOnlyList<Field>? _all;
+	private static IReadOnlyList<Field>? allFields;
 
 	/// <summary>
 	/// Enumerates and returns every <see cref="Field"/> under `Schema` via reflection. It scans every
@@ -27,8 +27,8 @@ public static class Schema
 	/// </summary>
 	public static IReadOnlyList<Field> AllFields {
 		get {
-			_all ??= CollectAll();
-			return _all;
+			allFields ??= CollectAll();
+			return allFields;
 		}
 	}
 
@@ -92,7 +92,36 @@ public static class Schema
 			Comment = "Specifies the mount point",
 		};
 
+		/// <summary>
+		/// The maximum number of bytes in a single FUSE WRITE request (<c>fuse_conn_info.max_write</c>).
+		/// In pgfs one FUSE WRITE = one <c>Api.WriteData</c> transaction, so this value is the granularity of a
+		/// write transaction. <b>The default <c>0</c> means "do not set it" and leaves it to libfuse's
+		/// negotiation</b>.
+		/// <para>
+		/// Measured (Linux 5.14 + libfuse 3.10): **libfuse3 negotiates up to the kernel limit (FUSE_MAX_PAGES =
+		/// 1 MiB) by default**, so even left at the default the WRITEs arrive in 1 MiB units (= the same as pgfs's
+		/// chunk size). This item is therefore not a knob "to make it faster" but one for when you **want to lower
+		/// it under a memory constraint, or to pin it explicitly on an environment whose default is smaller because
+		/// of a kernel or libfuse version difference**. The detailed measurements are in
+		/// [performance.md](../../../../docs/design/performance.md).
+		/// </para>
+		/// <para>
+		/// Note: libfuse3 **does not accept** <c>-o max_write=…</c> (fuse_new fails). The only way is to set it on
+		/// <c>fuse_conn_info</c> in the init callback, which is why pgfs carries it as a configuration item.
+		/// </para>
+		/// </summary>
+		public static readonly IntField MaxWrite = new() {
+			Scope = "mount",
+			Key = "max_write",
+			CliOptions = ["--max-write"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount,
+			DefaultFn = () => 0,
+			Comment = "Max bytes per FUSE write request (0 = let libfuse negotiate; kernel caps at 1MiB)",
+		};
+
 		public static readonly IntField CacheMaxEntries = new() {
+			Reload = ReloadPolicy.Live,
 			Scope = "mount",
 			Key = "cache_max_entries",
 			CliOptions = ["--cache-max-entries"],
@@ -100,6 +129,202 @@ public static class Schema
 			AppliesTo = Tool.Mount | Tool.Assign,
 			DefaultFn = () => 1024,
 			Comment = "Specifies the number of entries to cache in memory",
+		};
+
+		public static readonly LongField CacheDataMaxBytes = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "cache_data_max_bytes",
+			CliOptions = ["--cache-data-max-bytes"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			DefaultFn = () => 64L * 1024 * 1024,
+			Comment = "Max bytes of file content (data_chunk) cached in memory (0 = disabled)",
+		};
+
+		/// <summary>
+		/// The TTL (in milliseconds) of the negative lookup (ENOENT) cache. The default 0 disables it.
+		/// Enabling it caches the lookup result for "a path that does not exist" for the length of the TTL, which
+		/// cuts database round trips out of create-heavy workloads (rsync and friends issue about 6 non-existence
+		/// SELECTs per file). This client's own create / rename invalidate it immediately, so it is safe with a
+		/// single client. **A file another client created becomes visible up to one TTL late** (with
+		/// `database.notify_enabled` the notification invalidates it immediately). The trade-off is spelled out in
+		/// docs/design/performance.md.
+		/// </summary>
+		public static readonly IntField NegativeCacheTtlMs = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "negative_cache_ttl_ms",
+			CliOptions = ["--negative-cache-ttl-ms"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			DefaultFn = () => 0,
+			Comment = "TTL (ms) for caching negative (ENOENT) lookups. 0 = disabled. Files created by other clients may stay invisible up to TTL",
+		};
+
+		/// <summary>
+		/// Enables the write-back cache. The default <c>false</c> is the traditional write-through
+		/// (1 FUSE write = 1 transaction).
+		/// <para>
+		/// <b>Why it helps</b>: writing 128 KiB at a time into a 1 MiB chunk row rewrites **the whole TOAST chain
+		/// on every partial update**, because bytea is TOAST-able (read-modify-write amplification). Write-back
+		/// assembles the chunk in memory and makes it **one chunk = one statement**, so the amplification is gone.
+		/// The projection from the measurements is **6.5× on a single PG / 8.1× on Citus rf=2**
+		/// ([performance.md](../../../../docs/design/performance.md)).
+		/// </para>
+		/// <para>
+		/// <b>The price</b>: whatever has not been flushed is lost if the process dies before the flush (that is the
+		/// essence of write-back). The loss window is bounded by <see cref="WriteBackMaxBytes"/> /
+		/// <see cref="WriteBackIntervalMs"/>. `fsync` and `close` flush synchronously, so the POSIX durability
+		/// contract is kept. That is why the default is off.
+		/// </para>
+		/// </summary>
+		public static readonly BoolField WriteBack = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "write_back",
+			CliOptions = ["--write-back"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			DefaultFn = () => false,
+			Comment = "Buffer writes in memory and flush one transaction per file (faster, but unflushed data is lost on crash)",
+		};
+
+		/// <summary>
+		/// The cap on dirty bytes. Above it **the writing thread flushes before it continues** (back-pressure).
+		/// It is **a separate budget** from the read cache budget <see cref="CacheDataMaxBytes"/> (dirty data cannot
+		/// be thrown away, so it is not subject to LRU eviction).
+		/// </summary>
+		public static readonly LongField WriteBackMaxBytes = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "write_back_max_bytes",
+			CliOptions = ["--write-back-max-bytes"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			DefaultFn = () => 64L * 1024 * 1024,
+			Comment = "Max dirty bytes held in memory before a write blocks to flush (write_back only)",
+		};
+
+		/// <summary>
+		/// How long (in milliseconds) dirty data may be left alone. A background flush runs at this interval.
+		/// <c>0</c> disables the time trigger (= the only flush triggers left are exceeding
+		/// <see cref="WriteBackMaxBytes"/>, `fsync`, `close` and unmount).
+		/// </summary>
+		public static readonly IntField WriteBackIntervalMs = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "write_back_interval_ms",
+			CliOptions = ["--write-back-interval-ms"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			DefaultFn = () => 1000,
+			Comment = "Background flush interval in milliseconds for dirty data (0 = no time trigger)",
+		};
+
+		/// <summary>
+		/// Enables metadata write-back. The default is <c>false</c>.
+		/// <para>
+		/// <b>Prerequisite</b>: <see cref="WriteBack"/> (data write-back) must be enabled. **Turning this one on
+		/// alone emits a warning and is treated as disabled** (the flush trigger for pending inodes rides on the
+		/// same background loop as the data side).
+		/// </para>
+		/// <para>
+		/// <b>What changes</b>: the inodes this mount creates (<c>create</c> / <c>mkdir</c> / <c>symlink</c>) are
+		/// held in the ledger as pending, and <c>chmod</c> / <c>chown</c> / <c>utimens</c> / a target-less
+		/// <c>rename</c> on such an inode coalesce in the ledger. The aim is to fold things into **one file = one
+		/// tx** (inode INSERT + data row + chunk + attributes + audit), dropping a sequence such as rsync's
+		/// "create -> write -> close -> chmod -> utimens -> rename" into a single background flush as a whole.
+		/// Operations on an inode that is already in the database **all stay write-through**.
+		/// </para>
+		/// <para>
+		/// <b>The price</b>: <c>close</c> no longer flushes synchronously (<c>fsync</c> / <c>fsyncdir</c> are the
+		/// only hard barriers), so during the loss window **whole files** disappear even after they were closed.
+		/// The gain is confined to "many small files × Citus / a high-latency database" (a projection of about
+		/// 2.1×), hence the default off. The details are in
+		/// [runtime-control-plane.md §metadata write-back](../../../../docs/design/runtime-control-plane.md).
+		/// </para>
+		/// </summary>
+		public static readonly BoolField WriteBackMetadata = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "write_back_metadata",
+			CliOptions = ["--write-back-metadata"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			DefaultFn = () => false,
+			Comment = "Also defer metadata (create/mkdir/symlink + attrs on them) and flush one transaction per file. Requires write_back. close() no longer flushes: only fsync does",
+		};
+
+		/// <summary>
+		/// Whether a create with <c>O_EXCL</c> (= <c>CREATE_NEW</c>) is subject to write-back.
+		/// <list type="bullet">
+		///   <item><c>write_through</c> (the default): creates synchronously rather than making it pending, and
+		///     leaves the exclusion decision to the database's unique constraint</item>
+		///   <item><c>defer</c>: makes it pending. **Exclusion within the same mount is maintained by the ledger**,
+		///     but **cross-client exclusion is lost** (another mount cannot see a pending inode, so two clients'
+		///     <c>O_EXCL</c> creates both succeed)</item>
+		/// </list>
+		/// <para>
+		/// <c>rsync</c> and <c>cp</c> both use <c>O_CREAT|O_EXCL</c>, so with the default the metadata write-back
+		/// coalescing never happens even once (measured 1.00×). <c>defer</c> is **a tuning knob for a bulk copy
+		/// known to be single-client operation**, and must not be chosen when several mounts use the same
+		/// filesystem. The details are in
+		/// [runtime-control-plane.md §B-1, the settled design](../../../../docs/design/runtime-control-plane.md).
+		/// </para>
+		/// </summary>
+		public static readonly EnumField WriteBackMetadataExclusiveCreate = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "write_back_metadata_exclusive_create",
+			CliOptions = ["--write-back-metadata-exclusive-create"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			Allowed = ["write_through", "defer"],
+			DefaultFn = () => "write_through",
+			ArgName = "mode",
+			Comment = "How O_EXCL/CREATE_NEW creates are handled when write_back_metadata is on: write_through (keep cross-client exclusion) or defer (faster, loses cross-client exclusion)",
+		};
+
+		/// <summary>
+		/// The cap on the number of pending inodes. Above it the writing / creating side flushes and waits until it
+		/// is back under (back-pressure). It plays the same role as the dirty byte cap
+		/// (<see cref="WriteBackMaxBytes"/>); this one bounds **the count** (in a workload of many small files the
+		/// count swells before the bytes do).
+		/// </summary>
+		public static readonly IntField WriteBackMaxInodes = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "write_back_max_inodes",
+			CliOptions = ["--write-back-max-inodes"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			DefaultFn = () => 4096,
+			Comment = "Max pending (not yet inserted) inodes before a create blocks to flush (write_back_metadata only)",
+		};
+
+		/// <summary>
+		/// **The maximum time (in milliseconds) it is acceptable to wait for a flush to succeed**. Used in two places:
+		/// <list type="number">
+		///   <item>The upper bound on blocking write / create under back-pressure (exceeding
+		///     <see cref="WriteBackMaxBytes"/> / <see cref="WriteBackMaxInodes"/>). **It always releases after this
+		///     long** even if the flush keeps failing (blocking indefinitely cannot be told apart from the whole
+		///     mount hanging)</item>
+		///   <item>The deadline for retrying FlushAll in order to "write everything out" at unmount. Past it,
+		///     **what is lost is enumerated in the Error log** and <c>mount.pgfs</c> exits non-zero
+		///     (<c>fusermount3 -u</c> completes on the kernel side, so the filesystem cannot refuse it)</item>
+		/// </list>
+		/// <c>0</c> = do not wait (try one round and continue = the behaviour before metadata write-back).
+		/// </summary>
+		public static readonly IntField WriteBackFlushTimeoutMs = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "mount",
+			Key = "write_back_flush_timeout_ms",
+			CliOptions = ["--write-back-flush-timeout-ms"],
+			SaveTo = SaveTarget.File,
+			AppliesTo = Tool.Mount | Tool.Assign,
+			DefaultFn = () => 30000,
+			Comment = "Max time (ms) a write/create blocks on back-pressure, and the deadline for flushing everything at unmount (0 = do not wait)",
 		};
 
 		/// <summary>
@@ -234,6 +459,7 @@ public static class Schema
 		};
 
 		public static readonly IntField RetryMaxAttempts = new() {
+			Reload = ReloadPolicy.Live,
 			Scope = "database",
 			Key = "retry_max_attempts",
 			CliOptions = ["--retry-max-attempts"],
@@ -243,6 +469,7 @@ public static class Schema
 		};
 
 		public static readonly IntField RetryInitialDelayMs = new() {
+			Reload = ReloadPolicy.Live,
 			Scope = "database",
 			Key = "retry_initial_delay_ms",
 			CliOptions = ["--retry-initial-delay-ms"],
@@ -252,6 +479,7 @@ public static class Schema
 		};
 
 		public static readonly IntField RetryMaxDelayMs = new() {
+			Reload = ReloadPolicy.Live,
 			Scope = "database",
 			Key = "retry_max_delay_ms",
 			CliOptions = ["--retry-max-delay-ms"],
@@ -264,9 +492,9 @@ public static class Schema
 		/// The enable flag for cross-client change notifications (via PostgreSQL LISTEN/NOTIFY). When `true`:
 		/// <list type="bullet">
 		///   <item>keeps one dedicated Npgsql connection open and issues <c>LISTEN {schema}_{prefix}notify</c></item>
-		///   <item>appends <c>SELECT pg_notify(...)</c> at the end of each write operation to stream the diff to other clients</item>
-		///   <item>the receiving side invalidates the matching entry in <see cref="Pgfs.Core.Api.InodeCache"/>. On Assign it additionally
-		///   calls <c>DokanInstance.NotifyUpdate</c> etc. to ask Explorer to repaint</item>
+		///   <item>appends <c>SELECT pg_notify(...)</c> to the end of every write operation, sending the delta to the other clients</item>
+		///   <item>the receiving side invalidates the matching entry in <see cref="Pgfs.Core.Api.InodeCache"/>. Assign
+		///   additionally calls <c>DokanInstance.NotifyUpdate</c> and friends to ask Explorer to redraw</item>
 		/// </list>
 		/// Default <c>false</c> (opt-in). With one PG / one client there is nothing to gain, so OFF; intended to be ON only when sharing over the network.
 		/// </summary>
@@ -320,6 +548,59 @@ public static class Schema
 			DefaultFn = () => new List<string>(),
 			Comment = "Citus worker nodes as comma-separated 'host[:port]' entries (mkfs only)",
 		};
+
+		/// <summary>
+		/// mkfs only. Sets <c>citus.shard_count</c> to this value before calling <c>create_distributed_table</c>.
+		/// <c>0</c> follows the cluster default (<c>postgresql.conf</c> and so on) = sets nothing.
+		/// It only takes effect in mkfs's own session, so distributed tables of other applications using the same database are unaffected.
+		/// </summary>
+		public static readonly IntField ShardCount = new() {
+			Scope = "database",
+			Key = "shard_count",
+			CliOptions = ["--shard-count"],
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			DefaultFn = () => 0,
+			Comment = "Citus shard count for distributed tables (0 = cluster default, mkfs only)",
+		};
+
+		/// <summary>
+		/// mkfs only. Sets <c>citus.shard_replication_factor</c> to this value before calling
+		/// <c>create_distributed_table</c> (= how many nodes one shard is placed on; 1 means no replica, N means N copies).
+		/// <c>0</c> follows the cluster default = sets nothing.
+		/// <para>
+		/// Exclusion is concentrated in <c>{prefix}lock</c> (a Citus local table), so this value is
+		/// **purely a choice about storage redundancy** and the locking mechanism is not affected by it
+		/// (the design is in [docs/support_for_citus.md](../../../../docs/design/support_for_citus.md)).
+		/// </para>
+		/// </summary>
+		public static readonly IntField ShardReplicationFactor = new() {
+			Scope = "database",
+			Key = "shard_replication_factor",
+			CliOptions = ["--shard-replication-factor", "--rf"],
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Mkfs,
+			DefaultFn = () => 0,
+			Comment = "Citus copies per shard (0 = cluster default, mkfs only)",
+		};
+
+		/// <summary>
+		/// mkfs only. When combined with <c>--citus</c>, also Citus-ifies **tables that already exist**
+		/// (<c>create_distributed_table</c> if they are not distributed, metadata registration for the ones treated as local).
+		/// The default <c>false</c>: a normal mkfs only Citus-ifies "the tables it just created", so running
+		/// <c>--citus</c> later against an existing database or an existing schema does nothing. Distributing an
+		/// existing table is **a heavy operation that relocates data into shards**, so it is only permitted behind
+		/// an explicit flag.
+		/// </summary>
+		public static readonly BoolField DistributeExisting = new() {
+			Scope = "database",
+			Key = "distribute_existing",
+			CliOptions = ["--distribute-existing"],
+			SaveTo = SaveTarget.None,
+			AppliesTo = Tool.Mkfs,
+			DefaultFn = () => false,
+			Comment = "With --citus, also Citus-ify tables that already exist (mkfs only)",
+		};
 	}
 
 	public static class Logging
@@ -333,6 +614,7 @@ public static class Schema
 		/// mount / unmount / FUSE options are visible (Trace is noisy because it dumps every SQL, so opt in explicitly with `trace`).
 		/// </summary>
 		public static readonly LogLevelField MinLevel = new() {
+			Reload = ReloadPolicy.Live,
 			Scope = "logging",
 			Key = "level",
 			CliOptions = ["--log-level", "--log-min-level", "--min-log-level"],
@@ -345,6 +627,7 @@ public static class Schema
 		/// The log output destination. Specified as a string: `stdout` / `stderr` / `none` / `<cycle>:<dir>/<pattern>`.
 		/// </summary>
 		public static readonly LoggingOutputField Output = new() {
+			Reload = ReloadPolicy.Live,
 			Scope = "logging",
 			Key = "output",
 			CliOptions = ["--log-output"],
@@ -390,6 +673,7 @@ public static class Schema
 	public static class FileSystem
 	{
 		public static readonly StringField Version = new() {
+			Reload = ReloadPolicy.Format,
 			Scope = "file_system",
 			Key = "version",
 			CliOptions = ["--version"],
@@ -400,6 +684,7 @@ public static class Schema
 		};
 
 		public static readonly StringField VolumeLabel = new() {
+			Reload = ReloadPolicy.Format,
 			Scope = "file_system",
 			Key = "volume_label",
 			CliOptions = ["--volume-label"],
@@ -411,6 +696,7 @@ public static class Schema
 		};
 
 		public static readonly LongField ClusterSize = new() {
+			Reload = ReloadPolicy.Format,
 			Scope = "file_system",
 			Key = "cluster_size",
 			CliOptions = ["--cluster-size"],
@@ -422,6 +708,7 @@ public static class Schema
 		};
 
 		public static readonly LongField DefaultChunkSize = new() {
+			Reload = ReloadPolicy.Format,
 			Scope = "file_system",
 			Key = "default_chunk_size",
 			CliOptions = ["--default-chunk-size"],
@@ -433,6 +720,7 @@ public static class Schema
 		};
 
 		public static readonly LongField MaxFileSize = new() {
+			Reload = ReloadPolicy.Format,
 			Scope = "file_system",
 			Key = "max_file_size",
 			CliOptions = ["--max-file-size"],
@@ -456,6 +744,7 @@ public static class Schema
 		/// Default <c>false</c> (opt-in). The design of record is [docs/audit-log.md](../../../../docs/audit-log.md).
 		/// </summary>
 		public static readonly BoolField Enabled = new() {
+			Reload = ReloadPolicy.Live,
 			Scope = "audit",
 			Key = "enabled",
 			CliOptions = ["--audit"],
@@ -480,6 +769,7 @@ public static class Schema
 		/// The authoritative design is [docs/df-support.md](../../../../docs/df-support.md).
 		/// </summary>
 		public static readonly StringField Mode = new() {
+			Reload = ReloadPolicy.Live,
 			Scope = "app",
 			Key = "statfs",
 			CliOptions = ["--statfs", "--statfs-mode"],

@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<RootNamespace>Pgfs.Ctl</RootNamespace>
+		<!--
+			A deliberate exception to the naming convention ({role}.pgfs <-> Pgfs.{role}). An admin
+			tool that gathers config/status reads naturally as a single systemctl-like word, so the
+			AssemblyName is pgfsctl (docs/design/runtime-control-plane.md). It depends on neither
+			FUSE nor Dokan and references Core alone, so it runs on both operating systems.
+		-->
+		<AssemblyName>pgfsctl</AssemblyName>
+		<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<PublishAot>false</PublishAot>
+		<PublishTrimmed>false</PublishTrimmed>
+		<InvariantGlobalization>true</InvariantGlobalization>
+		<JsonSerializerIsReflectionEnabledByDefault>true</JsonSerializerIsReflectionEnabledByDefault>
+	</PropertyGroup>
+
+	<!-- Single-file settings for Release publish (the same shape as mkfs). -->
+	<PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+		<PublishSingleFile>true</PublishSingleFile>
+		<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+		<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+		<DebugType>embedded</DebugType>
+		<PublishDir>$(MSBuildThisFileDirectory)..\..\bin\Publish\</PublishDir>
+		<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+	</PropertyGroup>
+
+	<Target Name="EnableSelfContainedPublish"
+	        BeforeTargets="_CheckForUnsupportedNETCoreVersion;Build"
+	        Condition=" '$(Configuration)' == 'Release' AND '$(_IsPublishing)' == 'true' ">
+		<PropertyGroup>
+			<SelfContained>true</SelfContained>
+			<RuntimeIdentifier Condition=" '$(RuntimeIdentifier)' == '' ">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+		</PropertyGroup>
+	</Target>
+
+	<ItemGroup>
+		<PackageReference Include="Npgsql" Version="9.0.4" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\core\Core.csproj" />
+	</ItemGroup>
+
+</Project>

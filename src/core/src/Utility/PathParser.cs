@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Utility;
+namespace Pgfs.Core.Utility;
 
 using System.Buffers;
 using System.Collections.Concurrent;
@@ -167,8 +167,36 @@ public class PathParser
 	/// <summary>
 	/// Begins parsing with the given path and separator.
 	/// </summary>
-	/// <param name="path">The path string to parse.</param>
-	/// <param name="separator">The path separator (e.g. "/", "\").</param>
+	/// <param name="path">The path string to analyse.</param>
+	/// <param name="separator">The path separator (for example "/", "\").</param>
+	/// <summary>
+	/// Splits a filesystem path into **the parent directory and the name** (<c>"/a/b" -> ("/a", "b")</c>).
+	/// <para>
+	/// The root (<c>"/"</c>) and an empty string return <c>("/", "")</c>, a name with no separator in it returns
+	/// <c>("/", name)</c>, and something directly below (<c>"/b"</c>) returns <c>("/", "b")</c>.
+	/// **The separator is always <c>/</c>** - the internal paths of Core / FUSE / Dokan are normalized to `/`
+	/// separators (the Dokan side carries the conversion from <c>\</c>).
+	/// </para>
+	/// <para>
+	/// **The FUSE and the Dokan FileSystem held the same implementation twice, not differing by a single
+	/// byte**, so it was moved into Core. **Both operating systems must split it the same way** - if the
+	/// splitting diverges, the same path points at a different parent and the namespace splits in two.
+	/// </para>
+	/// </summary>
+	public static (string ParentPath, string Name) SplitParent(string path) {
+		if (path == "/" || string.IsNullOrEmpty(path)) {
+			return ("/", "");
+		}
+		var i = path.LastIndexOf('/');
+		if (i < 0) {
+			return ("/", path);
+		}
+		if (i == 0) {
+			return ("/", path[1..]);
+		}
+		return (path[..i], path[(i + 1)..]);
+	}
+
 	public static PathParser FromPath(string path, string separator)
 		=> new(FromPathInternal(path, separator));
 

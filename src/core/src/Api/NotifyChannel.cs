@@ -61,6 +61,11 @@ public sealed class NotifyChannel : IDisposable
 		get { return this.channelName; }
 	}
 
+	/// <summary>Whether the LISTEN connection is currently open (a diagnostic for status Layer 3). False for a moment while reconnecting.</summary>
+	public bool Connected {
+		get { return !this.disposed && this.listenConn != null; }
+	}
+
 	public NotifyChannel(string connectionString, string schemaName, string tablePrefix) {
 		this.connectionString = connectionString;
 		this.channelName = BuildChannelName(schemaName, tablePrefix);
@@ -97,10 +102,16 @@ public sealed class NotifyChannel : IDisposable
 	/// This method is intended to be called outside a transaction (= after the operation completes, once committed).
 	/// To issue it inside a transaction, the caller should add a separate <c>SELECT pg_notify(...)</c> to the tx
 	/// (this method uses a short autocommit connection).
+	/// <para>
+	/// **It returns whether the notification was sent** (false = it was not). Exceptions are caught here, so the
+	/// caller decides by the return value. Before, it returned nothing, and the caller's "put the obligation back
+	/// if it could not be sent" catch **never ran** - a notification lost to a database blip or a payload over
+	/// 8000 bytes **never** reached the other clients.
+	/// </para>
 	/// </summary>
-	public void Publish(NotifyMessage message) {
+	public bool Publish(NotifyMessage message) {
 		if (this.disposed) {
-			return;
+			return false;
 		}
 		message.Sender = this.senderId;
 		string payload;
@@ -108,7 +119,7 @@ public sealed class NotifyChannel : IDisposable
 			payload = JsonSerializer.Serialize(message);
 		} catch (System.Exception ex) {
 			Logger.Warning("NotifyChannel.Publish: payload serialize failed: ", ex.Message);
-			return;
+			return false;
 		}
 		try {
 			Pg.Execute(
@@ -117,10 +128,19 @@ public sealed class NotifyChannel : IDisposable
 				new { ch = this.channelName, payload }
 			);
 		} catch (System.Exception ex) {
-			// A publish failure is not fatal (other clients just miss it). Leave it as a warning.
+			// A publish failure is not fatal (other clients just miss it). Leave it as a warning and tell the caller.
 			Logger.Warning("NotifyChannel.Publish: ", ex.Message);
+			return false;
 		}
+		return true;
 	}
+
+	/// <summary>
+	/// **Raised when LISTEN has been re-established.** PostgreSQL does not deliver notifications to a session that
+	/// is not listening, so the notifications sent before LISTEN came back are lost and the subscriber **has no
+	/// way to learn about those changes**. The subscriber (<c>Api</c>) drops its clean caches on this.
+	/// </summary>
+	public event Action? Reconnected;
 
 	public void Dispose() {
 		if (this.disposed) {
@@ -185,6 +205,8 @@ public sealed class NotifyChannel : IDisposable
 					}
 					this.listenConn = newConn;
 					Logger.Information("NotifyChannel: re-LISTEN ", this.channelName);
+					// A failure in the subscriber must not stop the receive loop.
+					try { this.Reconnected?.Invoke(); } catch (System.Exception ex3) { Logger.Warning("NotifyChannel: handling Reconnected failed (continuing): ", ex3.Message); }
 				} catch (OperationCanceledException) {
 					break;
 				} catch (System.Exception ex2) {
@@ -228,7 +250,10 @@ public sealed class NotifyChannel : IDisposable
 	// ------------------------------------------------------------------
 
 	private static string BuildChannelName(string schemaName, string tablePrefix) {
-		var schema = string.IsNullOrEmpty(schemaName) ? "public" : schemaName;
+		var schema = string.IsNullOrEmpty(schemaName) switch {
+			true  => "public",
+			false => schemaName,
+		};
 		var prefix = tablePrefix ?? "";
 		return $"{schema}_{prefix}notify";
 	}
@@ -243,7 +268,7 @@ public sealed class NotifyChannel : IDisposable
 
 /// <summary>
 /// The JSON shape of the NOTIFY payload.
-/// <c>{"s":"<sender>","i":[<inode_ids>],"p":[<parent_ids>],"x":[<path_prefixes>]}</c>.
+/// <c>{"s":"<sender>","i":[<inode_ids>],"p":[<parent_ids>],"x":[<path_prefixes>],"d":[<data_ids>]}</c>.
 /// </summary>
 public sealed class NotifyMessage
 {
@@ -262,4 +287,32 @@ public sealed class NotifyMessage
 	/// <summary>The list of deleted/renamed path prefixes. The receiver calls <see cref="InodeCache.InvalidatePrefix"/>.</summary>
 	[System.Text.Json.Serialization.JsonPropertyName("x")]
 	public List<string> PathPrefixes { get; set; } = new();
+
+	/// <summary>The list of data_ids whose body changed (write/truncate). The receiving side calls <see cref="ContentCache.InvalidateData"/>.</summary>
+	[System.Text.Json.Serialization.JsonPropertyName("d")]
+	public List<long> DataIds { get; set; } = new();
+
+	/// <summary>
+	/// **The instruction to recover from a dropped notification**. When <c>true</c> the receiving side throws
+	/// the whole cache away (because it does not know which ids changed). **Exactly one is sent when the
+	/// sending queue overflows** (review M-2). When false it is not emitted in the payload.
+	/// </summary>
+	[System.Text.Json.Serialization.JsonPropertyName("r")]
+	[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+	public bool Resync { get; set; }
+
+	/// <summary>The kind of control message (<c>"reload"</c> / <c>"set"</c> / <c>"ping"</c>). null = an ordinary change notification. When null it is not emitted in the payload.</summary>
+	[System.Text.Json.Serialization.JsonPropertyName("c")]
+	[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+	public string? Control { get; set; }
+
+	/// <summary>The target full-key of a control <c>"set"</c> (<c>scope.key</c>, for example <c>logging.level</c>). null for anything but set.</summary>
+	[System.Text.Json.Serialization.JsonPropertyName("k")]
+	[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+	public string? Key { get; set; }
+
+	/// <summary>The raw value of a control <c>"set"</c> (a representation the Field can Parse). null for anything but set.</summary>
+	[System.Text.Json.Serialization.JsonPropertyName("v")]
+	[System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+	public string? Value { get; set; }
 }

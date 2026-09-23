@@ -67,7 +67,8 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<!-- DokanNet and Npgsql come in transitively through Dokan / Core. -->
+		<!-- The Dokan machinery layer (FileSystem + WindowsUserResolver + Logger) is split out into Pgfs.Dokan.
+		     DokanNet / Npgsql come in transitively through Dokan / Core. -->
 		<ProjectReference Include="..\core\Core.csproj" />
 		<ProjectReference Include="..\dokan\Dokan.csproj" />
 	</ItemGroup>

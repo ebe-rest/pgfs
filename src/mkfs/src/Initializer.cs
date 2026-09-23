@@ -62,6 +62,7 @@ public class Initializer
 		await this.CreateLockTableAsync(prefix);
 		await this.CreateSettingsTableAsync(prefix);
 		await this.CreateAuditTableAsync(prefix);
+		await this.CreateMountsTableAsync(prefix);
 		await this.CreateStatfsFunctionsAsync(prefix);
 
 		await this.InsertRootInodeAsync(prefix);
@@ -128,13 +129,19 @@ public class Initializer
 	/// <summary>The coordinator host (or "localhost" if empty). Used for Citus topology registration.</summary>
 	private string CoordinatorHost() {
 		var host = this.config.Database.Connection.Host;
-		return string.IsNullOrEmpty(host) ? "localhost" : host;
+		return string.IsNullOrEmpty(host) switch {
+			true  => "localhost",
+			false => host,
+		};
 	}
 
 	/// <summary>The coordinator port (or 5432 if 0). Used for Citus topology registration.</summary>
 	private int CoordinatorPort() {
 		var port = this.config.Database.Connection.Port;
-		return port == 0 ? 5432 : port;
+		return port switch {
+			0 => 5432,
+			_ => port,
+		};
 	}
 
 	/// <summary>
@@ -613,8 +620,8 @@ public class Initializer
 				new ColumnInfo("st_mode", "INTEGER", "NOT NULL"),
 				new ColumnInfo("st_nlink", "INTEGER", "NOT NULL DEFAULT 1"),
 				new ColumnInfo("st_size", "BIGINT", "NOT NULL DEFAULT 0"),
-				new ColumnInfo("st_mtime", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
-				new ColumnInfo("st_ctime", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("st_mtime", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
+				new ColumnInfo("st_ctime", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("link_target", "TEXT", "NULL"),
 				new ColumnInfo("is_junction", "BOOLEAN", "NOT NULL DEFAULT FALSE"),
 				new ColumnInfo("data_id", "BIGINT", "NULL"),
@@ -622,9 +629,9 @@ public class Initializer
 				// (migrated from the old JSONB + Base64; values kept faithfully as bytea. Design: docs/xattr-bytea.md).
 				new ColumnInfo("xattr_names", "TEXT[]", "NOT NULL DEFAULT '{}'::TEXT[]"),
 				new ColumnInfo("xattr_values", "BYTEA[]", "NOT NULL DEFAULT '{}'::BYTEA[]"),
-				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("created_by", "TEXT", "NOT NULL"),
-				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("updated_by", "TEXT", "NOT NULL"),
 			},
 			// The PK is the composite (parent_id, id), to satisfy Citus's constraint that the PK must
@@ -636,7 +643,9 @@ public class Initializer
 			unique: new[] { new[] { "parent_id", "name" } },
 			indexes: new[] { new[] { "id" }, new[] { "uname" }, new[] { "gname" } }
 		);
-		if (!created) { return; }
+		// Citus-ify only what was newly created. To Citus-ify existing tables too, use
+		// `--distribute-existing` (the Distribute/Register below are idempotent, so re-running is safe).
+		if (!created && !this.config.Database.DistributeExisting) { return; }
 		await this.DistributeTableAsync(schemaName, tableName, "parent_id");
 	}
 
@@ -651,14 +660,16 @@ public class Initializer
 				new ColumnInfo("id", "BIGSERIAL", "NOT NULL"),
 				new ColumnInfo("chunk_size", "INTEGER", "NOT NULL"),
 				new ColumnInfo("total_size", "BIGINT", "NOT NULL"),
-				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("created_by", "TEXT", "NOT NULL"),
-				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("updated_by", "TEXT", "NOT NULL"),
 			},
 			primary: new[] { "id" }
 		);
-		if (!created) { return; }
+		// Citus-ify only what was newly created. To Citus-ify existing tables too, use
+		// `--distribute-existing` (the Distribute/Register below are idempotent, so re-running is safe).
+		if (!created && !this.config.Database.DistributeExisting) { return; }
 		await this.DistributeTableAsync(schemaName, tableName, "id");
 	}
 
@@ -673,15 +684,17 @@ public class Initializer
 				new ColumnInfo("data_id", "BIGINT", "NOT NULL"),
 				new ColumnInfo("chunk_index", "INTEGER", "NOT NULL"),
 				new ColumnInfo("payload", "BYTEA", "NOT NULL"),
-				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("created_by", "TEXT", "NOT NULL"),
-				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("updated_by", "TEXT", "NOT NULL"),
 			},
 			primary: new[] { "data_id", "chunk_index" }
 		);
-		if (!created) { return; }
-		// Co-located with pgfs_data so all chunks of one file land on the same shard.
+		// Citus-ify only what was newly created. To Citus-ify existing tables too, use
+		// `--distribute-existing` (the Distribute/Register below are idempotent, so re-running is safe).
+		if (!created && !this.config.Database.DistributeExisting) { return; }
+		// Co-located with pgfs_data, so every chunk of one file lands on the same shard
 		await this.DistributeTableAsync(schemaName, tableName, "data_id", coLocateWith: prefix + "data");
 	}
 
@@ -702,8 +715,16 @@ public class Initializer
 			},
 			primary: new[] { "target_id" }
 		);
-		if (!created) { return; }
-		await this.DistributeTableAsync(schemaName, tableName, "target_id");
+		// Citus-ify only what was newly created. To Citus-ify existing tables too, use
+		// `--distribute-existing` (the Distribute/Register below are idempotent, so re-running is safe).
+		if (!created && !this.config.Database.DistributeExisting) { return; }
+		// {prefix}lock is **not distributed**: a row lock (SELECT ... FOR UPDATE) is refused on a distributed
+		// table with shard_replication_factor > 1, so it is made a Citus local table holding a single copy on the
+		// coordinator, which guarantees that "the locking mechanism does not depend on rf". Registering it in the
+		// metadata routes queries that enter through a worker to that same single row as well, so the exclusion
+		// holds whichever node is the entrance.
+		// The design of record is docs/design/support_for_citus.md, the exclusion control section.
+		await this.RegisterLocalTableAsync(schemaName, tableName);
 	}
 
 	/// <summary>
@@ -722,24 +743,60 @@ public class Initializer
 				new ColumnInfo("scope", "TEXT", "NOT NULL"),
 				new ColumnInfo("key", "TEXT", "NOT NULL"),
 				new ColumnInfo("value", "JSONB", "NOT NULL DEFAULT 'null'::JSONB"),
-				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("created_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("created_by", "TEXT", "NOT NULL"),
-				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("updated_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("updated_by", "TEXT", "NOT NULL"),
 			},
 			primary: new[] { "scope", "key" }
 		);
-		if (!created) { return; }
-		// pgfs_settings is coordinator-only local + metadata-registered (visible from workers via metadata for JOINs).
+		// Citus-ify only what was newly created. To Citus-ify existing tables too, use
+		// `--distribute-existing` (the Distribute/Register below are idempotent, so re-running is safe).
+		if (!created && !this.config.Database.DistributeExisting) { return; }
+		// pgfs_settings is coordinator-only local + metadata registration (a worker sees it through the metadata, for JOINs)
 		await this.RegisterLocalTableAsync(schemaName, tableName);
 	}
 
 	/// <summary>
-	/// Creates the audit log table <c>{prefix}audit</c>: a monthly RANGE-partitioned table keyed on
-	/// occurred_at. No DEFAULT partition is created, to avoid the PG restriction that once rows have
-	/// accumulated you can no longer CREATE a month partition covering that range (the application
-	/// ensures each month partition before INSERT). The canonical design is in
-	/// <see href="../../../../docs/audit-log.md"/>.
+	/// Creates <c>{prefix}mounts</c>, the registry of running mounts. Each mount/assign process INSERTs one row
+	/// at start-up, updates <c>heartbeat_at</c> on a periodic heartbeat, and DELETEs it on a clean exit (a
+	/// volatile registry).
+	/// Registration and heartbeat are low-frequency, so like <c>pgfs_settings</c> it is coordinator local +
+	/// metadata registration (not distributed).
+	/// The design of record is docs/design/runtime-control-plane.md, the mount registry section.
+	/// </summary>
+	private async Task CreateMountsTableAsync(string prefix) {
+		var schemaName = this.SchemaNameOrDefault();
+		var tableName = prefix + "mounts";
+
+		var created = await this.CreateTableAsync(
+			schemaName,
+			tableName,
+			new[] {
+				new ColumnInfo("mount_id", "TEXT", "NOT NULL"),
+				new ColumnInfo("host", "TEXT", "NOT NULL"),
+				new ColumnInfo("pid", "BIGINT", "NOT NULL"),
+				new ColumnInfo("mountpoint", "TEXT", "NOT NULL"),
+				new ColumnInfo("mode", "TEXT", "NOT NULL"),
+				new ColumnInfo("started_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
+				new ColumnInfo("heartbeat_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
+				new ColumnInfo("config", "JSONB", "NOT NULL DEFAULT '{}'::JSONB"),
+				new ColumnInfo("stats", "JSONB", "NOT NULL DEFAULT '{}'::JSONB"),
+			},
+			primary: new[] { "mount_id" }
+		);
+		// Citus-ify only what was newly created. To Citus-ify existing tables too, use
+		// `--distribute-existing` (the Distribute/Register below are idempotent, so re-running is safe).
+		if (!created && !this.config.Database.DistributeExisting) { return; }
+		await this.RegisterLocalTableAsync(schemaName, tableName);
+	}
+
+	/// <summary>
+	/// Creates <c>{prefix}audit</c>, the audit log table. A monthly RANGE partitioned table keyed on
+	/// occurred_at. A DEFAULT partition is not created, in order to avoid PG's restriction that "once rows have
+	/// accumulated in it, the month partition for that range can no longer be CREATEd afterwards" (the
+	/// application ensures the month partition before it INSERTs). The design of record is
+	/// <see href="../../../../docs/design/audit-log.md"/>.
 	/// </summary>
 	private async Task CreateAuditTableAsync(string prefix) {
 		var schemaName = this.SchemaNameOrDefault();
@@ -750,7 +807,7 @@ public class Initializer
 			tableName,
 			new[] {
 				new ColumnInfo("id", "BIGSERIAL", "NOT NULL"),
-				new ColumnInfo("occurred_at", "TIMESTAMP", "NOT NULL DEFAULT current_timestamp"),
+				new ColumnInfo("occurred_at", "TIMESTAMP", "NOT NULL DEFAULT (current_timestamp AT TIME ZONE 'UTC')"),
 				new ColumnInfo("op", "TEXT", "NOT NULL"),
 				new ColumnInfo("target_id", "BIGINT", "NULL"),
 				new ColumnInfo("parent_id", "BIGINT", "NULL"),
@@ -768,10 +825,13 @@ public class Initializer
 			indexes: new[] { new[] { "id" }, new[] { "op" }, new[] { "target_id" } },
 			partitionBy: "occurred_at"
 		);
-		if (!created) { return; }
-		// Under Citus, distribute by occurred_at (the classic time-series pattern: hash distribution x
-		// monthly RANGE partitioning). Once the parent is distributed, Citus auto-distributes each month
-		// partition as the application creates it.
+		// Citus-ify only what was newly created. To Citus-ify existing tables too, use
+		// `--distribute-existing` (the Distribute/Register below are idempotent, so re-running is safe).
+		if (!created && !this.config.Database.DistributeExisting) { return; }
+		// On Citus it is distributed on occurred_at (the classic time-series pattern: hash distribution ×
+		// monthly RANGE partitioning).
+		// When the parent is already distributed, Citus distributes a month partition automatically as the
+		// application creates it.
 		await this.DistributeTableAsync(schemaName, tableName, "occurred_at");
 	}
 
@@ -785,6 +845,10 @@ public class Initializer
 			return;
 		}
 		var qualified = Pg.QuoteIdentifier(schemaName) + "." + Pg.QuoteIdentifier(tableName);
+		if (await this.IsCitusManagedAsync(qualified)) {
+			Logger.Information($"  {qualified} is already under Citus management - skipping");
+			return;
+		}
 		string sql;
 		if (coLocateWith != null) {
 			var qCo = Pg.QuoteIdentifier(schemaName) + "." + Pg.QuoteIdentifier(coLocateWith);
@@ -794,7 +858,44 @@ public class Initializer
 			sql = $"SELECT create_distributed_table('{qualified}', '{distributionColumn}')";
 			Logger.Information($"  {qualified} → distributed by {distributionColumn}");
 		}
-		await Pg.ExecuteAsync(this.connectionString, sql);
+		// The shard count / replication factor are decided by session GUCs (the values in effect when
+		// create_distributed_table runs are the ones that stick).
+		// **Sending them in the same command is the point**: Pg.ExecuteAsync takes a connection from the pool
+		// afresh on every call, so putting the SET in a separate call gives no guarantee that it rides the same
+		// physical connection.
+		// When it is 0 nothing is set = the cluster default (postgresql.conf and so on) is respected.
+		await Pg.ExecuteAsync(this.connectionString, this.CitusShardGucPrefix() + sql);
+	}
+
+	/// <summary>
+	/// Assembles the <c>SET</c> statements for <c>citus.shard_count</c> / <c>citus.shard_replication_factor</c>
+	/// (an empty string when they are not specified). <see cref="DistributeTableAsync"/> concatenates it to the
+	/// front of the SQL it issues.
+	/// </summary>
+	private string CitusShardGucPrefix() {
+		var sb = new System.Text.StringBuilder();
+		if (this.config.Database.ShardCount > 0) {
+			sb.Append($"SET citus.shard_count = {this.config.Database.ShardCount}; ");
+			Logger.Information($"  citus.shard_count = {this.config.Database.ShardCount}");
+		}
+		if (this.config.Database.ShardReplicationFactor > 0) {
+			sb.Append($"SET citus.shard_replication_factor = {this.config.Database.ShardReplicationFactor}; ");
+			Logger.Information($"  citus.shard_replication_factor = {this.config.Database.ShardReplicationFactor}");
+		}
+		return sb.ToString();
+	}
+
+	/// <summary>
+	/// Returns whether the target table is already under Citus management (distributed, reference, or Citus
+	/// local). <c>pg_dist_partition</c> has a row for all three kinds (<c>partmethod='h'</c> for distributed,
+	/// <c>'n'</c> for reference / local), so this one query is enough for an idempotency check.
+	/// </summary>
+	private async Task<bool> IsCitusManagedAsync(string qualified) {
+		return (await Pg.QueryAsync<bool>(
+			this.connectionString,
+			"SELECT EXISTS(SELECT 1 FROM pg_dist_partition WHERE logicalrelid = @rel::regclass)",
+			new { rel = qualified }
+		)).First();
 	}
 
 	/// <summary>
@@ -807,6 +908,10 @@ public class Initializer
 			return;
 		}
 		var qualified = Pg.QuoteIdentifier(schemaName) + "." + Pg.QuoteIdentifier(tableName);
+		if (await this.IsCitusManagedAsync(qualified)) {
+			Logger.Information($"  {qualified} is already under Citus management - skipping");
+			return;
+		}
 		await Pg.ExecuteAsync(this.connectionString, $"SELECT citus_add_local_table_to_metadata('{qualified}')");
 		Logger.Information($"  {qualified} → local (metadata registered)");
 	}

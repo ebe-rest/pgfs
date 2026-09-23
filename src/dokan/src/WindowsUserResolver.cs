@@ -84,7 +84,17 @@ public sealed class WindowsUserResolver
 	public string DefaultGname => this.processGname;
 
 	/// <summary>
-	/// Gets a SID from a name. Falls back to the fallback (the SID of mount.fallback_uname) if unresolved.
+	/// The fallback name used when the name resolution fails (from `mount.fallback_uname` /
+	/// `fallback_gname`, already normalized).
+	/// **A new inode's owner also falls back to this when it could not be decided from the requester** -
+	/// passing it off as the running process's user would create the accident of "a file someone else created
+	/// looks like mine".
+	/// </summary>
+	public string FallbackUname => this.fallbackUname;
+	public string FallbackGname => this.fallbackGname;
+
+	/// <summary>
+	/// Gets the SID from a name. Falls back (to the SID of mount.fallback_uname) when it cannot be resolved.
 	/// </summary>
 	public SecurityIdentifier UserSidOf(string uname) {
 		var pgfs = NameNormalizer.Normalize(uname);

@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -217,8 +217,8 @@ public class FirstList<T> :
 	}
 
 	/// <summary>
-	/// <see cref="Pgfs.Core.Collections.FirstList{T}.Enumerator"/> is an <see cref="System.Collections.Generic.IEnumerable{T}"/> for fast traversal of <see cref="System.Memory{T}"/> segments.
-	/// By temporarily taking a <see cref="System.Span{T}"/> inside <see cref="Pgfs.Core.Collections.FirstList{T}.Enumerator.MoveNext"/>, it works around the <c>ref struct</c> restriction while staying fast.
+	/// <see cref="Pgfs.Core.Collections.FirstList{T}.Enumerator"/> is an <see cref="System.Collections.Generic.IEnumerable{T}"/> for walking <see cref="System.Memory{T}"/> segments quickly.
+	/// Taking a <see cref="System.Span{T}"/> temporarily inside <see cref="Pgfs.Core.Collections.FirstList{T}.Enumerator.MoveNext"/> works around the restrictions of a <c>ref struct</c> while keeping it fast.
 	/// </summary>
 	protected class Enumerator : IEnumerator<T>
 	{

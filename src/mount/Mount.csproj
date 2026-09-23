@@ -68,15 +68,10 @@
 	</PropertyGroup>
 
 	<ItemGroup>
-		<PackageReference Include="Npgsql" Version="9.0.4" />
-	</ItemGroup>
-
-	<ItemGroup>
+		<!-- Npgsql comes in transitively through Core, and the libfuse binding through Pgfs.Fuse.
+		     The old vendor/Tmds.Fuse submodule is no longer referenced: the binding was brought in-house
+		     as Pgfs.Fuse (derived from Tmds.Fuse, MIT; the credits are in src/fuse/NOTICES.md). -->
 		<ProjectReference Include="..\core\Core.csproj" />
-		<!--
-			The libfuse binding and the FUSE filesystem live in Pgfs.Fuse. The binding is derived
-			from Tmds.Fuse (MIT); see src/fuse/NOTICES.md for the credits.
-		-->
 		<ProjectReference Include="..\fuse\Fuse.csproj" />
 	</ItemGroup>
 

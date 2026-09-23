@@ -32,6 +32,15 @@ public sealed class DatabaseConfig
 	/// </summary>
 	public List<(string Host, int Port)> Workers { get; set; } = new();
 
+	/// <summary>mkfs only. 0 follows the cluster default (= does not set <c>citus.shard_count</c>).</summary>
+	public int ShardCount { get; set; }
+
+	/// <summary>mkfs only. How many nodes one shard is placed on. 0 follows the cluster default.</summary>
+	public int ShardReplicationFactor { get; set; }
+
+	/// <summary>mkfs only. Whether existing tables are Citus-ified as well when <c>--citus</c> is used.</summary>
+	public bool DistributeExisting { get; set; }
+
 	/// <summary>
 	/// Returns <see cref="Prefix"/> normalized with a trailing `_`. If empty, stays empty.
 	/// </summary>

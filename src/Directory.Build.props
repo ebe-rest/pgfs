@@ -1,15 +1,20 @@
 <Project>
 
   <!--
-    Shared assembly metadata for every project under src (core / fuse / mkfs / mount / assign).
-    The startup banner (Pgfs.Core.AppInfo) reads the Version / Product / Copyright set here at runtime.
+    Shared assembly metadata for every project under src (core / fuse / dokan / mkfs / mount / assign /
+    ctl / gui). The startup banner (Pgfs.Core.AppInfo) reads the Version / Product / Copyright set here
+    at runtime.
+    The libfuse binding was brought in-house into src/fuse in v0.2.0, so it is **under this props file**
+    (the old vendor/Tmds.Fuse submodule sat outside src and was never reached by it; the submodule itself
+    is gone).
+    Version is raised as one step of the release procedure, together with the release tag.
   -->
   <!--
     Check the code style rules in .editorconfig (the IDE#### diagnostics) during the build too.
     With the default (false) the IDE analyzers never run, so a rule that is configured - such as
-    csharp_prefer_braces = true:warning - is "written down but has no effect".
-    Note that the ternary ban (coding-style.md rule 6) cannot be enforced here; see the matching
-    comment in .editorconfig and docs/coding-style.md.
+    csharp_prefer_braces = true:warning - is "written down but has no effect" (measured, then enabled).
+    Note that the ternary ban (coding-style.md rule 6) cannot be detected even with this on; for why, see
+    the matching comment in .editorconfig and the machine-enforcement section of docs/design/coding-style.md.
   -->
   <PropertyGroup>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>

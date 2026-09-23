@@ -98,6 +98,7 @@ public sealed class ConfigLoader
 		// Phase 1: CLI (highest priority). Running this first makes the CLI's `setting.file` / `setting.search_path`
 		// visible when Phase 2 resolves the TOML path.
 		ParseCli(args);
+		this.WarnAllowOtherWithoutPermissions();
 
 		// Phase 2: TOML. `setting.file` prefers what was passed on the CLI, otherwise Default.
 		// When `skipToml` is set, do nothing (= the mode that intentionally ignores an existing pgfs.toml on mkfs `--clean`).
@@ -155,12 +156,9 @@ public sealed class ConfigLoader
 	/// (4) if it is a relative path, try <see cref="Schema.Setting.SearchPath"/> in order.
 	/// </summary>
 	private string? ResolveTomlPath() {
-		string fileName;
-		if (this.rawByFullKey.TryGetValue(Schema.Setting.File.FullKey, out var fromCli)) {
-			fileName = fromCli;
-		} else {
-			fileName = Schema.Setting.File.DefaultFn();
-		}
+		// Whatever the CLI / TOML put in, otherwise the default (the conventions forbid `else`).
+		var fileName = Schema.Setting.File.DefaultFn();
+		if (this.rawByFullKey.TryGetValue(Schema.Setting.File.FullKey, out var fromCli)) { fileName = fromCli; }
 		if (string.IsNullOrEmpty(fileName)) {
 			return null;
 		}
@@ -170,11 +168,9 @@ public sealed class ConfigLoader
 		if (Path.IsPathRooted(fileName)) {
 			return null;
 		}
-		List<string> searchPath;
+		var searchPath = Schema.Setting.SearchPath.DefaultFn();
 		if (this.rawByFullKey.TryGetValue(Schema.Setting.SearchPath.FullKey, out var fromCliSp)) {
 			searchPath = Schema.Setting.SearchPath.Parse(fromCliSp);
-		} else {
-			searchPath = Schema.Setting.SearchPath.DefaultFn();
 		}
 		foreach (var dir in searchPath) {
 			var fullPath = Path.Combine(dir, fileName);
@@ -201,7 +197,17 @@ public sealed class ConfigLoader
 	public MountConfig BuildMountConfig() {
 		return new MountConfig {
 			MountPoint = this.Resolve(Schema.Mount.MountPoint),
+			MaxWrite = this.Resolve(Schema.Mount.MaxWrite),
 			CacheMaxEntries = this.Resolve(Schema.Mount.CacheMaxEntries),
+			CacheDataMaxBytes = this.Resolve(Schema.Mount.CacheDataMaxBytes),
+			NegativeCacheTtlMs = this.Resolve(Schema.Mount.NegativeCacheTtlMs),
+			WriteBack = this.Resolve(Schema.Mount.WriteBack),
+			WriteBackMaxBytes = this.Resolve(Schema.Mount.WriteBackMaxBytes),
+			WriteBackIntervalMs = this.Resolve(Schema.Mount.WriteBackIntervalMs),
+			WriteBackMetadata = this.Resolve(Schema.Mount.WriteBackMetadata),
+			WriteBackMetadataExclusiveCreate = this.Resolve(Schema.Mount.WriteBackMetadataExclusiveCreate),
+			WriteBackMaxInodes = this.Resolve(Schema.Mount.WriteBackMaxInodes),
+			WriteBackFlushTimeoutMs = this.Resolve(Schema.Mount.WriteBackFlushTimeoutMs),
 			FallbackUname = this.Resolve(Schema.Mount.FallbackUname),
 			FallbackGname = this.Resolve(Schema.Mount.FallbackGname),
 			Foreground = this.Resolve(Schema.Mount.Foreground),
@@ -229,8 +235,25 @@ public sealed class ConfigLoader
 	}
 
 	/// <summary>
-	/// Enumerates the values actually given from CLI / TOML / DB in the form "<c>scope.key = value</c>" (Default values are excluded).
-	/// For logging at startup which parameter was interpreted how. The Password in a connection string is masked.
+	/// Returns the raw value merged from CLI / TOML / DB (null when it comes from the Default). Used by
+	/// <c>config get/list</c> to fetch an effective value non-generically. A bare bool flag returns "true".
+	/// Which source it came from (CLI/TOML/DB) is not attached, because the internal dictionary has already
+	/// merged them (= the "given / default" two-way decision is as far as <see cref="WasProvided"/> goes).
+	/// </summary>
+	public string? GetMergedRaw(Field field) {
+		if (this.rawByFullKey.TryGetValue(field.FullKey, out var raw)) {
+			return raw;
+		}
+		if (this.cliBoolFlags.Contains(field.FullKey)) {
+			return "true";
+		}
+		return null;
+	}
+
+	/// <summary>
+	/// Enumerates the values actually given through CLI / TOML / DB in the form "<c>scope.key = value</c>"
+	/// (Default values are not included). Used to log "which parameter was interpreted how" at start-up.
+	/// The Password of a connection string is masked.
 	/// </summary>
 	public IEnumerable<string> DescribeProvided() {
 		foreach (var kv in this.rawByFullKey.OrderBy(k => k.Key)) {
@@ -239,10 +262,8 @@ public sealed class ConfigLoader
 	}
 
 	private static string MaskSecret(string fullKey, string value) {
-		if (!fullKey.Contains("connection")) {
-			return value;
-		}
-		return System.Text.RegularExpressions.Regex.Replace(value, "(?i)(password\\s*=)[^;]*", "$1***");
+		// Hides both the kv form and the URL form (it used to cover only the kv form, so a URL's password came out in plain text).
+		return ConnectionStringMask.MaskIfConnection(fullKey, value);
 	}
 
 	/// <summary>
@@ -317,6 +338,9 @@ public sealed class ConfigLoader
 			NotifyEnabled = this.Resolve(Schema.Database.NotifyEnabled),
 			Citus = this.Resolve(Schema.Database.Citus),
 			Workers = this.Resolve(Schema.Database.Workers).Select(ParseWorker).ToList(),
+			ShardCount = this.Resolve(Schema.Database.ShardCount),
+			ShardReplicationFactor = this.Resolve(Schema.Database.ShardReplicationFactor),
+			DistributeExisting = this.Resolve(Schema.Database.DistributeExisting),
 		};
 	}
 
@@ -382,7 +406,39 @@ public sealed class ConfigLoader
 		};
 	}
 
-	/// <summary>Builds the <see cref="RootConfig"/> aggregating the sub-Configs in a single call.</summary>
+	/// <summary>Builds a <see cref="RootConfig"/> gathering the sub Configs in a single call.</summary>
+	/// <summary>
+	/// **The boilerplate for assembling a <see cref="RootConfig"/> out of the CLI arguments**, gathered into one place.
+	/// <list type="number">
+	///   <item>Build the Loader and settle <c>database.*</c> (CLI / TOML are parsed exactly once, here).</item>
+	///   <item>Build a <see cref="ConfigStore"/> on that connection and **attach the DB source to the same Loader**.</item>
+	/// </list>
+	/// <para>
+	/// <b>Why two stages</b>: `ConfigStore` (= the side that reads the Config rows out of the database)
+	/// **cannot know where to connect without the resolved <c>database.*</c> from CLI / TOML**. So (1) settles
+	/// `database.connection` / `schema` / `prefix`, and (2) builds the `ConfigStore` from that connection
+	/// information and attaches it with <see cref="WithStore"/>.
+	/// **The CLI parse and the TOML read happen only once, in (1)**; (2) pours the **DB-saved Fields**
+	/// (`mount.fallback_*` and so on) **into unset keys only** (the precedence of the higher sources is unchanged).
+	/// </para>
+	/// <para>
+	/// **`mount.pgfs` and `assign.pgfs` held two copies that did not differ by a single byte**, so it was moved
+	/// into Core. **The order is the point** - without settling `database.*` first the `ConfigStore` has no
+	/// connection target, and without attaching it afterwards the settings saved in the database are never read.
+	/// **Fixing only one of the two splits the behaviour right there.**
+	/// </para>
+	/// </summary>
+	public static RootConfig BuildRootConfigWithStore(string[] args, out ConfigLoader loader) {
+		loader = new ConfigLoader(args, Schema.AllFields, null);
+		var db = loader.BuildDatabaseConfig();
+		var store = new ConfigStore(
+			db.Connection.ConnectionString,
+			db.SchemaName,
+			db.GetPrefix()
+		);
+		return loader.WithStore(store).BuildRootConfig();
+	}
+
 	public RootConfig BuildRootConfig() {
 		var config = new RootConfig {
 			Setting = this.BuildSettingFileConfig(),
@@ -445,6 +501,16 @@ public sealed class ConfigLoader
 			}
 			// Do not overwrite if a higher-priority source (CLI) has already set it.
 			if (this.rawByFullKey.ContainsKey(f.FullKey)) {
+				continue;
+			}
+			// **A sub-table form cannot be read.** Writing `database.connection.host = "..."` makes the leaf a
+			// TomlTable, and the `v.ToString()` below returns **the string "Tomlyn.Model.TomlTable"** and passes it to
+			// Parse. For a connection string that turns into `Format of the initialization string does not conform
+			// to specification`, **an exception that does not point at the cause** (measured; the sample
+			// pgfs.toml.example was written in this form, so anyone who copied it hit this on their very first start-up).
+			// **Do not take it as a value; put what to fix and how into a warning.**
+			if (leaf is TomlTable) {
+				this.Warnings.Add($"`{f.FullKey}` in the setting file is written as a table. pgfs reads only two levels (`scope.key = value`), so this value is ignored. Write it on a single line as `{f.FullKey} = \"...\"` (for the connection: `database.connection = \"Host=...;Port=...;Username=...;Database=...\"`)");
 				continue;
 			}
 			this.rawByFullKey[f.FullKey] = TomlValueToString(leaf);
@@ -512,10 +578,28 @@ public sealed class ConfigLoader
 		"kernel_cache", "auto_cache",
 	};
 
-	/// <summary>**valued** FUSE options valid in libfuse3. Forwarded only in the <c>key=value</c> form.</summary>
+	/// <summary>
+	/// The FUSE options that are valid in libfuse3 and **take a value**. Forwarded only in the <c>key=value</c> form.
+	/// <para>
+	/// <c>max_write</c> **must not be listed here**. libfuse **does not accept <c>-o max_write=N</c> as a mount
+	/// option** (it is an item set in the init callback), and forwarding it makes
+	/// <c>fuse: unknown option(s)</c> -> <c>fuse_new</c> fail, which **takes the mount itself down** (confirmed
+	/// on real hardware). pgfs has a Field with the same meaning (<c>mount.max_write</c>), so it is routed to
+	/// the Field map in (3).
+	/// </para>
+	/// <para>
+	/// <c>max_read</c> / <c>max_readahead</c> are **left out as well** (confirmed on real hardware).
+	/// <c>max_readahead</c> takes the mount down with <c>fuse: unknown option(s)</c> just like <c>max_write</c>,
+	/// and <c>max_read</c> is **worse** - the mount is established and success is reported to the parent, and
+	/// immediately afterwards **the session ends and the process disappears with exit 0** (the same for 4096 /
+	/// 65536 / 131072 / 1048576 alike = it does not depend on the value).
+	/// Seen from fstab it becomes "mount succeeded yet nothing is mounted".
+	/// **The cause is not understood**, but at least with the current binding it must not be passed.
+	/// </para>
+	/// </summary>
 	private static readonly HashSet<string> FusePassthroughKv = new(System.StringComparer.Ordinal) {
-		"umask", "uid", "gid", "max_read", "entry_timeout", "attr_timeout",
-		"fsname", "subtype", "max_write", "max_readahead",
+		"umask", "uid", "gid", "entry_timeout", "attr_timeout",
+		"fsname", "subtype",
 	};
 
 	/// <summary>
@@ -525,12 +609,15 @@ public sealed class ConfigLoader
 	private static readonly HashSet<string> IgnoredMountHints = new(System.StringComparer.Ordinal) {
 		"_netdev", "noauto", "auto", "user", "users", "owner", "group",
 		"atime", "relatime", "noatime", "strictatime", "nostrictatime",
-		"nosuid", "nodev", "noexec", "exec", "suid", "dev",
-		"async", "sync", "dirsync",
-		// nonempty/direct_io were removed as mount-wide -o options in libfuse3 (the former is the default behavior,
-		// the latter moved to the per-file fi->direct_io). Forwarding them verbatim makes fuse_new fail the whole mount
-		// with "unknown option", so they are not put in (1) but ignored. Verified on the real machine that libfuse 3.14.0's
-		// .so has no such option token.
+		// nosuid / nodev are **always added by fusermount3 on an unprivileged mount**, so the result is the same
+		// even when the option is dropped (confirmed in /proc/self/mountinfo on real hardware). Accepting them silently is fine.
+		"nosuid", "nodev",
+		// exec / async are the same as the default, so dropping them does not change the meaning.
+		"exec", "async",
+		// nonempty/direct_io were dropped as mount-wide -o options in libfuse3 (the former is the default
+		// behaviour, the latter moved to the per-file fi->direct_io). Forwarding them verbatim makes fuse_new fail
+		// with unknown option and takes the whole mount down, so they are not listed in (1) and are ignored.
+		// Confirmed on real hardware that libfuse 3.14.0's .so carries no option token for them.
 		"rw", "nonempty", "direct_io",
 		// mount(8)/fstab conventions (the staples seen in a real fstab). Irrelevant to FUSE, so silently accepted.
 		"defaults", "nofail", "lazytime", "nolazytime",
@@ -540,10 +627,32 @@ public sealed class ConfigLoader
 	};
 
 	/// <summary>
-	/// mount(8) mount-operation options. They cannot apply to pgfs (a fresh FUSE mount), so make "unsupported" explicit,
-	/// distinct from the (4) typo warning. Silently ignoring them would create the misunderstanding "I thought I remounted".
-	/// <c>bind</c>/<c>rbind</c>/<c>move</c> are normally handled by mount(8) itself without calling the helper, but are made
-	/// explicit too in case they are passed on a direct launch where they carry no meaning.
+	/// Mount options that are **accepted but cannot be applied**. Unlike <see cref="IgnoredMountHints"/>,
+	/// **dropping them changes the meaning** (execution restrictions, the sync contract), so **they warn instead of staying silent**.
+	/// <para>
+	/// The behaviour confirmed on real hardware (unprivileged direct start-up, libfuse3 3.10.2): even with
+	/// <c>-o noexec,sync,dirsync</c>, <c>/proc/self/mountinfo</c> stayed <c>rw,nosuid,nodev,relatime</c> and
+	/// **a script on that mount could be executed** = <c>noexec</c> is not in effect.
+	/// "Ignoring it does no real harm" cannot be claimed, so it is left in a form that reaches whoever specified it.
+	/// </para>
+	/// <para>
+	/// <c>suid</c> / <c>dev</c> point the other way: **even when requested, fusermount3 forces `nosuid,nodev`**,
+	/// so they do not get through. Both share the point that "the option has no effect", which is why they live here.
+	/// </para>
+	/// </summary>
+	private static readonly HashSet<string> UnappliedMountHints = new(System.StringComparer.Ordinal) {
+		"noexec", "suid", "dev", "sync", "dirsync",
+		// The ones that break the mount when passed to libfuse (see the comment on FusePassthroughKv above).
+		// "Warn and ignore" is better than "drop silently", and far better than not starting at all.
+		"max_read", "max_readahead",
+	};
+
+	/// <summary>
+	/// The mount-operation options of mount(8). They cannot be applied to pgfs (a fresh FUSE mount), so
+	/// "unsupported" is stated explicitly, separately from the (4) typo warning. Ignoring them silently invites
+	/// the misunderstanding that "I remounted it".
+	/// <c>bind</c>/<c>rbind</c>/<c>move</c> are normally handled by mount(8) itself without calling a helper,
+	/// but they carry no meaning when passed to a direct start-up, so they are stated explicitly in the same way.
 	/// </summary>
 	private static readonly HashSet<string> UnsupportedMountOps = new(System.StringComparer.Ordinal) {
 		"remount", "bind", "rbind", "move",
@@ -637,19 +746,39 @@ public sealed class ConfigLoader
 		return false;
 	}
 
+	/// <summary>
+	/// Warns when <c>-o allow_other</c> is given without <c>default_permissions</c>.
+	/// <para>
+	/// pgfs **does not decide access by itself** (it does not implement <c>Access</c> and leaves the decision to the kernel
+	/// through <c>default_permissions</c>). With <c>allow_other</c> and no <c>default_permissions</c>, **the mode is not
+	/// enforced and every local user who can see the mount can read, write and delete every file**. The default behaviour
+	/// is not changed; it only warns.
+	/// </para>
+	/// <para>
+	/// **It decides after all of `-o` has been parsed** (<c>-o</c> can be given several times, so one occurrence alone is
+	/// not enough). The warning goes into <see cref="Warnings"/> - a mount shows those from **the parent before it
+	/// daemonizes**, so it reaches the terminal through fstab / mount(8) too (the child's log reaches nobody with the
+	/// default output).
+	/// </para>
+	/// </summary>
+	private void WarnAllowOtherWithoutPermissions() {
+		if (!this.FuseFlags.Contains("allow_other")) { return; }
+		if (this.FuseFlags.Contains("default_permissions")) { return; }
+		this.Warnings.Add("-o allow_other was given without default_permissions. pgfs does not decide access by itself, so "
+			+ "the mode is not enforced and every local user can read and write every file. -o allow_other,default_permissions is recommended.");
+	}
+
 	private void ParseDashOOptions(string optsValue) {
 		foreach (var raw in optsValue.Split(',')) {
 			var entry = raw.Trim();
 			if (entry.Length == 0) {
 				continue;
 			}
-			string key;
-			string? val;
+			// Either `key=value` or a bare `key`. Default to the bare form and split only when there is an `=`.
 			var eq = entry.IndexOf('=');
-			if (eq < 0) {
-				key = entry;
-				val = null;
-			} else {
+			var key = entry;
+			string? val = null;
+			if (eq >= 0) {
 				key = entry[..eq].Trim();
 				val = entry[(eq + 1)..].Trim();
 			}
@@ -662,7 +791,13 @@ public sealed class ConfigLoader
 			if (key.StartsWith(UserspaceOptionPrefix, System.StringComparison.Ordinal)) {
 				continue;
 			}
-			// (5) mount-operation options that cannot apply to pgfs. Not a typo, so make it explicit with a dedicated message.
+			// (2'') The ones that are accepted but **cannot be applied**. Dropping them silently makes it impossible to
+			// notice that "the execution restriction / sync contract I thought I specified is not in effect", so a warning is always left.
+			if (UnappliedMountHints.Contains(key)) {
+				this.Warnings.Add($"-o '{key}' is not applied in pgfs (it is not passed through to the FUSE mount). The option is ignored and start-up continues.");
+				continue;
+			}
+			// (5) The mount-operation family that cannot be applied to pgfs. They are not typos, so they get a dedicated message.
 			if (UnsupportedMountOps.Contains(key)) {
 				this.Warnings.Add($"-o '{key}' is unsupported in pgfs (cannot apply to a fresh FUSE mount). Ignored.");
 				continue;

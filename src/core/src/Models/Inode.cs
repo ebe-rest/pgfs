@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Models;
+namespace Pgfs.Core.Models;
 
 using Collections;
 
@@ -53,6 +53,19 @@ public class Inode : Base
 	public Inode? Parent { get; set; }
 	public FirstList<Inode> Children { get; set; } = new();
 	public Data? Data { get; set; }
+
+	/// <summary>
+	/// The number of bytes this inode's data body actually occupies on PG (= <c>{prefix}data.total_size</c>).
+	/// <b>It is a cache in memory, not a database column</b>, and is used to compute `st_blocks` (= the value du
+	/// looks at). <c>Api</c> updates it on every write / truncate, and on the reading side
+	/// <c>Api.GetOccupiedBytes</c> loads it lazily (during a directory enumeration <c>ListChildren</c> reads
+	/// them ahead in a single query).
+	/// For a sparse file it is smaller than <see cref="Size"/> (there are no chunk rows for the holes).
+	/// </summary>
+	public long OccupiedBytes { get; set; }
+
+	/// <summary>Whether <see cref="OccupiedBytes"/> has been loaded (to tell "not loaded" apart from "occupies 0").</summary>
+	public bool OccupiedBytesLoaded { get; set; }
 
 	public DateTime CacheTime { get; set; } = DateTime.Now;
 	public Inode UpdateCacheTime() {

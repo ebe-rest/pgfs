@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Utility;
+namespace Pgfs.Core.Utility;
 
 using System.Runtime.InteropServices;
 
@@ -7,7 +7,47 @@ using System.Runtime.InteropServices;
 /// </summary>
 public static class ServiceResolver
 {
-	// Cache of commonly used services.
+	/// <summary>The result of splitting one line of `/etc/services`.</summary>
+	/// <param name="Name">The service name (column 1).</param>
+	/// <param name="Port">The port number.</param>
+	/// <param name="Protocol">The protocol (<c>tcp</c> / <c>udp</c> and so on).</param>
+	/// <param name="Rest">Column 3 onwards (the aliases and the end-of-line comment. **The `#` has not been dropped yet**).</param>
+	private readonly record struct ServiceEntry(string Name, int Port, string Protocol, string[] Rest);
+
+	/// <summary>
+	/// Splits `/etc/services` line by line and returns the pieces. **Comments, blank lines and malformed lines are skipped.**
+	/// <para>
+	/// **The forward lookup (name -> port) and the reverse lookup (port -> name) each carried the same
+	/// preprocessing**, so it was made into one. The only difference was the spelling of `StartsWith('#')`
+	/// (char) versus `StartsWith("#")` (string).
+	/// **The caller decides how to treat the aliases** - because only the forward lookup looks at column 3 onwards.
+	/// </para>
+	/// <para>
+	/// **The exceptions of `File.ReadLines` come out during the enumeration**, so the caller's `try` may stay wrapped around the `foreach`.
+	/// </para>
+	/// </summary>
+	private static IEnumerable<ServiceEntry> EnumerateServices(string servicesPath) {
+		foreach (var line in File.ReadLines(servicesPath)) {
+			var trimmedLine = line.Trim();
+			if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith('#')) {
+				continue;
+			}
+			// Parse: service_name  port/protocol  [aliases...]
+			var parts = trimmedLine.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
+			if (parts.Length < 2) {
+				continue;
+			}
+			var portProto = parts[1].Split('/');
+			if (portProto.Length < 2) {
+				continue;
+			}
+			if (!int.TryParse(portProto[0], out var portNumber)) {
+				continue;
+			}
+			yield return new ServiceEntry(parts[0], portNumber, portProto[1], parts[2..]);
+		}
+	}
+	// A cache of the services that get used often
 	private static readonly Dictionary<string, int> knownServices = new(StringComparer.OrdinalIgnoreCase) {
 		["ftp"] = 21,
 		["ssh"] = 22,
@@ -71,48 +111,26 @@ public static class ServiceResolver
 		}
 
 		try {
-			foreach (var line in File.ReadLines(servicesPath)) {
-				// Skip comments and blank lines.
-				var trimmedLine = line.Trim();
-				if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith('#')) {
-					continue;
-				}
+			foreach (var entry in EnumerateServices(servicesPath)) {
+				var proto = entry.Protocol;
 
-				// Parse: service_name  port/protocol  [aliases...]
-				var parts = trimmedLine.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
-				if (parts.Length < 2) {
-					continue;
-				}
-
-				var name = parts[0];
-				var portProto = parts[1].Split('/');
-				if (portProto.Length < 2) {
-					continue;
-				}
-
-				if (!int.TryParse(portProto[0], out var portNumber)) {
-					continue;
-				}
-
-				var proto = portProto[1];
-
-				// Service name matches.
-				if (name.Equals(serviceName, StringComparison.OrdinalIgnoreCase)) {
-					// No protocol specified, or it matches.
+				// The service name matches
+				if (entry.Name.Equals(serviceName, StringComparison.OrdinalIgnoreCase)) {
+					// No protocol was specified, or it matches
 					if (protocol == null || proto.Equals(protocol, StringComparison.OrdinalIgnoreCase)) {
-						return portNumber;
+						return entry.Port;
 					}
 				}
 
-				// Check the aliases.
-				for (var i = 2; i < parts.Length; i++) {
-					if (parts[i].StartsWith('#')) {
+				// Check the aliases (**stop as soon as the end-of-line comment is reached**)
+				foreach (var alias in entry.Rest) {
+					if (alias.StartsWith('#')) {
 						break;
 					}
 
-					if (parts[i].Equals(serviceName, StringComparison.OrdinalIgnoreCase)) {
+					if (alias.Equals(serviceName, StringComparison.OrdinalIgnoreCase)) {
 						if (protocol == null || proto.Equals(protocol, StringComparison.OrdinalIgnoreCase)) {
-							return portNumber;
+							return entry.Port;
 						}
 					}
 				}
@@ -146,32 +164,10 @@ public static class ServiceResolver
 		}
 
 		try {
-			foreach (var line in File.ReadLines(servicesPath)) {
-				var trimmedLine = line.Trim();
-				if (string.IsNullOrEmpty(trimmedLine) || trimmedLine.StartsWith("#")) {
-					continue;
-				}
-
-				var parts = trimmedLine.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries);
-				if (parts.Length < 2) {
-					continue;
-				}
-
-				var name = parts[0];
-				var portProto = parts[1].Split('/');
-				if (portProto.Length < 2) {
-					continue;
-				}
-
-				if (!int.TryParse(portProto[0], out var portNumber)) {
-					continue;
-				}
-
-				var proto = portProto[1];
-
-				if (portNumber == port) {
-					if (protocol == null || proto.Equals(protocol, StringComparison.OrdinalIgnoreCase)) {
-						return name;
+			foreach (var entry in EnumerateServices(servicesPath)) {
+				if (entry.Port == port) {
+					if (protocol == null || entry.Protocol.Equals(protocol, StringComparison.OrdinalIgnoreCase)) {
+						return entry.Name;
 					}
 				}
 			}

@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Utility;
+namespace Pgfs.Core.Utility;
 
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
@@ -75,12 +75,33 @@ public static class Fn
 		return !enumerator.Contains(value);
 	}
 
-	public static T? Get<T>(this T[]? array, int index) => array != null && index > 0 && index <= array.Length ? array[index] : default;
-	public static T Get<T>(this T[]? array, int index, T @default) => array != null && index > 0 && index <= array.Length ? array[index] : @default;
+	public static T? Get<T>(this T[]? array, int index) {
+		if (array != null && index > 0 && index <= array.Length) { return array[index]; }
+		return default;
+	}
 
-	public static T? First<T>(this T[]? array) => array != null && array.Length != 0 ? array[0] : default;
-	public static T First<T>(this T[]? array, T @default) => array != null && array.Length != 0 ? array[0] : @default;
+	public static T Get<T>(this T[]? array, int index, T @default) {
+		if (array != null && index > 0 && index <= array.Length) { return array[index]; }
+		return @default;
+	}
 
-	public static T? Last<T>(this T[]? array) => array != null && array.Length != 0 ? array[^1] : default;
-	public static T Last<T>(this T[]? array, T @default) => array != null && array.Length != 0 ? array[^1] : @default;
+	public static T? First<T>(this T[]? array) {
+		if (array != null && array.Length != 0) { return array[0]; }
+		return default;
+	}
+
+	public static T First<T>(this T[]? array, T @default) {
+		if (array != null && array.Length != 0) { return array[0]; }
+		return @default;
+	}
+
+	public static T? Last<T>(this T[]? array) {
+		if (array != null && array.Length != 0) { return array[^1]; }
+		return default;
+	}
+
+	public static T Last<T>(this T[]? array, T @default) {
+		if (array != null && array.Length != 0) { return array[^1]; }
+		return @default;
+	}
 }

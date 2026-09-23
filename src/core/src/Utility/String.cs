@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Utility;
+namespace Pgfs.Core.Utility;
 
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;

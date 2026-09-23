@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Utility;
+namespace Pgfs.Core.Utility;
 
 public readonly struct ReadOnlyIndexer<TKey, TValue>(Func<TKey, TValue> getter)
 {

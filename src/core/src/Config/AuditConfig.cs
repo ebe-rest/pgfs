@@ -6,9 +6,9 @@ namespace Pgfs.Core.Config;
 /// <c>pgfs_settings</c>, and mount / assign read it from the DB at startup.
 ///
 /// <para>
-/// The consumer (<see cref="Pgfs.Core.Api.Api"/>) looks at <c>config.Audit.Enabled</c> to decide whether to INSERT an audit
-/// row into <c>{prefix}audit</c> after each mutating operation succeeds, within the same tx. The design of record is
-/// [docs/audit-log.md](../../../../docs/audit-log.md).
+/// The using side (<see cref="Pgfs.Core.Api.Api"/>) looks at <c>config.Audit.Enabled</c> to decide whether
+/// to INSERT an audit row into <c>{prefix}audit</c> after each mutating operation succeeds, within the same
+/// tx. The design of record is [docs/audit-log.md](../../../../docs/design/audit-log.md).
 /// </para>
 /// </summary>
 public sealed class AuditConfig

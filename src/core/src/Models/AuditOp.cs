@@ -12,4 +12,10 @@ public static class AuditOp
 	public const string Chmod = "chmod";
 	public const string Chown = "chown";
 	public const string Hardlink = "hardlink";
+	/// <summary>
+	/// The record of unflushed work that **was lost** because it could not be written out within the deadline at
+	/// unmount (B-2). One unmount = one row.
+	/// The subject is the mount itself rather than an individual inode, so <c>target_id</c> is null.
+	/// </summary>
+	public const string WritebackLoss = "writeback_loss";
 }

@@ -74,7 +74,7 @@ public static class PosixAcl
 		return buf;
 	}
 
-	/// <summary>rwx → e_perm。</summary>
+	/// <summary>rwx -> e_perm.</summary>
 	public static ushort PermFromRwx(bool r, bool w, bool x) {
 		ushort p = 0;
 		if (r) { p |= PermRead; }

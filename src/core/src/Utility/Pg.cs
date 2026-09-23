@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Utility;
+namespace Pgfs.Core.Utility;
 
 using System.Collections.Concurrent;
 using System.Text.Json;
@@ -115,6 +115,29 @@ public static partial class Pg
 
 	// ---
 
+	// Every timestamp column of pgfs is `TIMESTAMP` (= timestamp without time zone), and the convention is that
+	// **the value is always a UTC wall clock** (docs/design/database.md). The SQL side writes
+	// `current_timestamp AT TIME ZONE 'UTC'`, and the parameters handed over from the C# side are normalized by the two below.
+	//
+	// A DateTime with Kind=Utc must not be passed straight through: Npgsql sends it as timestamptz, so when PG
+	// assigns it to a `timestamp` column it casts with the session TimeZone and the local wall clock is stored
+	// (under JST a value 9 hours off goes in). Passing Kind=Unspecified means the cast does not happen.
+
+	/// <summary>The current time for handing to a <c>TIMESTAMP</c> column of the database (a UTC wall clock, <c>Kind=Unspecified</c>).</summary>
+	public static DateTime UtcNow { get { return DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified); } }
+
+	/// <summary>
+	/// Normalizes a <see cref="DateTime"/> that is to be handed to a <c>TIMESTAMP</c> column of the database
+	/// into a UTC wall clock with <c>Kind=Unspecified</c>.
+	/// <c>Utc</c> only has its Kind dropped, <c>Local</c> is converted to UTC and then dropped, and
+	/// <c>Unspecified</c> is taken to be a UTC wall clock already (either from the database or already through
+	/// this method) and returned as-is.
+	/// </summary>
+	public static DateTime ToDbUtc(DateTime value) {
+		if (value.Kind == DateTimeKind.Utc) { return DateTime.SpecifyKind(value, DateTimeKind.Unspecified); }
+		if (value.Kind == DateTimeKind.Local) { return DateTime.SpecifyKind(value.ToUniversalTime(), DateTimeKind.Unspecified); }
+		return value;
+	}
 
 	public static string QuoteIdentifier(string identifier) {
 		if (identifier.AsSpan().ContainsAny(['\'', '\"', ' ', ';', '$'])) {

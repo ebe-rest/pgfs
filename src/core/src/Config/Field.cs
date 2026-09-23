@@ -47,7 +47,10 @@ public abstract record Field
 	/// <summary>The persistence target. <see cref="SaveTarget.None"/> means it is never saved.</summary>
 	public required SaveTarget SaveTo { get; init; }
 
-	/// <summary>Description text (for auto-generated help / TOML comments).</summary>
+	/// <summary>How this item is treated by a configuration reload while running (Live / NextMount / Format). The default is the conservative NextMount.</summary>
+	public ReloadPolicy Reload { get; init; } = ReloadPolicy.NextMount;
+
+	/// <summary>The description (for generating help and for TOML comments).</summary>
 	public string Comment { get; init; } = "";
 
 	/// <summary>
@@ -89,6 +92,12 @@ public abstract record Field
 	/// secret, or a default not worth displaying). Stringified via the value type's <see cref="Field{T}.Format"/>.
 	/// </summary>
 	internal abstract string? HelpDefaultRaw();
+
+	/// <summary>Returns the default value in its raw representation (unmasked). Used for the <c>config list</c> / <c>config get</c> display.</summary>
+	public abstract string FormatDefaultRaw();
+
+	/// <summary>Parses a raw representation and turns it into a JSON literal. Used when <see cref="ConfigStore.SaveRaw"/> writes to pgfs_settings.</summary>
+	internal abstract string FormatJsonFromRaw(string raw);
 }
 
 /// <summary>
@@ -133,6 +142,16 @@ public abstract record Field<T> : Field
 	internal virtual string FormatJson(T value) {
 		return System.Text.Json.JsonSerializer.Serialize(this.Format(value));
 	}
+
+	/// <summary>The raw representation (unmasked) of <see cref="DefaultFn"/> put through <see cref="Format"/>.</summary>
+	public override string FormatDefaultRaw() {
+		return this.Format(this.DefaultFn());
+	}
+
+	/// <summary>Puts a raw representation through <see cref="Parse"/> then <see cref="FormatJson"/> to make a JSONB literal.</summary>
+	internal override string FormatJsonFromRaw(string raw) {
+		return this.FormatJson(this.Parse(raw));
+	}
 }
 
 /// <summary>Handles a string as-is. No encoding or other processing.</summary>
@@ -140,6 +159,29 @@ public sealed record StringField : Field<string>
 {
 	public override bool IsBool { get { return false; } }
 	public override string Parse(string raw) { return raw; }
+	public override string Format(string value) { return value; }
+}
+
+/// <summary>
+/// A string with the permitted values enumerated. **<see cref="Parse"/> turns anything outside them into an
+/// exception**, so the validation happens in one place no matter which entrance it came through - CLI,
+/// setting file or DB (checking it on the applying side would make it possible to create a setting that
+/// "goes into the DB but falls over at mount time"). The comparison is case-insensitive.
+/// </summary>
+public sealed record EnumField : Field<string>
+{
+	/// <summary>The permitted values. Write them in lower case (the parse ignores case).</summary>
+	public required string[] Allowed { get; init; }
+
+	public override bool IsBool { get { return false; } }
+
+	public override string Parse(string raw) {
+		foreach (var candidate in this.Allowed) {
+			if (string.Equals(raw, candidate, System.StringComparison.OrdinalIgnoreCase)) { return candidate; }
+		}
+		throw new System.FormatException($"{this.Scope}.{this.Key}: '{raw}' cannot be used (usable values: {string.Join(" / ", this.Allowed)})");
+	}
+
 	public override string Format(string value) { return value; }
 }
 
@@ -196,15 +238,18 @@ public sealed record StringListField : Field<System.Collections.Generic.List<str
 
 /// <summary>
 /// For a PostgreSQL connection string (<see cref="NpgsqlConnectionStringBuilder"/>). Both the kv form (`Host=...;Port=...`)
-/// and the URL form (`postgresql://user@host/db`) are passed to the <see cref="NpgsqlConnectionStringBuilder"/> ctor
-/// (Npgsql 9.x interprets both). Format adopts the kv canonical form returned by
-/// <see cref="NpgsqlConnectionStringBuilder.ConnectionString"/>, so a value entered as a URL round-trips asymmetrically
-/// and is written out as kv (when persisting to TOML / DB it is unified to the kv form).
+/// and the URL form (`postgresql://user@host/db`) are accepted. **The URL form is converted to kv by
+/// <see cref="PostgresUri"/>** - Npgsql does not interpret URLs, so handing it straight to the ctor as before failed with
+/// `Format of the initialization string does not conform to specification` and **a mount written with a URL did not start**.
+/// Format adopts the kv canonical form returned by <see cref="NpgsqlConnectionStringBuilder.ConnectionString"/>, so a value
+/// entered as a URL round-trips asymmetrically and is written out as kv (when persisting to TOML / DB it is unified to the
+/// kv form).
 /// </summary>
 public sealed record ConnectionField : Field<NpgsqlConnectionStringBuilder>
 {
 	public override bool IsBool { get { return false; } }
 	public override NpgsqlConnectionStringBuilder Parse(string raw) {
+		if (PostgresUri.IsUri(raw)) { return PostgresUri.Parse(raw); }
 		return new NpgsqlConnectionStringBuilder(raw);
 	}
 	public override string Format(NpgsqlConnectionStringBuilder value) {
@@ -217,8 +262,8 @@ public sealed record ConnectionField : Field<NpgsqlConnectionStringBuilder>
 }
 
 /// <summary>
-/// For <see cref="Pgfs.Core.Logging.Level.Enum"/>. <see cref="Pgfs.Core.Logging.Level.Parse(string)"/> already does
-/// case-insensitive + first-character matching, so we delegate to it.
+/// For <see cref="Pgfs.Core.Logging.Level.Enum"/>. <see cref="Pgfs.Core.Logging.Level.Parse(string)"/>
+/// already handles case-insensitivity and matching on the first character alone, so this delegates to it.
 /// </summary>
 public sealed record LogLevelField : Field<Pgfs.Core.Logging.Level.Enum>
 {
@@ -232,11 +277,11 @@ public sealed record LogLevelField : Field<Pgfs.Core.Logging.Level.Enum>
 }
 
 /// <summary>
-/// For <see cref="Pgfs.Core.Models.SettingLoggingOutput"/>. String representations:
+/// For <see cref="Pgfs.Core.Models.SettingLoggingOutput"/>. The string representations:
 /// <list type="bullet">
-///   <item><c>"stdout"</c> / <c>"stderr"</c> / <c>"none"</c> → a single <see cref="Pgfs.Core.Models.SettingLoggingKind.Enum"/></item>
-///   <item><c>"&lt;cycle&gt;:&lt;directory&gt;/&lt;pattern&gt;"</c> (e.g. <c>"daily:/var/log/pgfs/pgfs-*.log"</c>) → the File form</item>
-///   <item>falls back to <see cref="Pgfs.Core.Models.SettingLoggingKind.Enum.Stderr"/> if it cannot be interpreted</item>
+///   <item><c>"stdout"</c> / <c>"stderr"</c> / <c>"none"</c> -> a single <see cref="Pgfs.Core.Models.SettingLoggingKind.Enum"/></item>
+///   <item><c>"&lt;cycle&gt;:&lt;directory&gt;/&lt;pattern&gt;"</c> (for example <c>"daily:/var/log/pgfs/pgfs-*.log"</c>) -> the File form</item>
+///   <item>falls back to <see cref="Pgfs.Core.Models.SettingLoggingKind.Enum.Stderr"/> when it cannot be interpreted</item>
 /// </list>
 /// Format converts back to the above forms. Composing multiple Kinds (Stdout | File, etc.) is out of range for the
 /// string representation; currently Format checks File first → Stdout → Stderr → None and writes out only one (= round-trip loss).

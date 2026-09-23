@@ -1,4 +1,4 @@
-﻿namespace Pgfs.Core.Models;
+namespace Pgfs.Core.Models;
 
 public class Data : Base
 {

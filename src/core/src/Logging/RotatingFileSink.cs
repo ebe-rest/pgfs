@@ -64,7 +64,10 @@ internal sealed class RotatingFileSink
 			SettingLoggingCycle.Enum.Monthly => now.ToString("yyyyMM"),
 			_ => "",
 		};
-		var fileName = this.pattern.Contains('*') ? this.pattern.Replace("*", stamp) : this.pattern;
+		var fileName = this.pattern.Contains('*') switch {
+			true  => this.pattern.Replace("*", stamp),
+			false => this.pattern,
+		};
 		return Path.Join(this.directory, fileName);
 	}
 

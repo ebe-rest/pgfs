@@ -11,8 +11,6 @@ tab_width = 4
 trim_trailing_whitespace = true
 
 # Microsoft .NET properties
-csharp_new_line_before_members_in_object_initializers = false
-csharp_prefer_braces = true:warning
 # Stop the tooling from suggesting ternaries (coding-style.md rule 6). **This does not detect a
 # ternary that someone wrote** - IDE0045 / IDE0046 are the opposite rule ("fold this if into a
 # ternary"), so turning them off only stops the tooling from introducing one. Rejecting a
@@ -20,6 +18,8 @@ csharp_prefer_braces = true:warning
 # EnforceCodeStyleInBuild=true, a hand-written ternary is reported zero times).
 dotnet_style_prefer_conditional_expression_over_assignment = false:suggestion
 dotnet_style_prefer_conditional_expression_over_return = false:suggestion
+csharp_new_line_before_members_in_object_initializers = false
+csharp_prefer_braces = true:warning
 csharp_preferred_modifier_order = private, public, abstract, protected, file, new, internal, static, virtual, sealed, override, readonly, extern, unsafe, volatile, async, required:none
 csharp_preserve_single_line_blocks = true
 dotnet_style_qualification_for_event = true:suggestion

@@ -22,7 +22,7 @@ public static class Logger
 
 	public static void Log(Level.Enum logLevel, params object?[] messages) => Logger.Default.Log(logLevel, messages!);
 
-	/// <summary>Process lifecycle markers (always stderr). Backed by <see cref="Core.Logging.Logger.Lifecycle"/>.</summary>
+	/// <summary>The process liveness marker (always on stderr). The body is <see cref="Core.Logging.Logger.Lifecycle"/>.</summary>
 	public static void Lifecycle(params object?[] messages) => Core.Logging.Logger.Lifecycle(messages);
 
 	public static void Trace(params object?[] messages) => Logger.Log(Level.Trace, messages);
@@ -32,7 +32,11 @@ public static class Logger
 	public static void Error(params object?[] messages) => Logger.Log(Level.Error, messages);
 	public static void Critical(params object?[] messages) => Logger.Log(Level.Critical, messages);
 
-	public static void Debug(string message, params object[] args) => Logger.Log(Level.Debug, message, args);
+	// **Spread it as `[message, ..args]`.** Writing `Logger.Log(Level.Debug, message, args)` hands
+	// `[message, args]` to `Log(Level.Enum, params object?[])`, so args stays an array in one element and comes
+	// out as nothing but `System.Object[]` (found while diagnosing cross-client behaviour;
+	// `Logger.Debug("remote change: inode=", n, ...)` is swallowed by that overload).
+	public static void Debug(string message, params object[] args) => Logger.Log(Level.Debug, [message, ..args]);
 	public static void Info(string message, params object[] args) => Logger.Log(Level.Information, [message, ..args]);
 	public static void Warn(string message, params object[] args) => Logger.Log(Level.Warning, [message, ..args]);
 	public static void Error(string message, params object[] args) => Logger.Log(Level.Error, [message, ..args]);
