@@ -1,0 +1,151 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="Pgfs.Gui.MainWindow"
+        Width="1100" Height="720"
+        Title="pgfs — runtime control plane">
+
+	<DockPanel>
+
+		<!-- ===== the connection bar ===== -->
+		<Border DockPanel.Dock="Top" Padding="8" BorderBrush="#333" BorderThickness="0,0,0,1">
+			<StackPanel Orientation="Horizontal" Spacing="6">
+				<TextBlock Text="connection" VerticalAlignment="Center" />
+				<TextBox Text="{Binding Connection}" Width="420" PlaceholderText="Host=...;Port=5432;Username=pgfs;Password=...;Database=pgfs" />
+				<TextBlock Text="schema" VerticalAlignment="Center" />
+				<TextBox Text="{Binding Schema}" Width="90" />
+				<TextBlock Text="prefix" VerticalAlignment="Center" />
+				<TextBox Text="{Binding Prefix}" Width="80" />
+				<Button Content="Connect" Command="{Binding ConnectCommand}" />
+				<Button Content="Refresh" Command="{Binding RefreshCommand}" />
+			</StackPanel>
+		</Border>
+
+		<!-- ===== the status line ===== -->
+		<Border DockPanel.Dock="Bottom" Padding="8,4" BorderBrush="#333" BorderThickness="0,1,0,0">
+			<TextBlock Text="{Binding StatusMessage}" Foreground="#bbb" />
+		</Border>
+
+		<!-- ===== the body: left (Mounts + Filesystem) / right (Process detail + Config) ===== -->
+		<Grid ColumnDefinitions="*,8,440" Margin="8">
+
+			<!-- left -->
+			<Grid Grid.Column="0" RowDefinitions="Auto,2*,Auto,*">
+				<TextBlock Grid.Row="0" Text="Mounts (Layer 1)" FontWeight="Bold" Margin="0,0,0,4" />
+				<Border Grid.Row="1" BorderBrush="#333" BorderThickness="1" Margin="0,0,0,8">
+					<DockPanel>
+						<Grid DockPanel.Dock="Top" ColumnDefinitions="130,55,55,*,75,75,45"
+						      Background="#222" Margin="2,2,2,0">
+							<TextBlock Grid.Column="0" Text="HOST" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="1" Text="PID" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="2" Text="MODE" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="3" Text="MOUNTPOINT" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="4" Text="UPTIME" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="5" Text="HB-AGE" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="6" Text="LIVE" FontWeight="Bold" Margin="2" />
+						</Grid>
+						<ListBox ItemsSource="{Binding Mounts}" SelectedItem="{Binding SelectedMount, Mode=TwoWay}">
+							<ListBox.Styles>
+								<Style Selector="ListBoxItem">
+									<Setter Property="Padding" Value="2,1" />
+									<Setter Property="MinHeight" Value="0" />
+								</Style>
+							</ListBox.Styles>
+							<ListBox.ItemTemplate>
+								<DataTemplate>
+									<Grid ColumnDefinitions="130,55,55,*,75,75,45">
+										<TextBlock Grid.Column="0" Text="{Binding Host}" Margin="2" />
+										<TextBlock Grid.Column="1" Text="{Binding Pid}" Margin="2" />
+										<TextBlock Grid.Column="2" Text="{Binding Mode}" Margin="2" />
+										<TextBlock Grid.Column="3" Text="{Binding Mountpoint}" Margin="2" TextTrimming="CharacterEllipsis" />
+										<TextBlock Grid.Column="4" Text="{Binding Uptime}" Margin="2" />
+										<TextBlock Grid.Column="5" Text="{Binding HeartbeatAge}" Margin="2" />
+										<TextBlock Grid.Column="6" Text="{Binding Live}" Margin="2" />
+									</Grid>
+								</DataTemplate>
+							</ListBox.ItemTemplate>
+						</ListBox>
+					</DockPanel>
+				</Border>
+
+				<TextBlock Grid.Row="2" Text="Filesystem (Layer 2)" FontWeight="Bold" Margin="0,0,0,4" />
+				<Border Grid.Row="3" BorderBrush="#333" BorderThickness="1">
+					<ScrollViewer>
+						<Grid ColumnDefinitions="120,*" Margin="6"
+						      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+							<TextBlock Grid.Row="0" Grid.Column="0" Text="schema / prefix" Foreground="#999" />
+							<StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="2">
+								<TextBlock Text="{Binding Fs.Schema}" /><TextBlock Text=" / " /><TextBlock Text="{Binding Fs.Prefix}" />
+							</StackPanel>
+							<TextBlock Grid.Row="1" Grid.Column="0" Text="version / label" Foreground="#999" />
+							<StackPanel Grid.Row="1" Grid.Column="1" Orientation="Horizontal" Spacing="2">
+								<TextBlock Text="{Binding Fs.Version}" /><TextBlock Text="  (" /><TextBlock Text="{Binding Fs.VolumeLabel}" /><TextBlock Text=")" />
+							</StackPanel>
+							<TextBlock Grid.Row="2" Grid.Column="0" Text="inodes" Foreground="#999" />
+							<TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Fs.InodeCount}" />
+							<TextBlock Grid.Row="3" Grid.Column="0" Text="files" Foreground="#999" />
+							<TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Fs.FileCount}" />
+							<TextBlock Grid.Row="4" Grid.Column="0" Text="chunks" Foreground="#999" />
+							<TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Fs.ChunkCount}" />
+							<TextBlock Grid.Row="5" Grid.Column="0" Text="used bytes" Foreground="#999" />
+							<TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Fs.UsedBytes}" />
+							<TextBlock Grid.Row="6" Grid.Column="0" Text="cluster_size" Foreground="#999" />
+							<TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Fs.ClusterSize}" />
+							<TextBlock Grid.Row="7" Grid.Column="0" Text="max_file_size" Foreground="#999" />
+							<TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Fs.MaxFileSize}" />
+							<TextBlock Grid.Row="8" Grid.Column="0" Text="audit" Foreground="#999" />
+							<TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding Fs.AuditEnabled}" />
+							<TextBlock Grid.Row="9" Grid.Column="0" Text="citus" Foreground="#999" />
+							<StackPanel Grid.Row="9" Grid.Column="1" Orientation="Horizontal" Spacing="2">
+								<TextBlock Text="{Binding Fs.Citus}" /><TextBlock Text="  nodes=" /><TextBlock Text="{Binding Fs.CitusNodeCount}" />
+							</StackPanel>
+						</Grid>
+					</ScrollViewer>
+				</Border>
+			</Grid>
+
+			<GridSplitter Grid.Column="1" Background="#333" ResizeDirection="Columns" />
+
+			<!-- right -->
+			<Grid Grid.Column="2" RowDefinitions="Auto,*,Auto,*">
+				<TextBlock Grid.Row="0" Text="Process detail (Layer 3)" FontWeight="Bold" Margin="0,0,0,4" />
+				<Border Grid.Row="1" BorderBrush="#333" BorderThickness="1" Margin="0,0,0,8">
+					<ScrollViewer>
+						<SelectableTextBlock Text="{Binding SelectedMount.Detail}"
+						                     FontFamily="Cascadia Mono,Consolas,Menlo,monospace"
+						                     Margin="6" TextWrapping="NoWrap" />
+					</ScrollViewer>
+				</Border>
+
+				<TextBlock Grid.Row="2" Text="Config" FontWeight="Bold" Margin="0,0,0,4" />
+				<Border Grid.Row="3" BorderBrush="#333" BorderThickness="1">
+					<DockPanel>
+						<Grid DockPanel.Dock="Top" ColumnDefinitions="*,110,70,90" Background="#222" Margin="2,2,2,0">
+							<TextBlock Grid.Column="0" Text="KEY" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="1" Text="VALUE" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="2" Text="SRC" FontWeight="Bold" Margin="2" />
+							<TextBlock Grid.Column="3" Text="RELOAD" FontWeight="Bold" Margin="2" />
+						</Grid>
+						<ListBox ItemsSource="{Binding ConfigItems}">
+							<ListBox.Styles>
+								<Style Selector="ListBoxItem">
+									<Setter Property="Padding" Value="2,1" />
+									<Setter Property="MinHeight" Value="0" />
+								</Style>
+							</ListBox.Styles>
+							<ListBox.ItemTemplate>
+								<DataTemplate>
+									<Grid ColumnDefinitions="*,110,70,90">
+										<TextBlock Grid.Column="0" Text="{Binding FullKey}" Margin="2" />
+										<TextBlock Grid.Column="1" Text="{Binding Value}" Margin="2" TextTrimming="CharacterEllipsis" />
+										<TextBlock Grid.Column="2" Text="{Binding Source}" Margin="2" />
+										<TextBlock Grid.Column="3" Text="{Binding Reload}" Margin="2" />
+									</Grid>
+								</DataTemplate>
+							</ListBox.ItemTemplate>
+						</ListBox>
+					</DockPanel>
+				</Border>
+			</Grid>
+		</Grid>
+	</DockPanel>
+</Window>

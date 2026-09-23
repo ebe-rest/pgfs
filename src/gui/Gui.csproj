@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<OutputType>WinExe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<RootNamespace>Pgfs.Gui</RootNamespace>
+		<!--
+			A deliberate exception to the naming convention ({role}.pgfs <-> Pgfs.{role}). The operations GUI
+			is an admin tool, so like pgfsctl it gets a single word, pgfsgui
+			(docs/design/runtime-control-plane.md, the GUI section).
+			It references Core alone (no FUSE / Dokan dependency) and runs on all three operating systems.
+		-->
+		<AssemblyName>pgfsgui</AssemblyName>
+		<BaseOutputPath>$(MSBuildThisFileDirectory)..\..\bin\</BaseOutputPath>
+		<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+		<BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+		<!-- The MVP uses reflection bindings (no x:DataType needed, which keeps the XAML short). Moving to compiled bindings is a hardening candidate. -->
+		<AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+	</PropertyGroup>
+
+	<!-- The dependencies are kept minimal: Avalonia itself + the Desktop backend + the Fluent theme. MVVM is plain INotifyPropertyChanged. -->
+	<ItemGroup>
+		<PackageReference Include="Avalonia" Version="12.0.5" />
+		<PackageReference Include="Avalonia.Desktop" Version="12.0.5" />
+		<PackageReference Include="Avalonia.Themes.Fluent" Version="12.0.5" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\core\Core.csproj" />
+	</ItemGroup>
+
+</Project>
