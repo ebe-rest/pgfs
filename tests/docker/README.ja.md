@@ -12,9 +12,12 @@
 
 | 要素 | 役割 |
 |---|---|
-| [Dockerfile.mount](Dockerfile.mount) | 多段ビルド。SDK で `mount.pgfs`/`mkfs.pgfs` を self-contained publish → debian-slim + fuse3 + xattr/acl/psql ツールに COPY |
+| [Dockerfile.mount](Dockerfile.mount) | 多段ビルド。SDK で `mount.pgfs`/`mkfs.pgfs`/`pgfsctl` を self-contained publish → debian-slim + fuse3 + xattr/acl/psql ツールに COPY |
 | [compose.yml](compose.yml) | `coord` (PostgreSQL) + `mount` (FUSE コンテナ)。mount は `SYS_ADMIN` / `/dev/fuse` / `apparmor:unconfined` 付き |
-| [run.sh](run.sh) | up → mkfs → FUSE マウント → [tests/linux/e2e.sh](../linux/e2e.sh) をコンテナ内実行 → down |
+| [run.sh](run.sh) | up → mkfs → FUSE マウント → [tests/linux/e2e.sh](../linux/e2e.sh) をコンテナ内実行 → down。mount 後に `{prefix}mounts` 登録/解除もアサート (Phase 2 / 2b) |
+| [control_plane.sh](control_plane.sh) | Phase 2 コントロールプレーン (live reload) の機能テスト。notify ON で mount → psql から reload NOTIFY → `audit.enabled` が走行中に切り替わるのを観測 ([docs/design/runtime-control-plane.md](../../docs/design/runtime-control-plane.md))。 |
+| [control_plane_ctl.sh](control_plane_ctl.sh) | Phase 3 / 3c の機能テスト。**notify OFF** で mount → `pgfsctl config set audit.enabled true` (Db+Live) で監査 0→1、`pgfsctl config set logging.level trace` (File+Live) のインライン set 適用を観測。制御 LISTEN が notify OFF でも常時 ON (P3-0) であることを直接確認 ([docs/design/runtime-control-plane.md §Phase 3](../../docs/design/runtime-control-plane.md))。 |
+| [status.sh](status.sh) | Phase 4 / 4c+4d の機能テスト。mount 中に `pgfsctl status` が Layer 1 (稼働行 live/fuse・unmount で deregister) + Layer 2 (inode/used_bytes/chunk 集計) + Layer 3 (read で content キャッシュ温め → ping NOTIFY で snapshot 即更新 → content chunks / inode hits / 実効 config / notify) を返すのを観測 ([docs/design/runtime-control-plane.md §Phase 4](../../docs/design/runtime-control-plane.md))。 |
 
 `tests/linux/` は **read-only bind mount** でコンテナに持ち込むので、テスト編集時にイメージ再ビルドは不要。`mount.pgfs`/`mkfs.pgfs` 本体を変えたときだけ再ビルド (`run.sh` は既定で `--build`)。
 
@@ -23,8 +26,8 @@
 ## 実行
 
 ```bash
-# 前提: docker + docker compose v2
-bash tests/docker/run.sh                 # 全フロー (build → e2e 35/35 → teardown)
+# 前提: docker + docker compose v2 (libfuse バインディングは Pgfs.Fuse に内製化済みのため submodule 不要)
+bash tests/docker/run.sh                 # 全フロー (build → 現行 Linux e2e → teardown)
 TEST_FILTER=xattr bash tests/docker/run.sh
 KEEP_UP=1 bash tests/docker/run.sh       # 失敗調査用にコンテナを残す
 NO_BUILD=1 bash tests/docker/run.sh      # 既存 image を使い回す
@@ -61,3 +64,4 @@ docker compose -p pgfs-e2e down -v       # 掃除
 
 - **e2e はコンテナ内で実行**: FUSE マウントをホストに見せる方式 (mount namespace 伝播) は脆いので、`e2e.sh` を mount コンテナ内で走らせ、マウントポイントもコンテナ内に置く。
 - **fallback テスト**: `test_fallback_uname_gname` は DB に直接 INSERT する。`run.sh` が `PGFS_TEST_PG_EXEC="psql -h coord ..."` を渡すことで、ssh pgsql_server 経路ではなく compose network 越しの psql を使う。
+- **submodule 不要** (v0.2.0〜): libfuse バインディングは `Pgfs.Fuse` (`src/fuse/`) に内製化済み。build stage は `src/` 一式を COPY して `src/mount`/`src/mkfs` を publish するだけで、外部 submodule は要らない。

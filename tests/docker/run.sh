@@ -12,14 +12,21 @@
 #   KEEP_UP=1 bash tests/docker/run.sh        # do not tear down (for failure investigation)
 #   NO_BUILD=1 bash tests/docker/run.sh       # reuse the existing image (do not rebuild)
 #
-# Main environment variables (excerpt; all are ${VAR:-default}):
-#   PGFS_DOCKER_PG_IMAGE   coord's PG image (default postgres:17)
-#   PGFS_DOCKER_SDK_IMAGE  the build stage's SDK image (default mcr.../sdk:10.0)
-#   SUPER_USER / SUPER_PASSWORD       postgres superuser
-#   PGFS_USER / PGFS_PASSWORD / PGFS_DB   pgfs role / DB
-#   PGFS_SCHEMA            schema (default pgfs; the fallback test looks up pgfs.pgfs_inode)
-#   MOUNT_POINT            in-container mount point (default /mnt/pgfs)
-#   TEST_FILTER            e2e test-name filter
+# The main environment variables (an excerpt; all of them are ${VAR:-default}):
+#   PGFS_DOCKER_PG_IMAGE   the PG image for coord (default postgres:17)
+#   PGFS_DOCKER_SDK_IMAGE  the SDK image for the build stage (default mcr.../sdk:10.0)
+#   SUPER_USER / SUPER_PASSWORD       the postgres superuser
+#   PGFS_USER / PGFS_PASSWORD / PGFS_DB   the pgfs role / DB
+#   PGFS_SCHEMA            the schema (default pgfs. The fallback test looks up pgfs.pgfs_inode)
+#   MOUNT_POINT            the mount target inside the container (default /mnt/pgfs)
+#   TEST_FILTER            the test-name filter for e2e
+#   CACHE_MAX_ENTRIES      the cap on the mount's inode metadata cache. The default (1024) when unset.
+#                          A small value (8, say) makes the InodeCache's LRU eviction fire constantly, which
+#                          is useful for confirming that "eviction does not break e2e"
+#                          (docs/design/runtime-control-plane.md, the cache section).
+#   CACHE_DATA_MAX_BYTES   the byte budget of the mount's body (data_chunk) read cache. The default (64MiB) when unset.
+#                          A small value (4096, say) makes the ContentCache's LRU eviction and generation
+#                          invalidation fire, which is useful for confirming that "the content cache does not break e2e".
 #
 # Windows e2e is out of scope for docker because Dokan is a kernel driver. See docs/tests.md.
 
@@ -38,6 +45,8 @@ MOUNT_POINT="${MOUNT_POINT:-/mnt/pgfs}"
 TEST_FILTER="${TEST_FILTER:-}"
 KEEP_UP="${KEEP_UP:-0}"
 NO_BUILD="${NO_BUILD:-0}"
+CACHE_MAX_ENTRIES="${CACHE_MAX_ENTRIES:-}"
+CACHE_DATA_MAX_BYTES="${CACHE_DATA_MAX_BYTES:-}"
 
 log() { echo "[$(date +%H:%M:%S)] $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
@@ -98,9 +107,18 @@ printf '%s\n' \
 
 # === mount (background in container) ===
 # Use --foreground (pgfs's -f is the short form of setting.file, not foreground).
-# exec -d detaches, so it stays resident while running in the foreground.
-log "mount.pgfs --foreground (in-container background)"
-dc exec -d mount sh -c "mount.pgfs --setting-file /tmp/pgfs.toml --mount-point '$MOUNT_POINT' --foreground > /tmp/mount.log 2>&1"
+# exec -d detaches, so it stays resident in the foreground.
+CACHE_OPT=""
+if [ -n "$CACHE_MAX_ENTRIES" ]; then
+    CACHE_OPT="$CACHE_OPT --cache-max-entries $CACHE_MAX_ENTRIES"
+    log "cache_max_entries=$CACHE_MAX_ENTRIES (stressing the InodeCache LRU eviction)"
+fi
+if [ -n "$CACHE_DATA_MAX_BYTES" ]; then
+    CACHE_OPT="$CACHE_OPT --cache-data-max-bytes $CACHE_DATA_MAX_BYTES"
+    log "cache_data_max_bytes=$CACHE_DATA_MAX_BYTES (stressing the ContentCache LRU eviction)"
+fi
+log "mount.pgfs --foreground (in the background inside the container)"
+dc exec -d mount sh -c "mount.pgfs --setting-file /tmp/pgfs.toml --mount-point '$MOUNT_POINT' $CACHE_OPT --foreground > /tmp/mount.log 2>&1"
 
 log "waiting for the mountpoint to become ready (max 30s)"
 ready=no
@@ -114,6 +132,15 @@ if [ "$ready" != "yes" ]; then
 fi
 log "  mounted (${i}s)"
 
+# === 2b: check the {prefix}mounts registry registration (docs/design/runtime-control-plane.md) ===
+REG=$(dexec sh -c "PGPASSWORD=$PGFS_PASSWORD psql -h coord -U $PGFS_USER -d $PGFS_DB -tA -c 'SELECT count(*) FROM $PGFS_SCHEMA.pgfs_mounts'" 2>/dev/null | tr -d '[:space:]')
+if [ "$REG" = "1" ]; then
+    log "  registry OK: 1 row registered in $PGFS_SCHEMA.pgfs_mounts"
+else
+    dexec sh -c "tail -20 /tmp/mount.log" || true
+    die "registry check failed: pgfs_mounts row count='$REG' (expected 1). The registration is not working"
+fi
+
 # === e2e (in mount container) ===
 log "running tests/linux/e2e.sh in the mount container (filter='${TEST_FILTER}')"
 PG_EXEC="PGPASSWORD=$PGFS_PASSWORD psql -h coord -U $PGFS_USER -d $PGFS_DB -tA -q"
@@ -124,6 +151,9 @@ dexec env TEST_FILTER="$TEST_FILTER" PGFS_TEST_PG_EXEC="$PG_EXEC" \
 # === unmount ===
 log "unmount"
 dexec sh -c "fusermount3 -u '$MOUNT_POINT' 2>/dev/null || true"
+sleep 1
+DEREG=$(dexec sh -c "PGPASSWORD=$PGFS_PASSWORD psql -h coord -U $PGFS_USER -d $PGFS_DB -tA -c 'SELECT count(*) FROM $PGFS_SCHEMA.pgfs_mounts'" 2>/dev/null | tr -d '[:space:]')
+log "  registry after unmount: pgfs_mounts row count=$DEREG (expected 0 = deregistered)"
 
 if [ "$rc" -eq 0 ]; then
     log "RESULT: Linux e2e PASSED (full docker, single PG)"

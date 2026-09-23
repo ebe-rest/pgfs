@@ -276,6 +276,27 @@ test_rename_into_subdir() {
 	pass
 }
 
+# rename-over-existing (the tmp+rename pattern of an editor save or of rsync).
+# Deleting what is being replaced and the rename happen in the same tx (made atomic earlier).
+test_rename_replace_existing() {
+	local src="$TEST_ROOT/t32_rn_src.txt"
+	local dst="$TEST_ROOT/t32_rn_dst.txt"
+	local link="$TEST_ROOT/t32_rn_link.txt"
+	echo "new content" > "$src"
+	echo "old content" > "$dst"
+	ln "$dst" "$link"                     # put a hardlink on what is being replaced (to check the nlink path)
+	mv "$src" "$dst" || { fail "mv over existing"; return; }
+	assert_absent "$src" || return
+	local got=$(cat "$dst")
+	assert_eq "new content" "$got" "content after replace" || return
+	# The hardlink sibling survives with the old data, and nlink goes back to 1
+	local lgot=$(cat "$link")
+	assert_eq "old content" "$lgot" "hardlink sibling keeps old data" || return
+	local nlink=$(stat -c '%h' "$link")
+	assert_eq "1" "$nlink" "sibling nlink after replace" || return
+	pass
+}
+
 # --- permissions ---
 
 test_chmod() {
@@ -377,6 +398,33 @@ test_hardlink_after_rm() {
 	pass
 }
 
+test_open_unlink_read_still_works() {
+	# **A net that pins the current behaviour down** (the premise of handle-context stage C; docs/design/handle-context.md).
+	#
+	# POSIX says "even after an unlink, an open fd can still read and write". pgfs **does not implement this
+	# itself** - it works because, with `fuse_config.hard_remove = 0` (the default), libfuse
+	# **turns the unlink of a still-open file into a rename to `.fuse_hidden*`**.
+	#
+	# ⚠ **Setting `hard_remove = 1` makes this test fail on the spot** (measured). Do not set it until
+	#   stage C brings in liveness management (a reference count plus DeletePending).
+	#   **This test exists so that it is noticed when that happens.**
+	#
+	# **The matching "after close, `.fuse_hidden*` is gone" is deliberately not a test.**
+	# The cleanup runs not at close but **when the kernel FORGETs the inode**, and the kernel decides when
+	# that is (measured: both "gone within a second" and "still there after 5 seconds" happened).
+	# **Waiting on something with no bound and asserting on it counts a merely slow run as a broken one.**
+	local f="$TEST_ROOT/t65_open_unlink.txt"
+	echo "STILL_HERE" > "$f"
+	exec 9< "$f" || { fail "open"; return; }
+	rm "$f" || { fail "rm"; exec 9<&-; return; }
+	assert_absent "$f" || { exec 9<&-; return; }
+	local content
+	content=$(cat <&9)
+	exec 9<&-
+	assert_eq "STILL_HERE" "$content" "content read through fd opened before unlink" || return
+	pass
+}
+
 test_hardlink_through_subdir() {
 	local sub="$TEST_ROOT/t62_subdir"
 	mkdir "$sub"
@@ -386,6 +434,127 @@ test_hardlink_through_subdir() {
 	ln "$a" "$b" || { fail "ln across subdir"; return; }
 	local content=$(cat "$b")
 	assert_eq "shared" "$content" "sub content via hardlink" || return
+	pass
+}
+
+# --- the data_id lifecycle (docs/design/data-id-lifecycle.md) ---
+#
+# A hardlink is expressed as "several inodes pointing at the same data_id". If the data_id is released and
+# re-reserved by a per-link operation, the sharing quietly breaks and the siblings are left with lost data
+# and a dangling reference. What follows is the regression net for that.
+
+test_truncate_keeps_hardlink_shared() {
+	local a="$TEST_ROOT/t63_dl_a.txt"
+	local b="$TEST_ROOT/t63_dl_b.txt"
+	echo "A" > "$a"
+	ln "$a" "$b" || { fail "ln"; return; }
+	# `>` implies O_TRUNC, so it goes through the truncate path. The body is shared, so the new content must be visible from a as well.
+	echo "B" > "$b"
+	local got=$(cat "$a")
+	assert_eq "B" "$got" "content via other link after O_TRUNC rewrite" || return
+	local na=$(stat -c '%h' "$a")
+	local nb=$(stat -c '%h' "$b")
+	assert_eq "2" "$na" "nlink(a) stays 2" || return
+	assert_eq "2" "$nb" "nlink(b) stays 2" || return
+	local ina=$(stat -c '%i' "$a")
+	local inb=$(stat -c '%i' "$b")
+	assert_eq "$ina" "$inb" "inode still shared" || return
+	pass
+}
+
+test_truncate_zero_updates_all_links() {
+	local a="$TEST_ROOT/t64_dl_a.txt"
+	local b="$TEST_ROOT/t64_dl_b.txt"
+	echo "HELLO" > "$a"
+	ln "$a" "$b" || { fail "ln"; return; }
+	truncate -s 0 "$a" || { fail "truncate"; return; }
+	local sa=$(stat -c '%s' "$a")
+	local sb=$(stat -c '%s' "$b")
+	assert_eq "0" "$sa" "size(a) after truncate" || return
+	# Without distributing it, b ends up "size is 6 yet there are no chunks" = cat returns NUL bytes.
+	assert_eq "0" "$sb" "size(b) must follow (a shared body)" || return
+	local got=$(cat "$b")
+	assert_eq "" "$got" "content via other link is empty (not NUL bytes)" || return
+	pass
+}
+
+test_empty_file_hardlink_shares() {
+	local a="$TEST_ROOT/t65_dl_a.txt"
+	local b="$TEST_ROOT/t65_dl_b.txt"
+	: > "$a"
+	ln "$a" "$b" || { fail "ln"; return; }
+	local na=$(stat -c '%h' "$a")
+	local nb=$(stat -c '%h' "$b")
+	assert_eq "2" "$na" "nlink(a) for empty file" || return
+	assert_eq "2" "$nb" "nlink(b) for empty file" || return
+	local ina=$(stat -c '%i' "$a")
+	local inb=$(stat -c '%i' "$b")
+	assert_eq "$ina" "$inb" "inode shared for empty file" || return
+	# Whether the body really is shared (writing through one is visible through the other).
+	echo "shared" > "$a"
+	local got=$(cat "$b")
+	assert_eq "shared" "$got" "content shared after write" || return
+	pass
+}
+
+# **Whether a decimal string is 2^63 or above** (= whether the top bit of `st_ino` is set).
+#
+# **It does not depend on `python3`**. The docker mount container has no python3, and
+# **without it the comparison stays empty behind a `command not found` and a correct FS gets counted as broken**
+# (measured: `test_ino_namespace_split` reported 9223372036854775934 as "not set").
+# **bash arithmetic is signed 64-bit and cannot handle 2^63 or above**, so it compares by **digit count, then
+# lexicographically** (both are digits only, so with the same number of digits lexicographic = numeric order).
+ge_2pow63() {
+	local v="$1"
+	local limit="9223372036854775808"
+	if [ "${#v}" -gt "${#limit}" ]; then return 0; fi
+	if [ "${#v}" -lt "${#limit}" ]; then return 1; fi
+	[ "$(LC_ALL=C; printf '%s\n%s\n' "$v" "$limit" | sort | head -1)" = "$limit" ]
+}
+
+test_ino_namespace_split() {
+	# **A file's and a directory's st_ino must live in separate namespaces.**
+	#
+	#   A file is `data_id | 0x8000_0000_0000_0000` (= the top bit set),
+	#   a directory is `inode.Id` as-is ([FillStat](../../src/fuse/src/FileSystem.cs)).
+	#   **Without the split, the moment some data_id equals some inode.Id
+	#   "a file and a directory share an st_ino"**, and the hardlink detection and the loop detection of
+	#   `find` / `rsync` misbehave.
+	#
+	#   The Windows side uses the same formula (`ByHandleFileInformation.FileIndex`).
+	#   **The same file gets the same value on both operating systems.**
+	local d="$TEST_ROOT/t67_ns"
+	mkdir -p "$d" || { fail "mkdir"; return; }
+	echo "x" > "$d/f.txt"
+	local fino=$(stat -c '%i' "$d/f.txt")
+	local dino=$(stat -c '%i' "$d")
+	# 2^63 = 9223372036854775808
+	if ! ge_2pow63 "$fino"; then
+		fail "the top bit is not set on the file's st_ino ($fino)"
+		return
+	fi
+	if ge_2pow63 "$dino"; then
+		fail "the directory's st_ino is not in the inode space ($dino)"
+		return
+	fi
+	if [ "$fino" = "$dino" ]; then
+		fail "the file and the directory share an st_ino ($fino)"
+		return
+	fi
+	pass
+}
+
+test_ino_stable_across_write() {
+	local f="$TEST_ROOT/t66_dl_ino.txt"
+	: > "$f"
+	local before=$(stat -c '%i' "$f")
+	echo "HELLO" > "$f"
+	local after=$(stat -c '%i' "$f")
+	assert_eq "$before" "$after" "st_ino must not change when content is written" || return
+	truncate -s 0 "$f" || { fail "truncate"; return; }
+	echo "AGAIN" > "$f"
+	local again=$(stat -c '%i' "$f")
+	assert_eq "$before" "$again" "st_ino must not change across truncate + rewrite" || return
 	pass
 }
 
@@ -537,6 +706,234 @@ test_utime_now() {
 	touch "$f"
 	sleep 1
 	touch "$f" || { fail "second touch"; return; }
+	pass
+}
+
+test_timestamp_utc_roundtrip() {
+	# The mtime/ctime the FS sets must be near the current time. The naive TIMESTAMP columns in the database
+	# are stored as UTC and the reading side interprets them as UTC by convention
+	# (docs/design/database.md) - if either becomes local time the value is off by the host's UTC offset
+	# (9 hours under JST), and that is what this detects.
+	# It creates 20 dummies to push it out of the InodeCache, so in the variant with a smaller
+	# cache_max_entries (CACHE_MAX_ENTRIES=8 in docker run.sh) the read-back-from-database path is exercised too.
+	local f="$TEST_ROOT/t82_tz.txt"
+	local before=$(date +%s)
+	echo tz > "$f"
+	local i=0
+	while [ $i -lt 20 ]; do
+		echo pad > "$TEST_ROOT/t82_pad_$i.txt"
+		i=$((i+1))
+	done
+	local m=$(stat -c '%Y' "$f")
+	local c=$(stat -c '%Z' "$f")
+	local after=$(date +%s)
+	local slack=300
+	if [ "$m" -lt $((before - slack)) ] || [ "$m" -gt $((after + slack)) ]; then
+		fail "mtime $m out of [$((before - slack)), $((after + slack))] - the timestamp may be a UTC/local mix-up"
+		return
+	fi
+	if [ "$c" -lt $((before - slack)) ] || [ "$c" -gt $((after + slack)) ]; then
+		fail "ctime $c out of [$((before - slack)), $((after + slack))] - the timestamp may be a UTC/local mix-up"
+		return
+	fi
+	# The explicit-setting (utimensat) path. The DateTime C# hands to the database must be UTC naive as well
+	# (handing it over with Kind=Utc makes Npgsql send it as timestamptz and PG cast it with the session TZ).
+	local want=$(date -d '2026-01-02 03:04:05' +%s)
+	touch -d '2026-01-02 03:04:05' "$f" || { fail "touch -d"; return; }
+	i=0
+	while [ $i -lt 20 ]; do
+		echo pad > "$TEST_ROOT/t82_pad2_$i.txt"
+		i=$((i+1))
+	done
+	local m2=$(stat -c '%Y' "$f")
+	if [ "$m2" != "$want" ]; then
+		fail "explicit mtime $m2 != $want - the timestamp on the utimensat path shifts between storing and reading"
+		return
+	fi
+	pass
+}
+
+test_sparse_du_blocks() {
+	# st_blocks (= the value du looks at) must come from "the number of bytes actually occupied".
+	# Deriving it from st_size would report hundreds of times the real thing for a sparse file
+	# (docs/design/database.md, on occupied bytes and st_blocks). The default chunk size is 1MiB.
+	local f="$TEST_ROOT/t84_sparse.img"
+	truncate -s 67108864 "$f" || { fail "truncate -s 64MiB"; return; }
+	local app=$(du -B1 --apparent-size "$f" | cut -f1)
+	local occ=$(du -B1 "$f" | cut -f1)
+	if [ "$app" -lt 67108864 ]; then
+		fail "the apparent size is $app (should be at least 64MiB)"
+		return
+	fi
+	if [ "$occ" -ge 1048576 ]; then
+		fail "du of a file that is nothing but holes is $occ (should occupy 0 = it is coming from st_size)"
+		return
+	fi
+	# Writing 4KiB at the end grows it by exactly one chunk at that position (the holes are not filled in)
+	dd if=/dev/urandom of="$f" bs=4096 count=1 seek=16383 conv=notrunc status=none || { fail "dd seek write"; return; }
+	occ=$(du -B1 "$f" | cut -f1)
+	if [ "$occ" -lt 4096 ]; then
+		fail "du after the write is $occ (should be at least 4KiB)"
+		return
+	fi
+	if [ "$occ" -ge $((app / 4)) ]; then
+		fail "du after the write is $occ (has it filled the holes in?)"
+		return
+	fi
+	# A hole reads as zeros
+	local nonzero=$(dd if="$f" bs=1M count=1 skip=32 status=none | tr -d '\0' | wc -c)
+	if [ "$nonzero" != "0" ]; then
+		fail "a hole does not read as zeros ($nonzero non-zero byte(s))"
+		return
+	fi
+	# For a normal file du is about the size
+	local g="$TEST_ROOT/t84_dense.bin"
+	head -c 1048576 /dev/urandom > "$g"
+	local dense=$(du -B1 "$g" | cut -f1)
+	if [ "$dense" -lt 1048576 ]; then
+		fail "du of a normal file is $dense (should be at least 1MiB)"
+		return
+	fi
+	pass
+}
+
+test_partial_chunk_overwrite() {
+	# Overwriting only part of a chunk must not corrupt the bytes outside it.
+	# With write-back the chunk is assembled in memory and the payload is replaced wholesale, so if the path
+	# that "reads the existing chunk out of the database and uses it as the base" (the seed) breaks, the range
+	# that was not overwritten goes to zero = this fails
+	# (docs/design/runtime-control-plane.md, the data write-back section). The default chunk size is 1MiB.
+	local f="$TEST_ROOT/t85_partial.bin"
+	# Fill 3 MiB with 'A' (spanning chunks 0/1/2)
+	tr '\0' 'A' < /dev/zero | head -c 3145728 > "$f" || { fail "the initial write"; return; }
+	sync
+	# Replace only 4KiB in the middle of chunk 1 with 'B' (reopening the fd = creating a state where it is not in the cache)
+	tr '\0' 'B' < /dev/zero | head -c 4096 | dd of="$f" bs=4096 seek=320 conv=notrunc status=none || { fail "the partial overwrite"; return; }
+	sync
+	local size=$(stat -c %s "$f")
+	assert_eq "3145728" "$size" "the size after the overwrite" || return
+	# The replaced 4KiB is 'B'
+	local b=$(dd if="$f" bs=4096 skip=320 count=1 status=none | tr -d 'B' | wc -c)
+	if [ "$b" != "0" ]; then
+		fail "the overwritten 4KiB is not filled with 'B' ($b byte(s) left over)"
+		return
+	fi
+	# Just before and just after it is still 'A' (= the range that was not overwritten is intact)
+	local before=$(dd if="$f" bs=4096 skip=319 count=1 status=none | tr -d 'A' | wc -c)
+	local after=$(dd if="$f" bs=4096 skip=321 count=1 status=none | tr -d 'A' | wc -c)
+	if [ "$before" != "0" ] || [ "$after" != "0" ]; then
+		fail "the range that was not overwritten got corrupted ($before before / $after after byte(s) are not 'A')"
+		return
+	fi
+	# Chunks 0 and 2 are untouched as well
+	local c0=$(dd if="$f" bs=1M skip=0 count=1 status=none | tr -d 'A' | wc -c)
+	local c2=$(dd if="$f" bs=1M skip=2 count=1 status=none | tr -d 'A' | wc -c)
+	if [ "$c0" != "0" ] || [ "$c2" != "0" ]; then
+		fail "a neighbouring chunk got corrupted (chunk0 $c0 / chunk2 $c2 byte(s) are not 'A')"
+		return
+	fi
+	pass
+}
+
+test_append_after_close() {
+	# Appending to a file that was closed once. With write-back the delta of the occupied bytes is computed
+	# from "the payload length in the database", so an append across a close must not double-count or lose any.
+	local f="$TEST_ROOT/t86_append.txt"
+	printf 'first\n' > "$f"
+	sync
+	printf 'second\n' >> "$f"
+	sync
+	printf 'third\n' >> "$f"
+	sync
+	assert_eq "first
+second
+third" "$(cat "$f")" "the contents after the append" || return
+	assert_eq "19" "$(stat -c %s "$f")" "the size after the append" || return
+	# The occupied bytes match the logical size (it is under one chunk, so du is rounded to the block size)
+	local occ=$(du -B1 "$f" | cut -f1)
+	if [ "$occ" -lt 19 ]; then
+		fail "du after the append is $occ (should be at least 19 bytes = the occupancy is under-counted)"
+		return
+	fi
+	if [ "$occ" -gt 1048576 ]; then
+		fail "du after the append is $occ (over 1MiB = the occupancy is double-counted)"
+		return
+	fi
+	pass
+}
+
+test_full_chunk_overwrite_du() {
+	# Overwriting an existing chunk **across the whole chunk** must not corrupt the contents, the size or the
+	# occupied bytes.
+	# Note: the occupied bytes are double-counted only on the path that overwrites a whole chunk that is
+	# **not in the cache** (while it is in the cache, the clean->dirty promotion carries the length in the
+	# database over). Reaching that path needs a remount, so that case is covered by
+	# test_full_chunk_overwrite_du_after_remount in tests/linux/writeback.sh. This one looks at consistency within a single mount.
+	local f="$TEST_ROOT/t89_overwrite.bin"
+	head -c 2097152 /dev/urandom > "$f" || { fail "the initial write"; return; }
+	sync
+	local first=$(du -B1 "$f" | cut -f1)
+	if [ "$first" -lt 2097152 ]; then
+		fail "the initial du is $first (should be at least 2MiB)"
+		return
+	fi
+	# Overwrite the whole thing at the same size (no truncate; two 1MiB writes aligned to the chunk boundaries)
+	head -c 2097152 /dev/urandom > "$f.new"
+	dd if="$f.new" of="$f" bs=1M count=2 conv=notrunc,fsync status=none || { fail "the whole-range overwrite"; return; }
+	sync
+	assert_eq "2097152" "$(stat -c %s "$f")" "the size after the overwrite" || return
+	if ! cmp -s "$f.new" "$f"; then
+		fail "the contents after the overwrite do not match"
+		return
+	fi
+	local second=$(du -B1 "$f" | cut -f1)
+	# Allowing for the block-rounding error (8KiB), it must not have grown
+	if [ "$second" -gt $((first + 8192)) ]; then
+		fail "the whole-range overwrite grew du from $first to $second (the occupied bytes are double-counted)"
+		return
+	fi
+	pass
+}
+
+test_write_read_without_sync() {
+	# It must be readable back without a sync in between (read-after-write). With write-back the unflushed
+	# content only exists in the cache, so if the read path cannot see the dirty data it returns stale content or zeros.
+	local f="$TEST_ROOT/t87_nosync.bin"
+	head -c 262144 /dev/urandom > "$f.src"
+	cp "$f.src" "$f" || { fail "cp"; return; }
+	# Read it straight away without syncing
+	if ! cmp -s "$f.src" "$f"; then
+		fail "the read-back before the sync does not match (the dirty data is not visible from the read path)"
+		return
+	fi
+	# Append and read it straight away
+	head -c 4096 /dev/urandom > "$f.tail"
+	cat "$f.tail" >> "$f"
+	cat "$f.src" "$f.tail" > "$f.expected"
+	if ! cmp -s "$f.expected" "$f"; then
+		fail "the read-back right after the append does not match"
+		return
+	fi
+	pass
+}
+
+test_truncate_discards_unflushed() {
+	# When it is truncated to 0 while still unflushed, the discarded dirty data must not come back later.
+	local f="$TEST_ROOT/t88_trunc.bin"
+	head -c 524288 /dev/urandom > "$f"
+	# Cut it to 0 without syncing
+	: > "$f"
+	sync
+	assert_eq "0" "$(stat -c %s "$f")" "the size after the truncate" || return
+	local occ=$(du -B1 "$f" | cut -f1)
+	if [ "$occ" -gt 4096 ]; then
+		fail "du after the truncate is $occ (the dirty data that should have been discarded was written back)"
+		return
+	fi
+	# It can be written again
+	printf 'after-truncate\n' > "$f"
+	sync
+	assert_eq "after-truncate" "$(cat "$f")" "rewriting after the truncate" || return
 	pass
 }
 
@@ -707,6 +1104,7 @@ run test_truncate_to_zero
 # rename
 run test_rename_file
 run test_rename_into_subdir
+run test_rename_replace_existing
 
 # permissions
 run test_chmod
@@ -722,6 +1120,15 @@ run test_symlink_absolute
 run test_hardlink_basic
 run test_hardlink_after_rm
 run test_hardlink_through_subdir
+# The net that pins down the premise of handle-context stage C (docs/design/handle-context.md)
+run test_open_unlink_read_still_works
+
+# The data_id lifecycle (hardlink sharing / st_ino stability)
+run test_truncate_keeps_hardlink_shared
+run test_truncate_zero_updates_all_links
+run test_empty_file_hardlink_shares
+run test_ino_namespace_split
+run test_ino_stable_across_write
 
 # extended attributes
 run test_xattr_set_get
@@ -737,6 +1144,15 @@ run test_posix_acl_named_user
 run test_statfs
 run test_utime_explicit
 run test_utime_now
+run test_timestamp_utc_roundtrip
+run test_sparse_du_blocks
+
+# Consistency of chunk writes (the same result in both the write-back and the write-through mode)
+run test_partial_chunk_overwrite
+run test_full_chunk_overwrite_du
+run test_append_after_close
+run test_write_read_without_sync
+run test_truncate_discards_unflushed
 
 # concurrent access
 run test_concurrent_writes_diff_files
@@ -756,6 +1172,21 @@ if [ $FAILED -gt 0 ]; then
 	for name in "${FAILED_NAMES[@]}"; do
 		echo "  - $name"
 	done
+	exit 1
+fi
+
+# ===== do not go green on zero tests =====
+#
+# "It did not fall over" and "it was checked" are different things. When a typo in TEST_FILTER or a missing
+# prerequisite (psql not being resolvable, say) means not a single test ran, or every one was skipped,
+# without this exit 0 would be treated as success.
+# The details are in tests/linux/README.md, the section on not going green on zero tests.
+if [ $TOTAL -eq 0 ]; then
+	echo "${RED}not a single test ran${NC} (does TEST_FILTER='$FILTER' match nothing?)" >&2
+	exit 1
+fi
+if [ $PASSED -eq 0 ]; then
+	echo "${RED}not a single test passed${NC} ($SKIPPED skipped = a missing environment, not a passing test)" >&2
 	exit 1
 fi
 exit 0

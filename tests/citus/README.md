@@ -8,12 +8,12 @@ Verification scripts for the Citus support (distribution and cross-client lockin
 
 | File | Purpose | Run environment |
 |---|---|---|
-| [verify.sql](verify.sql) + [verify.cmd](verify.cmd) | Configuration-diagnostic SQL against an empty PGFS that has been `mkfs --clean --citus`'d (= a 1-node Citus on pgsql_server). Checks `citus_tables` / distribution keys / shard placement / EXPLAIN | Windows host -> via ssh pgsql_server |
-| [multinode_probe.sh](multinode_probe.sh) | A one-off probe script to confirm Citus behavior (auto-sync / DDL propagation / shard placement / citus_add_local_table_to_metadata etc.). Spins up a 2-node Citus (coord + worker) in docker and runs 13 sections of probe SQL | linux_client (OK even from a stopped docker daemon; cleaned up via trap) |
-| [test_matrix.sh](test_matrix.sh) | An **18-case** matrix test for mkfs multi-node Citus (3 initial x 6 target). Spins up a 2-node Citus (coord + worker1) in docker and, per case, runs setup -> mkfs -> state verification -> next | linux_client (same as above) |
-| [race_multinode.sh](race_multinode.sh) | Remaining verification for cross-client locking. Spins up a 2-node docker Citus + 2 mount.pgfs and checks, end to end, (i) the Linux e2e 35/35 on multi-node Citus, (ii) cross-client consistency under a concurrent write race (md5/size match), (iii) the EEXIST guarantee under a concurrent mkdir race, (iv) a realistic cumulative size for the pgfs_lock rows | linux_client (same as above) |
-| [audit.sh](audit.sh) | Audit-log ([docs/audit-log.md](../../docs/audit-log.md)) dedicated test. Spins up a 2-node docker Citus (coord + worker1) + 1 mount.pgfs and checks (A) per-op recording, (B) caller_* (uid/uname/host/ip), (C) automatic partition creation = the month-rollover mechanism, (D) 0 rows when audit.enabled=false. The single-transaction Citus commit is also proven once A/B/C hold | linux_client (same as above) |
-| [statfs.sh](statfs.sh) | df ([docs/df-support.md](../../docs/df-support.md)) dedicated test. Using a **self-built image with plperl** ([tests/docker/Dockerfile.citus-plperl](../docker/Dockerfile.citus-plperl)), spins up a 2-node docker Citus (coord+worker1) and verifies the **worker aggregation** of `pgfs_statfs()` (R1–R5) and the 3 modes `require`/`auto`/`nominal` (A1/N1). R5 proves the aggregation mechanism by dropping only the coord-local `fs_free` under `citus.enable_ddl_propagation=off`. No mount needed (mkfs + psql only) | linux_client (same as above) |
+| [verify.sql](verify.sql) + [verify.cmd](verify.cmd) | Diagnostic SQL for the configuration of an empty PGFS that has been through mkfs --clean --citus (= single-node Citus on pgsql_server). Checks `citus_tables` / the distribution keys / the shard placement / EXPLAIN | a Windows host -> through ssh pgsql_server |
+| [multinode_probe.sh](multinode_probe.sh) | A one-off probe script for confirming Citus's behaviour (auto-sync / DDL propagation / shard placement / citus_add_local_table_to_metadata and so on). Stands up a two-node Citus (coord + worker) in docker and runs 13 sections of probe SQL | linux_client (fine even with the docker daemon not running; cleaned up by a trap) |
+| [test_matrix.sh](test_matrix.sh) | The **18-case** matrix test for mkfs (3 initial x 6 target). Stands up a two-node Citus (coord + worker1) in docker and, for each case, does setup -> mkfs -> a state check -> next | linux_client (as above) |
+| [race_multinode.sh](race_multinode.sh) | The remaining verification of the exclusion control. Stands up a two-node Citus in docker with two mount.pgfs processes and confirms, end to end, (i) the Linux e2e 35/35 on multi-node Citus, (ii) the cross-client consistency of a concurrent write race (matching md5/size), (iii) the EEXIST guarantee of a concurrent mkdir race, and (iv) a realistic size for the accumulation of pgfs_lock rows | linux_client (as above) |
+| [audit.sh](audit.sh) | The test dedicated to the audit log ([docs/audit-log.md](../../docs/design/audit-log.md)). Stands up a two-node Citus in docker with one mount.pgfs and confirms (A) the record of each op, (B) caller_* (uid/uname/host/ip), (C) automatic partition creation = the month-crossing mechanism, and (D) 0 rows with `audit.enabled=false`. Citus's same-tx commit is demonstrated at the same time by A/B/C holding | linux_client (as above) |
+| [statfs.sh](statfs.sh) | The test dedicated to df ([docs/df-support.md](../../docs/design/df-support.md)). Stands up a two-node Citus (coord+worker1) in docker on **an image built in-house with plperl** ([tests/docker/Dockerfile.citus-plperl](../docker/Dockerfile.citus-plperl)) and verifies `pgfs_statfs()`'s **worker aggregation** (R1-R5) and the three modes `require`/`auto`/`nominal` (A1/N1). R5 DROPs only the coord-local `fs_free` with `citus.enable_ddl_propagation=off` to prove the aggregation mechanism. No mount is needed (mkfs + psql only) | linux_client (as above) |
 
 ## Common prerequisites
 
@@ -123,7 +123,18 @@ Each case runs setup_I* -> run_mkfs -> verify_state (coord pgfs DB exists / 5 ta
 
 ### Result
 
-**18/18 PASS** (Citus 14.0.0 + docker on linux_client).
+**18/18 PASS** (the docker Citus on linux_client. **Re-run on the current HEAD**).
+**14 of the 18 failed on the re-run, but the cause was stale expectations rather than the implementation** (see the section below on writing expectations).
+
+### Two things to watch when writing expectations
+
+- **Four tables are distributed** (`inode` / `data` / `data_chunk` / `audit`) and **three are registered as
+  local in the metadata** (`lock` / `settings` / `mounts`). **`lock` is not distributed because a row lock is
+  refused with `shard_replication_factor > 1`** ([support_for_citus.md](../../docs/design/support_for_citus.md), the exclusion control section).
+  **`dist=5 / local=1` was expected for a long time and left alone, and a re-run failed 14 of 18.**
+- **`pg_tables` does not return a partition parent.** `pgfs_audit` is **`relkind = 'p'`**, so counting the
+  existence of a table means **looking at `pg_class`** (`relkind IN ('r','p')`).
+  Counting with `pg_tables` produces the false report that **only audit is missing**.
 
 ## race_multinode.sh (remaining cross-client locking verification)
 
@@ -159,7 +170,7 @@ bash tests/citus/race_multinode.sh
 
 ## audit.sh (audit-log dedicated test)
 
-The audit-log feature ([docs/audit-log.md](../../docs/audit-log.md)) itself and the existing e2e regression already pass. This script verifies the behavior that is **specific** to auditing, as a dedicated test. It spins up coord + worker1 in docker, runs 1 mount.pgfs process, and checks the following 5 items.
+The functional body of the audit log ([docs/audit-log.md](../../docs/design/audit-log.md)) and the existing e2e regression have already passed. This script verifies the behaviour **specific** to auditing as a dedicated test. It stands up coord + worker1 in docker, starts one mount.pgfs process and confirms the five items below.
 
 ```bash
 # on linux_client (the mkfs.pgfs / mount.pgfs binaries are needed under bin/Publish/)
@@ -194,13 +205,13 @@ bash tests/citus/audit.sh
 
 ## Verifying cross-shard rename
 
-`test_rename_into_subdir` (in both the Linux and Windows e2e) covers a **rename into a different parent**, so if it passes on a Citus environment, cross-shard rename is also demonstrated. The implementation is the DELETE+INSERT (OVERRIDING SYSTEM VALUE) path of `Rename` in [Api.cs](../../src/core/src/Api/Api.cs).
+`test_rename_into_subdir` (in both the Linux and the Windows e2e) covers **a rename into a different parent**, so passing in a Citus environment also demonstrates a cross-shard rename. The implementation is the DELETE+INSERT (OVERRIDING SYSTEM VALUE) path of `Rename` in [Api.cs](../../src/core/src/Api/Api.cs).
 
 To confirm cross-shard rename explicitly at the SQL level, see the EXPLAIN block in [verify.sql](verify.sql).
 
 ## Related documents
 
-- Design: [docs/support_for_citus.md](../../docs/support_for_citus.md)
-- Design decisions: [docs/history.md](../../docs/history.md)
+- The design: [docs/support_for_citus.md](../../docs/design/support_for_citus.md)
+- How it was completed: "Citus" in [docs/history.md](../../docs/history.md)
 - DDL: [docs/ddl/](../../docs/ddl/README.md)
 - mkfs CLI: [docs/Mkfs.md](../../docs/Mkfs.md)

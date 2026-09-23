@@ -130,7 +130,7 @@ if ($NoMount) {
 	Info "skip: mount (-NoMount, assuming already mounted)"
 }
 else {
-	Step "pgfs.assign"
+	Step "assign.pgfs"
 
 	if (Test-Path -LiteralPath $MountRoot -PathType Container) {
 		Warn "$MountRoot already exists (assuming already mounted, reusing)"

@@ -106,9 +106,11 @@ verify_state() {
     if [ "$table_count" != "1" ]; then
         result=FAIL; details="$details; coordinator DB '$PGFS_DB' missing"
     fi
-    table_count=$(sqlcpg -tA -c "SELECT count(*) FROM pg_tables WHERE schemaname='pgfs' AND tablename IN ('pgfs_inode','pgfs_data','pgfs_data_chunk','pgfs_lock','pgfs_settings');" 2>/dev/null | tr -d ' ')
-    if [ "$table_count" != "5" ]; then
-        result=FAIL; details="$details; expected 5 tables in pgfs schema, got '$table_count'"
+    # **Look at `pg_class` rather than `pg_tables`** - `pgfs_audit` is **a partition parent (relkind='p')** and
+    # so does not appear in `pg_tables`. Missing it here produces the false report "a table is missing" (this was hit).
+    table_count=$(sqlcpg -tA -c "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname='pgfs' AND c.relkind IN ('r','p') AND c.relname IN ('pgfs_inode','pgfs_data','pgfs_data_chunk','pgfs_lock','pgfs_settings','pgfs_audit','pgfs_mounts');" 2>/dev/null | tr -d ' ')
+    if [ "$table_count" != "7" ]; then
+        result=FAIL; details="$details; expected 7 tables in pgfs schema, got '$table_count'"
     fi
 
     # 2. Citus state based on expected level
@@ -129,12 +131,12 @@ verify_state() {
                 result=FAIL; details="$details; expected coordinator shouldhaveshards=t (1-node), got '$should'"
             fi
             local dist_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='distributed';" 2>/dev/null | tr -d ' ')
-            if [ "$dist_count" != "5" ]; then
-                result=FAIL; details="$details; expected 5 distributed tables (inode/data/data_chunk/lock/audit), got '$dist_count'"
+            if [ "$dist_count" != "4" ]; then
+                result=FAIL; details="$details; expected 4 distributed tables (inode/data/data_chunk/audit), got '$dist_count'"
             fi
             local local_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='local';" 2>/dev/null | tr -d ' ')
-            if [ "$local_count" != "1" ]; then
-                result=FAIL; details="$details; expected 1 local (metadata) table, got '$local_count'"
+            if [ "$local_count" != "3" ]; then
+                result=FAIL; details="$details; expected 3 local (metadata) tables (lock/settings/mounts), got '$local_count'"
             fi
             ;;
         coord_worker)
@@ -151,8 +153,8 @@ verify_state() {
                 result=FAIL; details="$details; expected worker shouldhaveshards=t, got '$worker_should'"
             fi
             local dist_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='distributed';" 2>/dev/null | tr -d ' ')
-            if [ "$dist_count" != "5" ]; then
-                result=FAIL; details="$details; expected 5 distributed tables (inode/data/data_chunk/lock/audit), got '$dist_count'"
+            if [ "$dist_count" != "4" ]; then
+                result=FAIL; details="$details; expected 4 distributed tables (inode/data/data_chunk/audit), got '$dist_count'"
             fi
             # worker should have the same 5 distributed table metadata
             local worker_citus_ext=$(sqlwpg -tA -c "SELECT count(*) FROM pg_extension WHERE extname='citus';" 2>/dev/null | tr -d ' ')

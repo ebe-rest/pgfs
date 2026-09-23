@@ -172,7 +172,11 @@ sec "mkfs --clean --citus --worker $WORKER1_SPEC"
 dist_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='distributed';" | tr -d ' ')
 local_count=$(sqlcpg -tA -c "SELECT count(*) FROM citus_tables WHERE citus_table_type='local';" | tr -d ' ')
 log "  citus_tables: distributed=$dist_count local=$local_count"
-[ "$dist_count" = "5" ] && [ "$local_count" = "1" ] || die "unexpected citus_tables: dist=$dist_count local=$local_count"
+# **4 distributed (inode/data/data_chunk/audit) + 3 local (lock/settings/mounts)** is the current design.
+# `lock` is not distributed because **a row lock is refused with shard_replication_factor > 1**
+# (docs/design/support_for_citus.md, the exclusion control section). `mounts` came later and local was enough.
+# **This failed for a long time as a leftover of expecting 5/1** (found by re-running it).
+[ "$dist_count" = "4" ] && [ "$local_count" = "3" ] || die "unexpected citus_tables: dist=$dist_count local=$local_count (expected dist=4 local=3)"
 
 # === Create 2 pgfs.toml + mount points ===
 sec "create 2 pgfs.toml + mount points"

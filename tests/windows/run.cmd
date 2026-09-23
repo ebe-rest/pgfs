@@ -17,5 +17,9 @@ if "%MOUNT_ROOT%"=="" set MOUNT_ROOT=P:\
 
 set FILTER=%1
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0e2e.ps1" -MountRoot "%MOUNT_ROOT%" -Filter "%FILTER%"
+REM Prefer pwsh (PowerShell 7) when it is available (for the reason, see the comment in flow.cmd).
+set "PS_EXE=powershell"
+where pwsh >nul 2>&1 && set "PS_EXE=pwsh"
+
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0e2e.ps1" -MountRoot "%MOUNT_ROOT%" -Filter "%FILTER%"
 exit /b %errorlevel%

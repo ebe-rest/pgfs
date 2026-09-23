@@ -12,9 +12,9 @@
 #   3   TestRoot could not be created (mount not writable)
 #
 # The Windows counterpart of the Linux side ([tests/linux/e2e.sh](../linux/e2e.sh)).
-# Exercises the ✅/⚠️ operations that pgfs.assign provides through Dokan
-# ([docs/Assign.md](../../docs/Assign.md)). Linux-only operations (POSIX
-# symlink/hardlink/chmod/chown/xattr) are out of scope.
+# It exercises the ✅/⚠️ operations that assign.pgfs offers through Dokan
+# ([docs/Assign.md](../../docs/Assign.md)). The Linux-only ones (POSIX symlink/hardlink/chmod/chown/xattr)
+# are out of scope.
 
 [CmdletBinding()]
 param(
@@ -92,10 +92,40 @@ function Assert-Dir($path) {
 	}
 }
 
+# A delete reaches the database **at Cleanup** (Dokan's delete-on-close semantics). The name can survive
+# until the last handle closes, and an indexer or an antivirus holding a handle for a moment is perfectly normal.
+# On top of that a DELETE on Citus takes about 100 ms per tx, so checking Test-Path once right after
+# Remove-Item is flaky in principle (measured: up to ~1.1 seconds from the delete request to the DELETE landing).
+# -> **A bounded retry** makes only "it never disappears" a failure.
 function Assert-Absent($path) {
-	if (Test-Path -LiteralPath $path) {
-		Fail "expected path to be absent: $path"
+	$parent = [System.IO.Path]::GetDirectoryName($path)
+	$leaf = [System.IO.Path]::GetFileName($path)
+	$deadline = (Get-Date).AddSeconds(10)
+	while ((Get-Date) -lt $deadline) {
+		# **The decision is made on the parent directory's enumeration (FindFiles)**. That always goes down to the FS and so reflects pgfs's state.
+		$byList = @(Get-ChildItem -LiteralPath $parent -Filter $leaf -Force -ErrorAction SilentlyContinue).Count
+		if ($byList -eq 0) {
+			if (Test-Path -LiteralPath $path) {
+				# The Windows client-side cache is returning a stale answer. On the pgfs side it is gone.
+				Write-Host "      (absent from the enumeration yet Test-Path is still true = the Windows client-side cache)" -ForegroundColor Yellow
+			}
+			return
+		}
+		Start-Sleep -Milliseconds 300
 	}
+	# Even when it still shows up in the enumeration, **whether it can be opened** is the final verdict. When
+	# another process (an antivirus or an indexer) holds a handle, Windows keeps the delete-pending name in its
+	# cache, but an open always fails.
+	# The pgfs side removed it from the database at Cleanup, so failing to open here correctly means "it is gone".
+	try {
+		$probe = [System.IO.File]::OpenRead($path)
+		$probe.Dispose()
+	}
+	catch {
+		Write-Host "      (still in the enumeration but the open fails = delete-pending. It is already deleted on the pgfs side)" -ForegroundColor Yellow
+		return
+	}
+	Fail "expected path to be absent (it is in the enumeration and can be opened): $path"
 }
 
 # ===== I/O helpers (UTF-8 no-BOM, byte-transparent) =====
@@ -264,8 +294,15 @@ function test_touch_unlink {
 	New-Item -ItemType File -Path $f | Out-Null
 	if (-not $?) { Fail "new file"; return }
 	Assert-File $f; if (Test-Failed) { return }
-	Remove-Item -LiteralPath $f
-	if (-not $?) { Fail "rm"; return }
+	# **Do not use `Remove-Item`.** Windows's `DeleteFile` does not run immediately; it stays
+	# `DeletePending` until the last handle closes - and `Remove-Item` returns before that. Who holds a
+	# handle is up to Explorer, the indexer and Defender, and measurements showed **the FS's DeleteFile
+	# callback delayed by more than 15 seconds** (which exceeds `Assert-Absent`'s 10-second wait, so this
+	# test used to fail one time in three). With `DeleteOnClose` the delete runs **the moment this script
+	# closes its own handle**, which keeps pgfs's delete path (DeleteFile + Cleanup) under test while making it deterministic.
+	# The background is in docs/design/windows-parity.md, the section on delete visibility.
+	$h = New-Object System.IO.FileStream($f, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::Delete, 4096, [System.IO.FileOptions]::DeleteOnClose)
+	$h.Dispose()
 	Assert-Absent $f; if (Test-Failed) { return }
 	Pass
 }
@@ -366,6 +403,29 @@ function test_truncate_to_zero {
 	Set-FileLen $f 0
 	$size = Get-FileLen $f
 	Assert-Eq 0 $size "size after zero"; if (Test-Failed) { return }
+	Pass
+}
+
+# The Windows-side regression for the data_id lifecycle (docs/design/data-id-lifecycle.md).
+# Dokan exposes neither st_ino nor nlink, so the hardlink sharing itself is checked on the Linux side.
+# Here it checks that, now that **a truncate to 0 no longer deletes the data row**, zeroing and then rewriting still works.
+function test_truncate_zero_then_rewrite {
+	$f = Join-Path $TestRoot "t24_trunc_rewrite.txt"
+	$first = New-RandomBytes (256 * 1024)
+	Write-Bytes $f $first
+	Set-FileLen $f 0
+	Assert-Eq 0 (Get-FileLen $f) "size after zero"; if (Test-Failed) { return }
+	$second = New-RandomBytes (128 * 1024)
+	Write-Bytes $f $second
+	Assert-Eq $second.Length (Get-FileLen $f) "size after rewrite"; if (Test-Failed) { return }
+	$got = [System.IO.File]::ReadAllBytes($f)
+	$same = (Get-FileHash -Path $f -Algorithm SHA256).Hash
+	$tmp = Join-Path $env:TEMP "pgfs_t24_expected.bin"
+	[System.IO.File]::WriteAllBytes($tmp, $second)
+	$want = (Get-FileHash -Path $tmp -Algorithm SHA256).Hash
+	Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+	Assert-Eq $want $same "content after truncate 0 + rewrite"; if (Test-Failed) { return }
+	Assert-Eq $second.Length $got.Length "read length"; if (Test-Failed) { return }
 	Pass
 }
 
@@ -666,6 +726,498 @@ function test_concurrent_reads_same_file {
 	Pass
 }
 
+# Byte-range locks (LockFile / UnlockFile) must be enforced by the driver.
+# pgfs keeps no ledger of range locks, so `UserModeLock` is left off and it is left to the Dokan driver
+# (leaving it on makes our own callback always return Success = lying that a lock was taken when it was not).
+function test_byte_range_lock_enforced {
+	$p = Join-Path $TestRoot "t99_lock.bin"
+	Write-Bytes $p (New-RandomBytes 4096)
+	$a = [System.IO.File]::Open($p, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+	$b = $null
+	try {
+		$a.Lock(0, 16)
+		$b = [System.IO.File]::Open($p, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+		$blocked = $false
+		try { $b.Lock(0, 16) }
+		catch [System.IO.IOException] { $blocked = $true }
+		if (-not $blocked) {
+			Fail "another handle managed to take a lock on the same range (the driver is not enforcing it)"
+			return
+		}
+		# It can be taken once it has been released
+		$a.Unlock(0, 16)
+		try { $b.Lock(0, 16); $b.Unlock(0, 16) }
+		catch [System.IO.IOException] {
+			Fail "the lock still cannot be taken after the release"
+			return
+		}
+	}
+	finally {
+		if ($null -ne $b) { $b.Dispose() }
+		$a.Dispose()
+	}
+	Pass
+}
+
+# The CopyFileEx path (Copy-Item, or a copy in Explorer). There was a known problem where 2 MiB raised an
+# IOException and it was worked around by calling `WriteAllBytes` directly, but **it stopped reproducing**,
+# so the real path was put back into the test.
+# (It did not reproduce at 2 MiB / 8 MiB, in either direction, on overwrite, with robocopy /COPYALL, or on a tree copy.)
+function test_copy_item_round_trip {
+	$src = Join-Path $env:TEMP "pgfs_e2e_copy_src.bin"
+	$back = Join-Path $env:TEMP "pgfs_e2e_copy_back.bin"
+	$dst = Join-Path $TestRoot "t98_copy.bin"
+	Write-Bytes $src (New-RandomBytes (2 * 1024 * 1024))
+	try {
+		Copy-Item -LiteralPath $src -Destination $dst -ErrorAction Stop
+		$h = Get-Sha256 $src
+		if ((Get-Sha256 $dst) -ne $h) {
+			Fail "the hash of the copy destination does not match"
+			return
+		}
+		# The copy back (P: -> local) goes through CopyFileEx as well
+		Copy-Item -LiteralPath $dst -Destination $back -Force -ErrorAction Stop
+		if ((Get-Sha256 $back) -ne $h) {
+			Fail "the hash of the copy back does not match"
+			return
+		}
+	}
+	finally {
+		Remove-Item -LiteralPath $src -Force -ErrorAction SilentlyContinue
+		Remove-Item -LiteralPath $back -Force -ErrorAction SilentlyContinue
+	}
+	Pass
+}
+
+# ===== deriving the owner / group =====
+
+# The owner of a new file has to be **the requesting account** (not the mount process's default).
+function test_new_file_owner_is_requestor {
+	$f = Join-Path $TestRoot "t96_owner.txt"
+	Set-Content -LiteralPath $f -Value "x" -NoNewline
+	$owner = (Get-Acl -LiteralPath $f).Owner
+	$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+	# pgfs normalizes the name before storing it (the domain is dropped and it is lower-cased), so only the account name is compared.
+	$ownerLeaf = $owner.Substring($owner.LastIndexOf('\') + 1)
+	$meLeaf = $me.Substring($me.LastIndexOf('\') + 1)
+	if ($ownerLeaf -ne $meLeaf) {
+		Fail "the owner of the new file differs from the requester: owner=$owner me=$me"
+		return
+	}
+	Pass
+}
+
+# The group of a new file is **inherited from the parent directory**.
+# The parent's group is changed to something else before the child is created, which confirms it is not "the running process's primary group".
+function test_new_file_inherits_parent_group {
+	$dir = Join-Path $TestRoot "t97_grp"
+	New-Item -ItemType Directory -Path $dir | Out-Null
+	try {
+		$acl = Get-Acl -LiteralPath $dir
+		$acl.SetGroup([System.Security.Principal.NTAccount]"Users")
+		Set-Acl -LiteralPath $dir -AclObject $acl -ErrorAction Stop
+	}
+	catch {
+		Skip "an environment where the parent directory's group cannot be changed: $($_.Exception.GetType().Name)"
+		return
+	}
+	$dirGroup = (Get-Acl -LiteralPath $dir).Group.Value
+	$f = Join-Path $dir "child.txt"
+	Set-Content -LiteralPath $f -Value "x" -NoNewline
+	$fileGroup = (Get-Acl -LiteralPath $f).Group.Value
+	if ($fileGroup -ne $dirGroup) {
+		Fail "the group of the new file differs from the parent's: file=$fileGroup dir=$dirGroup"
+		return
+	}
+	Pass
+}
+
+# ===== Windows basics (docs/design/windows-parity.md, the Windows basics section) =====
+
+# CREATE_NEW means "always fail if it already exists". assign now reaches Api.CreateFile(exclusive: true), so
+# the verdict comes from the database's unique constraint rather than a local non-existence check (exclusion
+# against another mount takes the same path).
+# What a single mount can show is two things: "the second one fails" and "the loser does not corrupt the winner's contents".
+function test_createnew_exclusive {
+	$p = Join-Path $TestRoot "t93_excl.txt"
+	$fs = [System.IO.File]::Open($p, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+	try {
+		$fs.Write([byte[]](65, 66, 67), 0, 3)
+	}
+	finally {
+		$fs.Dispose()
+	}
+	$collided = $false
+	try {
+		$fs2 = [System.IO.File]::Open($p, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
+		$fs2.Dispose()
+	}
+	catch [System.IO.IOException] {
+		$collided = $true
+	}
+	if (-not $collided) {
+		Fail "CreateNew succeeded against an existing file"
+		return
+	}
+	$bytes = [System.IO.File]::ReadAllBytes($p)
+	if ($bytes.Length -ne 3) {
+		Fail "the loser corrupted the winner's contents: len=$($bytes.Length) (expected 3)"
+		return
+	}
+	Pass
+}
+
+# The allocation size is a different quantity from EOF. It is a reservation hint and must not grow the logical size
+# (SetAllocationSize used to be wired straight to SetEndOfFile = a 1 MB reservation made EOF 1 MB as well).
+function test_allocation_size_does_not_extend_eof {
+	if ($PSVersionTable.PSVersion.Major -lt 7) {
+		Skip "FileStreamOptions.PreallocationSize needs PowerShell 7+ (.NET 6+)"
+		return
+	}
+	$p = Join-Path $TestRoot "t94_prealloc.bin"
+	$opts = [System.IO.FileStreamOptions]::new()
+	$opts.Mode = [System.IO.FileMode]::Create
+	$opts.Access = [System.IO.FileAccess]::Write
+	$opts.PreallocationSize = 1048576
+	$fs = [System.IO.FileStream]::new($p, $opts)
+	try {
+		$fs.Write([byte[]](1, 2, 3, 4), 0, 4)
+	}
+	finally {
+		$fs.Dispose()
+	}
+	$len = (Get-Item -LiteralPath $p).Length
+	if ($len -ne 4) {
+		Fail "the allocation reservation grew EOF: len=$len (expected 4)"
+		return
+	}
+	Pass
+}
+
+# A rename onto the same target has to be a no-op success. Core's replacement path is "delete the target ->
+# UPDATE the source", so passing the same target would delete itself (Linux's VFS rejects it, but the Dokan path goes straight through).
+# The contract checked here is that "whether the call succeeds or fails, the file and its contents survive".
+function test_rename_same_path_noop {
+	$p = Join-Path $TestRoot "t95_same.txt"
+	Set-Content -LiteralPath $p -Value "keepme" -NoNewline
+	try {
+		[System.IO.File]::Move($p, $p)
+	}
+	catch {
+		# The OS or .NET may reject the identical path up front. As long as it has not disappeared, the contract holds.
+	}
+	if (-not (Test-Path -LiteralPath $p -PathType Leaf)) {
+		Fail "the file disappeared on a rename onto the same path"
+		return
+	}
+	$body = Get-Content -LiteralPath $p -Raw
+	if ($body -ne "keepme") {
+		Fail "the contents were corrupted by a rename onto the same path: '$body'"
+		return
+	}
+	Pass
+}
+
+# **FileIndex (= Windows's id for deciding "is this the same file") comes from data_id and is immutable from birth.**
+#
+# pgfs keeps **one link = one inode row**, so returning `inode.Id` would make **the siblings of a hardlink
+# look like different files** (measured: two names pointing at the same body returned different ids).
+# `data_id` is **settled at create time and immutable until the final unlink**, so that is what is used
+# (docs/design/data-id-lifecycle.md). **The same formula as FUSE's `st_ino`.**
+#
+# **A hardlink cannot be created from Windows**, so what is checked here is two things: (1) the top bit is set
+# (= it comes from the data_id space) and (2) **it does not change across the first write**. **That the
+# siblings agree is held by the Linux side's `test_empty_file_hardlink_shares` (st_ino) and by the cross-client measurements.**
+Add-Type -Namespace PgfsE2E -Name FileId -MemberDefinition @'
+[StructLayout(LayoutKind.Sequential)]
+public struct BHFI {
+    public uint FileAttributes;
+    public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+    public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+    public uint VolumeSerialNumber;
+    public uint FileSizeHigh;
+    public uint FileSizeLow;
+    public uint NumberOfLinks;
+    public uint FileIndexHigh;
+    public uint FileIndexLow;
+}
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+public static extern IntPtr CreateFileW(string p, uint a, uint s, IntPtr sa, uint c, uint f, IntPtr t);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool GetFileInformationByHandle(IntPtr h, out BHFI i);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool CloseHandle(IntPtr h);
+'@
+
+# Open with FILE_READ_ATTRIBUTES alone and read the FileIndex (0 = could not be obtained).
+function Get-PgfsFileIndex($path) {
+	$h = [PgfsE2E.FileId]::CreateFileW($path, [uint32]0x80, [uint32]0x7, [IntPtr]::Zero, [uint32]3, [uint32]0x80, [IntPtr]::Zero)
+	if ($h -eq [IntPtr](-1)) { return [uint64]0 }
+	$i = New-Object PgfsE2E.FileId+BHFI
+	$ok = [PgfsE2E.FileId]::GetFileInformationByHandle($h, [ref]$i)
+	[PgfsE2E.FileId]::CloseHandle($h) | Out-Null
+	if (-not $ok) { return [uint64]0 }
+	return ((([uint64]$i.FileIndexHigh) -shl 32) -bor [uint64]$i.FileIndexLow)
+}
+
+function test_file_index_is_data_id_and_stable {
+	$p = Join-Path $TestRoot "t99_fileindex.txt"
+	$fs = [System.IO.File]::Create($p)
+	$fs.Dispose()
+	$empty = Get-PgfsFileIndex $p
+	if ($empty -eq 0) { Fail "cannot obtain the FileIndex of an empty file"; return }
+	# The top bit is the mark of the data_id space. **If it is not set, inode.Id is being returned** (the
+	# state in which the siblings of a hardlink look like different files).
+	# **`[uint64]0x8000000000000000` cannot be written** - PowerShell reads a hex literal as an Int64, so it
+	# becomes negative and the cast to uint64 falls over. It is built from a hex string instead.
+	$topBit = [Convert]::ToUInt64("8000000000000000", 16)
+	if (($empty -band $topBit) -eq 0) {
+		Fail "the FileIndex does not come from data_id (the top bit is not set): $empty"
+		return
+	}
+	# **It must not change across the first write** either. That contract holds because the data_id is settled
+	# at create time; going back to assigning it lazily splits it here (`find -samefile` / `rsync -H` / a backup's deduplication would misbehave).
+	Set-Content -LiteralPath $p -Value "now-has-data" -NoNewline
+	$written = Get-PgfsFileIndex $p
+	if ($written -ne $empty) {
+		Fail "the FileIndex changed on the first write: $empty -> $written"
+		return
+	}
+	# A directory has no body, so it comes from inode.Id = the top bit is not set.
+	$dirIndex = Get-PgfsFileIndex $TestRoot
+	if ($dirIndex -ne 0 -and ($dirIndex -band $topBit) -ne 0) {
+		Fail "a directory's FileIndex is in the data_id space: $dirIndex"
+		return
+	}
+	Pass
+}
+
+# **A handle that is still open on the side a rename overwrote must be able to keep reading its own body**
+# (handle-context stage C-2 / the POSIX "the fd stays alive even when the name is gone").
+#
+# **This window does not open on the `unlink` side** - Windows does not send a delete down to the FS until the
+# last handle closes (measured: with `DeleteOnClose`, closing the second handle first still kept it in the
+# enumeration while the first was alive).
+# **Only a `rename` replacement removes the name while an open handle remains**, which makes this the only
+# entrance to stage C-2 from Windows.
+#
+# Without keeping it, **the handle on the overwritten side loses its body** (because pgfs deletes the data row together with the inode row).
+function test_rename_over_open_victim_keeps_body {
+	$victim = Join-Path $TestRoot "t101_victim.txt"
+	$src = Join-Path $TestRoot "t101_src.txt"
+	Set-Content -LiteralPath $victim -Value "VICTIM-BODY" -NoNewline
+	Set-Content -LiteralPath $src -Value "NEW-BODY" -NoNewline
+	$share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+	$h = [System.IO.File]::Open($victim, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, $share)
+	try {
+		[System.IO.File]::Move($src, $victim, $true)
+		Start-Sleep -Milliseconds 600
+		$buf = New-Object byte[] 64
+		$n = 0
+		try {
+			$h.Position = 0
+			$n = $h.Read($buf, 0, 64)
+		}
+		catch {
+			# **When the body is deleted along with it, the read dies here** (how it used to fail; FileNotFoundException).
+			Fail "the handle on the overwritten side lost its body (the read failed): $($_.Exception.GetBaseException().GetType().Name)"
+			return
+		}
+		$body = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n)
+		if ($body -ne "VICTIM-BODY") {
+			Fail "the handle on the overwritten side lost its body: '$body' ($n byte(s), expected 'VICTIM-BODY')"
+			return
+		}
+	}
+	finally {
+		$h.Dispose()
+	}
+	# The name itself must point at the new contents (is the replacement itself intact).
+	$byName = Get-Content -LiteralPath $victim -Raw
+	if ($byName -ne "NEW-BODY") {
+		Fail "after the replacement the name does not point at the new contents: '$byName'"
+		return
+	}
+	Pass
+}
+
+
+# **Adding ReadOnly to a directory must not drop the execute (traverse) right.**
+#
+# `ReadOnly` is reflected in the write bits of `st_mode`, but **it used to rebuild the mode as 0444 / 0644 / 0755**,
+# so **adding it to a directory made it 0444 the moment it was set, dropping the x bit so `cd` from Linux stopped working**.
+# **The Windows side holds no mode, so it is only visible through the projected ACL.**
+#
+# It also checks that **write comes back** once it is cleared (otherwise "ReadOnly cannot be cleared").
+# **That the mode is not rebuilt to a default value** cannot be seen without looking at the database, so that
+# part is held by the measurements recorded in [windows-parity.md](../../docs/design/windows-parity.md).
+function test_readonly_dir_keeps_execute {
+	$d = Join-Path $TestRoot "t102_rodir"
+	if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -ErrorAction Stop | Out-Null }
+
+	$item = Get-Item -LiteralPath $d
+	$item.Attributes = $item.Attributes -bor [System.IO.FileAttributes]::ReadOnly
+	Start-Sleep -Milliseconds 400
+	if (((Get-Item -LiteralPath $d).Attributes -band [System.IO.FileAttributes]::ReadOnly) -eq 0) {
+		Fail "ReadOnly cannot be set on a directory"
+		return
+	}
+	# **The execute (traverse) right must survive in the projected ACL.** Back when it was rebuilt to 0444 this is what failed.
+	$acl = Get-Acl -LiteralPath $d
+	$exec = @($acl.Access | Where-Object { ($_.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::ExecuteFile) -ne 0 })
+	if ($exec.Count -eq 0) {
+		Fail "setting ReadOnly removed the directory's execute (traverse) right = the x bit was dropped"
+		return
+	}
+	# It does not go as far as checking that nothing can be created inside (that ReadOnly is enforced) -
+	# Dokan does not enforce the mode, so being able to create there is **out of scope for this test**.
+	$item = Get-Item -LiteralPath $d
+	$item.Attributes = $item.Attributes -band (-bnot [System.IO.FileAttributes]::ReadOnly)
+	Start-Sleep -Milliseconds 400
+	if (((Get-Item -LiteralPath $d).Attributes -band [System.IO.FileAttributes]::ReadOnly) -ne 0) {
+		Fail "ReadOnly cannot be cleared (the owner's write did not come back)"
+		return
+	}
+	Pass
+}
+
+# ===== the namespace policy (docs/design/namespace-policy.md) =====
+
+# **Do not let Windows create a name that can be created but not handled.**
+# Creating a single `NUL` makes that directory undeletable with `Remove-Item -Recurse`
+# (ERROR_INVALID_FUNCTION), so **it is rejected at the entrance**. **Only a new creation is rejected**;
+# existing ones (created from Linux, say) can still be opened.
+function test_ns_reserved_device_name_rejected {
+	$dir = Join-Path $TestRoot "t103_reserved"
+	if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null }
+
+	# **Pass it through `\\?\`.** With a plain Win32 path **`NUL` never reaches the FS and resolves to the
+	# NUL device instead** (the write succeeds but no file is created), so **it would measure a path pgfs
+	# is not even involved in**.
+	# The real harm appears when it actually gets created through `\\?\`, so that is what is checked.
+	$raw = "\\?\" + $dir + "\"
+	foreach ($name in @("CON", "NUL", "COM1", "LPT1", "CON.txt")) {
+		$p = $raw + $name
+		$created = $false
+		try {
+			[System.IO.File]::WriteAllText($p, "x")
+			$created = $true
+		}
+		catch { }
+		if ($created) {
+			Fail "the reserved name '$name' could be created (it is not being rejected at the entrance)"
+			return
+		}
+	}
+	# It also checks that, **having been rejected, the directory can be deleted normally** (which is the whole point of rejecting it).
+	try { Remove-Item -LiteralPath $dir -Recurse -ErrorAction Stop }
+	catch {
+		Fail "the reserved name was rejected yet the directory cannot be deleted: $($_.Exception.Message)"
+		return
+	}
+	Pass
+}
+
+# **A trailing space or dot is rejected too.** `dot` and `dot.` can coexist as separate things, and giving
+# `dot.` in a Win32 path normalizes it so the contents of `dot` come back - **it is not an error**, so the user cannot notice.
+function test_ns_trailing_space_or_dot_rejected {
+	$dir = Join-Path $TestRoot "t104_trailing"
+	if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null }
+
+	# **Pass it through `\\?\`.** With a plain Win32 path the trailing character is normalized away and it
+	# becomes a different name before reaching the FS (= it would not be checking the FS's decision at all).
+	$raw = "\\?\" + (Join-Path $dir "x")
+	$raw = $raw.Substring(0, $raw.Length - 1)   # strip the trailing "x" to get the base path
+	foreach ($name in @("trailspace ", "traildot.")) {
+		$p = $raw + $name
+		$created = $false
+		try {
+			[System.IO.File]::WriteAllText($p, "x")
+			$created = $true
+		}
+		catch { }
+		if ($created) {
+			Fail "the name '$name' with a trailing space or dot could be created"
+			return
+		}
+	}
+	Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+	Pass
+}
+
+# **A rename gets the same name check as a create.** Before, MoveFile skipped it, and through `\\?\` or Git
+# Bash's `mv a CON` / `mv a 'b.'` the names blocked on create could be made. **The kind of failure is checked
+# too**: the rename fails **and** the original name is still there (losing the original while refusing would be
+# worse than not refusing).
+function test_ns_rename_to_unsafe_name_rejected {
+	$dir = Join-Path $TestRoot "t106_rename_unsafe"
+	if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null }
+	$src = Join-Path $dir "src.txt"
+	[System.IO.File]::WriteAllText($src, "keep")
+	$raw = "\\?\" + $dir + "\"
+	# A **leftover with an unsafe name** from an earlier failure would let the rename through as a replacement (an
+	# existing name) and break the test's premise. It can only be removed through `\\?\`, so remove it first.
+	foreach ($name in @("CON", "COM1", "traildot.", "trailspace ")) {
+		try { [System.IO.File]::Delete($raw + $name) } catch { }
+	}
+	foreach ($name in @("CON", "COM1", "traildot.", "trailspace ")) {
+		$moved = $false
+		try {
+			[System.IO.File]::Move("\\?\" + $src, $raw + $name)
+			$moved = $true
+		}
+		catch { }
+		if ($moved) {
+			# **Remove the unsafe name it made through `\\?\` before failing** (leaving it breaks the next run and the cleanup).
+			try { [System.IO.File]::Delete($raw + $name) } catch { }
+			Fail "could rename to '$name' (MoveFile skips the name check)"
+			return
+		}
+		if (-not (Test-Path -LiteralPath $src)) {
+			Fail "the rename to '$name' failed, but the original src.txt is gone"
+			return
+		}
+	}
+	if ([System.IO.File]::ReadAllText($src) -ne "keep") {
+		Fail "the contents of src.txt changed after the refused rename"
+		return
+	}
+	Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+	Pass
+}
+
+# **`.fuse_hidden*` is not hidden on Windows.** libfuse leaves no such leftovers here, so there is no reason
+# to hide them, and hiding them only leaves "it does not show up in the enumeration yet cannot be deleted"
+# (`Remove-Item` goes through the enumeration so it cannot delete it, while calling `DeleteFile` directly can
+# = **there is a way to delete it and nobody can find it**).
+function test_ns_libfuse_leftover_is_visible {
+	$dir = Join-Path $TestRoot "t105_hidden"
+	if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null }
+	$name = ".fuse_hidden0123456789abcdef"
+	Set-Content -LiteralPath (Join-Path $dir $name) -Value "LEFTOVER" -NoNewline
+
+	# **Avoid the trap where $null becomes a one-element array** (tests/windows/README.md, the traps hit while writing the tests)
+	$listed = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+	if ($listed -notcontains $name) {
+		Fail "a name in libfuse's format does not show up in the enumeration (the policy is not to hide them on Windows): [$($listed -join ', ')]"
+		return
+	}
+	# **It must be deletable with `Remove-Item`.** If it is hidden, it fails with "not found".
+	try { Remove-Item -LiteralPath (Join-Path $dir $name) -Force -ErrorAction Stop }
+	catch {
+		Fail "it cannot be deleted with Remove-Item (it is hidden): $($_.Exception.Message)"
+		return
+	}
+	# **The parent must be rmdir-able.** If it is hidden, that becomes ENOTEMPTY.
+	try { Remove-Item -LiteralPath $dir -ErrorAction Stop }
+	catch {
+		Fail "the parent directory cannot be rmdir'ed (a hidden row is still there): $($_.Exception.Message)"
+		return
+	}
+	Pass
+}
+
 function test_concurrent_mkdir_diff_dirs {
 	$jobs = 0..4 | ForEach-Object {
 		Start-Job -ScriptBlock {
@@ -698,7 +1250,7 @@ function Setup {
 
 	if (-not (Test-Path -LiteralPath $MountRoot -PathType Container)) {
 		Write-Host "${RED}ERROR${NC}: $MountRoot does not exist."
-		Write-Host "Mount pgfs.assign first (bin\Publish\assign.pgfs.exe -m $MountRoot)."
+		Write-Host "Mount assign.pgfs first (bin\Publish\assign.pgfs.exe -m $MountRoot)."
 		exit 2
 	}
 
@@ -741,6 +1293,7 @@ try {
 	Invoke-Test test_truncate_shrink
 	Invoke-Test test_truncate_grow
 	Invoke-Test test_truncate_to_zero
+Invoke-Test test_truncate_zero_then_rewrite
 
 	# rename
 	Invoke-Test test_rename_file
@@ -760,6 +1313,22 @@ try {
 	Invoke-Test test_setfilesecurity_roundtrip
 	Invoke-Test test_wildcard_pattern
 
+	# Windows basics (exclusive create / allocation / a rename onto the same target)
+	Invoke-Test test_copy_item_round_trip
+	Invoke-Test test_byte_range_lock_enforced
+	Invoke-Test test_new_file_owner_is_requestor
+	Invoke-Test test_new_file_inherits_parent_group
+	Invoke-Test test_createnew_exclusive
+	Invoke-Test test_allocation_size_does_not_extend_eof
+	Invoke-Test test_rename_same_path_noop
+	Invoke-Test test_file_index_is_data_id_and_stable
+	Invoke-Test test_rename_over_open_victim_keeps_body
+	Invoke-Test test_readonly_dir_keeps_execute
+	Invoke-Test test_ns_reserved_device_name_rejected
+	Invoke-Test test_ns_trailing_space_or_dot_rejected
+	Invoke-Test test_ns_rename_to_unsafe_name_rejected
+	Invoke-Test test_ns_libfuse_leftover_is_visible
+
 	# concurrent access
 	Invoke-Test test_concurrent_writes_diff_files
 	Invoke-Test test_concurrent_reads_same_file
@@ -769,6 +1338,17 @@ try {
 	Write-Host ""
 	Write-Host "${BLUE}===========================================${NC}"
 	Write-Host "Results: ${GREEN}$($script:Passed) passed${NC}, ${RED}$($script:Failed) failed${NC}, ${YELLOW}$($script:Skipped) skipped${NC} (out of $($script:Total))"
+	# **Fail when not a single test ran.** When a typo in `-Filter` or a missing prerequisite leaves
+	# **everything skipped and exit 0**, it **looks like a green pass while nothing was checked**. The
+	# Linux side has the same shape: without `psql` on the PATH, `wbmeta.sh` / `negcache.sh` run nothing and exit 0.
+	if ($script:Total -eq 0) {
+		Write-Host "${RED}not a single test ran (does Filter '$Filter' match nothing?)${NC}"
+		exit 1
+	}
+	if ($script:Passed -eq 0) {
+		Write-Host "${RED}not a single test passed (everything skipped = a missing environment, not a passing test)${NC}"
+		exit 1
+	}
 	if ($script:Failed -gt 0) {
 		Write-Host "${RED}Failed tests:${NC}"
 		foreach ($name in $script:FailedNames) {

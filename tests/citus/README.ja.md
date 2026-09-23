@@ -2,7 +2,7 @@
 
 > 全テストの一覧 / 環境要件 / docker 統合の検討は [docs/tests.md](../../docs/tests.md) (ハブ) を参照。本 README はこのディレクトリの Citus 検証スクリプトの操作詳細を扱う。
 
-Citus 対応 (分散化 / 排他制御) に関する検証スクリプト。
+Citus 対応 (Phase 2 = 分散化 / Phase 3 = 排他制御) に関する検証スクリプト。
 
 ## ファイル
 
@@ -10,14 +10,14 @@ Citus 対応 (分散化 / 排他制御) に関する検証スクリプト。
 |---|---|---|
 | [verify.sql](verify.sql) + [verify.cmd](verify.cmd) | mkfs --clean --citus 済みの空 PGFS (= 1 ノード Citus on pgsql_server) に対する構成診断 SQL。`citus_tables` / 分散キー / shard 配置 / EXPLAIN を確認 | Windows ホスト → ssh pgsql_server 経由 |
 | [multinode_probe.sh](multinode_probe.sh) | Citus の仕様確認 (auto-sync / DDL 伝搬 / shard 配置 / citus_add_local_table_to_metadata 等) 用 one-off probe スクリプト。docker で 2 ノード Citus (coord + worker) を立てて 13 セクションの probe SQL を流す | linux_client (docker daemon 未起動からでも OK、trap で後始末) |
-| [test_matrix.sh](test_matrix.sh) | mkfs 多ノード Citus の **18 ケース** マトリックステスト (3 initial × 6 target)。docker で 2 ノード Citus (coord + worker1) を立てて、各 case で setup → mkfs → state 検証 → 次へ | linux_client (同上) |
-| [race_multinode.sh](race_multinode.sh) | クロスクライアント排他制御の残検証。docker 2 ノード Citus + mount.pgfs × 2 を立てて (i) 多ノード Citus 上の Linux e2e 35/35、(ii) 並行 write race の cross-client 整合性 (md5/size 一致)、(iii) 並行 mkdir race の EEXIST 保証、(iv) pgfs_lock 行累積の現実的サイズ、を一気通貫で確認 | linux_client (同上) |
-| [audit.sh](audit.sh) | 監査ログ ([docs/audit-log.md](../../docs/audit-log.md)) 専用テスト。docker 2 ノード Citus (coord + worker1) + mount.pgfs × 1 を立てて (A) 各 op の記録、(B) caller_* (uid/uname/host/ip)、(C) パーティション自動作成 = 月跨ぎ機構、(D) `audit.enabled=false` で 0 行、を確認。Citus 同一 tx commit も A/B/C 成立で同時実証 | linux_client (同上) |
-| [statfs.sh](statfs.sh) | df ([docs/df-support.md](../../docs/df-support.md)) 専用テスト。**plperl 入り自前イメージ** ([tests/docker/Dockerfile.citus-plperl](../docker/Dockerfile.citus-plperl)) で docker 2 ノード Citus (coord+worker1) を立て、`pgfs_statfs()` の **worker 集約** (R1〜R5) と `require`/`auto`/`nominal` 3 モード (A1/N1) を検証。R5 は `citus.enable_ddl_propagation=off` で coord ローカル `fs_free` だけ DROP して集約機構を証明。mount 不要 (mkfs + psql のみ) | linux_client (同上) |
+| [test_matrix.sh](test_matrix.sh) | mkfs Phase 2 の **18 ケース** マトリックステスト (3 initial × 6 target)。docker で 2 ノード Citus (coord + worker1) を立てて、各 case で setup → mkfs → state 検証 → 次へ | linux_client (同上) |
+| [race_multinode.sh](race_multinode.sh) | Phase 3 (排他制御) の残検証。docker 2 ノード Citus + mount.pgfs × 2 を立てて (i) 多ノード Citus 上の Linux e2e 35/35、(ii) 並行 write race の cross-client 整合性 (md5/size 一致)、(iii) 並行 mkdir race の EEXIST 保証、(iv) pgfs_lock 行累積の現実的サイズ、を一気通貫で確認 | linux_client (同上) |
+| [audit.sh](audit.sh) | 監査ログ ([docs/audit-log.md](../../docs/design/audit-log.md)) 専用テスト。docker 2 ノード Citus + mount.pgfs × 1 を立てて (A) 各 op の記録、(B) caller_* (uid/uname/host/ip)、(C) パーティション自動作成 = 月跨ぎ機構、(D) `audit.enabled=false` で 0 行、を確認。Citus 同一 tx commit も A/B/C 成立で同時実証 | linux_client (同上) |
+| [statfs.sh](statfs.sh) | df ([docs/df-support.md](../../docs/design/df-support.md)) 専用テスト。**plperl 入り自前イメージ** ([tests/docker/Dockerfile.citus-plperl](../docker/Dockerfile.citus-plperl)) で docker 2 ノード Citus (coord+worker1) を立て、`pgfs_statfs()` の **worker 集約** (R1〜R5) と `require`/`auto`/`nominal` 3 モード (A1/N1) を検証。R5 は `citus.enable_ddl_propagation=off` で coord ローカル `fs_free` だけ DROP して集約機構を証明。mount 不要 (mkfs + psql のみ) | linux_client (同上) |
 
 ## 共通の前提
 
-- Linux/Windows e2e ([tests/linux/](../linux/README.ja.md) / [tests/windows/](../windows/README.ja.md)) はこのディレクトリの **回帰テストではなく機能テスト**。Citus 環境での通過実績は [docs/history.md](../../docs/history.md) に記録。
+- Linux/Windows e2e ([tests/linux/](../linux/README.md) / [tests/windows/](../windows/README.md)) はこのディレクトリの **回帰テストではなく機能テスト**。Citus 環境での通過実績は別途 [docs/history.md](../../docs/history.md) Phase 2 に記録。
 - このディレクトリは「Citus 分散が期待通り設定されたか」の **構成診断** と「mkfs の Citus フラグ系挙動の正しさ」が主目的。
 
 ## 環境変数 (`*.sh` 共通)
@@ -61,7 +61,7 @@ ssh pgsql_server 'sudo -u postgres -i psql pgfs' < tests/citus/verify.sql
 
 ## multinode_probe.sh (Citus 仕様の挙動確認)
 
-設計上「これは Citus がやってくれるはず」と仮定した挙動を docker 上の 2 ノード Citus で実機確認するスクリプト。分散化の設計途中で「per-worker citus_set_coordinator_host は必要か?」の判断に使いました。
+設計上「これは Citus がやってくれるはず」と仮定した挙動を docker 上の 2 ノード Citus で実機確認するスクリプト。Phase 2 設計途中で「Phase 4 (per-worker citus_set_coordinator_host) は必要か?」の判断に使いました。
 
 ```bash
 # linux_client 上で
@@ -70,7 +70,7 @@ bash tests/citus/multinode_probe.sh
 
 検証する仮説 (詳細は [multinode_probe.sh](multinode_probe.sh) ヘッダ + 各 section コメント):
 
-- **[Q2]** `citus_add_node` の auto-sync で worker 側 `pg_dist_node` に coordinator (groupid=0) 行が同期されるか → **✅ Yes** (per-worker 呼び出し不要)
+- **[Q2]** `citus_add_node` の auto-sync で worker 側 `pg_dist_node` に coordinator (groupid=0) 行が同期されるか → **✅ Yes** (Phase 4 不要)
 - **[Q2b]** worker への `citus_set_coordinator_host` 無しで `citus_add_local_table_to_metadata` が通るか → **✅ Yes**
 - **[Schema]** coordinator の `CREATE SCHEMA` が worker に DDL 伝搬するか → **✅ 伝搬**
 - **[DropCascade]** `DROP SCHEMA CASCADE` で worker shard も掃除されるか → **✅ 掃除される**
@@ -86,7 +86,7 @@ bash tests/citus/multinode_probe.sh
 - 終了時 trap でコンテナ / イメージ / docker daemon を **元の状態に** 戻す (元から daemon 動いていれば触らない)
 - ログは `/tmp/citus_multinode_probe.log`
 
-## test_matrix.sh (mkfs 多ノード Citus 18 ケースマトリックス)
+## test_matrix.sh (mkfs Phase 2 18 ケースマトリックス)
 
 mkfs --citus / --worker / --clean の組み合わせで `EnsureDatabaseAsync` の 3 つの分岐 (新規セットアップ / 既存維持ガード / --clean による drop→再構築) が意図通りか確認します。
 
@@ -123,11 +123,22 @@ bash tests/citus/test_matrix.sh
 
 ### 実績
 
-**18/18 PASS** (Citus 14.0.0 + docker on linux_client)。
+**18/18 PASS** (linux_client の docker Citus。**2026-09-21 に現行 HEAD で再走**。旧記録は 2026-05-26)。
+**再走したときは 14/18 が落ちたが、原因は実装ではなく期待値の古さだった** (下の §期待値を書くときの注意)。
 
-## race_multinode.sh (クロスクライアント排他制御の残検証)
+### 期待値を書くときの注意 (2 つ踏んだ)
 
-Api に組み込んだクロスクライアント排他制御を多ノード Citus 環境で実機検証するスクリプト。docker で coord + worker1 を立てて mount.pgfs を 2 プロセス並列に動かし、排他制御の検証チェックリストの 4 項目を一気通貫で確認します。
+- **分散しているのは 4 テーブル** (`inode` / `data` / `data_chunk` / `audit`)、**local に metadata 登録するのは
+  3 テーブル** (`lock` / `settings` / `mounts`)。**`lock` を分散させないのは、行ロックが
+  `shard_replication_factor > 1` で拒否されるため** ([support_for_citus.md](../../docs/design/support_for_citus.md) §排他制御)。
+  **`dist=5 / local=1` を期待したまま長く放置されていて、再走したら 14/18 が落ちた。**
+- **`pg_tables` はパーティション親を返さない。** `pgfs_audit` は **`relkind = 'p'`** なので、
+  テーブルの存在を数えるなら **`pg_class` を見る** (`relkind IN ('r','p')`)。
+  `pg_tables` で数えると **audit だけ足りない**という誤報になる。
+
+## race_multinode.sh (Phase 3 残検証)
+
+Phase 3 (排他制御) の Api 組み込み を多ノード Citus 環境で実機検証するスクリプト。docker で coord + worker1 を立てて mount.pgfs を 2 プロセス並列に動かし、Phase 3 の検証チェックリストの 4 項目を一気通貫で確認します。
 
 ```bash
 # linux_client 上で (mkfs.pgfs / mount.pgfs バイナリが bin/Publish/ に必要)
@@ -138,7 +149,7 @@ bash tests/citus/race_multinode.sh
 
 | Test | 内容 | 検証している保証 |
 |---|---|---|
-| Test 1 | 多ノード Citus 上で [tests/linux/e2e.sh](../linux/e2e.sh) 35 ケース | 分散 + 排他制御が多ノードで機能、cross-shard hop も含めて regression なし |
+| Test 1 | 多ノード Citus 上で [tests/linux/e2e.sh](../linux/e2e.sh) 35 ケース | Phase 2 + Phase 3 が多ノードで機能、cross-shard hop も含めて regression なし |
 | Test 2 | 2 client から同じファイルへ並行 dd (8MiB × 4 round、urandom vs zero) → md5/size が両 client で一致 | `LockData(dataId)` で writer 同士が直列化、PG 行ロックと相まってチャンク level の torn write 無し / cross-client 整合性 |
 | Test 3 | 2 client から同じ親に並行 mkdir 同名 (20 round × serial + parallel) | `(parent_id, name)` UK が cross-shard 整合性を保証 (シャード跨ぎでも全 client から見た「同じ親に同名 2 つ」は不可能) |
 | Test 4 | 上記 1-3 完走後の `pgfs_lock` 行数 + relation size | DELETE しない方針なので累積するが、1 行 ~50 bytes × 数千 = 1MB 以下に収まる (設計値 100 万行で 100MB 以下と整合) |
@@ -155,11 +166,11 @@ bash tests/citus/race_multinode.sh
 
 ### 実績
 
-**4/4 PASS** (Citus 14.0.0 + docker on linux_client)。pgfs_lock rows=178 / size=768kB。
+**4/4 PASS** (Citus 14.0.0 + docker on linux_client, 2026-05-26)。pgfs_lock rows=178 / size=768kB。
 
 ## audit.sh (監査ログ専用テスト)
 
-監査ログ ([docs/audit-log.md](../../docs/audit-log.md)) の機能本体と既存 e2e 回帰は通過済み。本スクリプトは監査に**固有**の振る舞いを専用テストとして検証する。docker で coord + worker1 を立て、mount.pgfs を 1 プロセス起動して以下 5 項目を確認する。
+監査ログ ([docs/audit-log.md](../../docs/design/audit-log.md)) の機能本体と既存 e2e 回帰は通過済み。本スクリプトは監査に**固有**の振る舞いを専用テストとして検証する。docker で coord + worker1 を立て、mount.pgfs を 1 プロセス起動して以下 5 項目を確認する。
 
 ```bash
 # linux_client 上で (mkfs.pgfs / mount.pgfs バイナリが bin/Publish/ に必要)
@@ -190,7 +201,7 @@ bash tests/citus/audit.sh
 
 ### 実績
 
-**12/12 PASS** (Citus docker on linux_client)。内訳: Sanity(audit 分散登録) / C1-before(当月パーティション未作成 + DEFAULT 無し = 2) / A(op 別記録 + create detail = 2) / B(uid+uname / host / ip = 3) / C1-after(自動生成) / C2(拒否 + 追加成立 = 2) / D(enabled=false で 0 行)。呼び出し元の uid/uname/host と create 行の detail.mode/kind を確認。
+**12/12 PASS** (Citus docker on linux_client, 2026-05-31)。内訳: Sanity(audit 分散登録) / C1-before(当月パーティション未作成 + DEFAULT 無し = 2) / A(op 別記録 + create detail = 2) / B(uid+uname / host / ip = 3) / C1-after(自動生成) / C2(拒否 + 追加成立 = 2) / D(enabled=false で 0 行)。`caller_uid` / `uname` / `host` / `ip` と create detail.mode=100664/kind=file を確認。
 
 ## cross-shard rename の動作確認
 
@@ -200,7 +211,7 @@ cross-shard rename を SQL レベルで明示確認したい場合は [verify.sq
 
 ## 関連ドキュメント
 
-- 設計: [docs/support_for_citus.md](../../docs/support_for_citus.md)
-- 設計判断: [docs/history.md](../../docs/history.md)
+- 設計: [docs/support_for_citus.md](../../docs/design/support_for_citus.md)
+- 完了経緯: [docs/history.md](../../docs/history.md) の「Citus Phase 2」
 - DDL: [docs/ddl/](../../docs/ddl/README.md)
 - mkfs CLI: [docs/Mkfs.md](../../docs/Mkfs.md)
