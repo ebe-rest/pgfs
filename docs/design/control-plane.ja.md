@@ -1,6 +1,6 @@
 # コントロールプレーン — 登録表 / 制御 NOTIFY / config / status
 
-> **道順**: [docs/README.md](../README.md) › [runtime-control-plane.md](runtime-control-plane.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [runtime-control-plane.ja.md](runtime-control-plane.ja.md) › **本書**
 >
 > **この doc が正である範囲**: 実行時に設定を読み書きし、稼働状況を見るための土台と CLI の設計・
 > 実装状況・変更記録。`{prefix}mounts` 登録表、制御 NOTIFY、`Field` の reload ポリシー、
@@ -10,12 +10,12 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [../Pgfsctl.md](../Pgfsctl.md) | **利用者向けの CLI 仕様** (オプション・出力例)。本書は設計側 |
-> | [gui.md](gui.md) | 同じ Core API (`StatusAdmin` / `ConfigAdmin`) を読む GUI 側 |
-> | [settings-matrix.md](settings-matrix.md) | 設定項目そのものの一覧と既定値 (reload ポリシーの値も) |
-> | [cache.md](cache.md) / [write-back.md](write-back.md) / [metadata-write-back.md](metadata-write-back.md) | ここで読み書きする「対象」の側 |
-> | [database.md](database.md) / [../ddl/](../ddl/README.md) | `{prefix}mounts` の DDL |
-> | [runtime-control-plane.md](runtime-control-plane.md) | 運用フェーズ全体の構成とフェーズ間の関係 (ハブ) |
+> | [../Pgfsctl.ja.md](../Pgfsctl.ja.md) | **利用者向けの CLI 仕様** (オプション・出力例)。本書は設計側 |
+> | [gui.ja.md](gui.ja.md) | 同じ Core API (`StatusAdmin` / `ConfigAdmin`) を読む GUI 側 |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | 設定項目そのものの一覧と既定値 (reload ポリシーの値も) |
+> | [cache.ja.md](cache.ja.md) / [write-back.ja.md](write-back.ja.md) / [metadata-write-back.ja.md](metadata-write-back.ja.md) | ここで読み書きする「対象」の側 |
+> | [database.ja.md](database.ja.md) / [../ddl/](../ddl/README.ja.md) | `{prefix}mounts` の DDL |
+> | [runtime-control-plane.ja.md](runtime-control-plane.ja.md) | 運用フェーズ全体の構成とフェーズ間の関係 (ハブ) |
 >
 > **章立て**: この doc は 3 フェーズが並ぶので、固定 3 章 (設計 → 実装ステータス → 変更記録) を
 > **フェーズごとに**適用している。時系列の記録だけは末尾の [§変更記録](#変更記録) に集約する。
@@ -92,7 +92,7 @@
 | `NextMount` | 再マウントで反映 | `mount.mount_point`, FuseFlags, `database.connection`, `schema`/`prefix` |
 | `Format` | mkfs 専用・以後不変 | `file_system.cluster_size`/`chunk_size`/`max_file_size` |
 
-ライブ適用の実体は Core 側の可変ランタイム状態の差し替え (`Logger.MinLevel` / `LogSink.Configure` / InodeCache 容量再設定 / fallback 名 / audit フラグ / statfs フラグ)。FUSE/Dokan の再初期化は不要 (= OS 層は無改修で済む範囲が `Live`)。マトリックスは [settings-matrix.md](settings-matrix.md) に reload 列を追加して正にする。
+ライブ適用の実体は Core 側の可変ランタイム状態の差し替え (`Logger.MinLevel` / `LogSink.Configure` / InodeCache 容量再設定 / fallback 名 / audit フラグ / statfs フラグ)。FUSE/Dokan の再初期化は不要 (= OS 層は無改修で済む範囲が `Live`)。マトリックスは [settings-matrix.ja.md](settings-matrix.ja.md) に reload 列を追加して正にする。
 
 ---
 
@@ -188,7 +188,7 @@
 
 - **4a/4b 完了 **: Core [StatusAdmin](../../src/core/src/Api/StatusAdmin.cs) (`ListMounts` = DB の `now()` 差分で uptime/heartbeat 経過/live? 付与・テーブル不在は graceful / `GetFsStats` = inode/file/chunk 数・使用バイト `sum(length(payload))`・version/label/cluster/max + audit + citus(+pg_dist_node)) + pgfsctl `status [--json]` (セクション text / JSON)。接続解決は [CliUtil](../../src/ctl/src/CliUtil.cs) に共通化 (config/status 共有)。**オフライン smoke**: 実 DB で Layer 2 統計が正確、`{prefix}mounts` 不在 FS では graceful degrade を確認。
 - **4c 完了 (実機 e2e 緑)**: docker (実 FUSE) で [status.sh](../../tests/docker/status.sh) PASS — Layer 1 (table_present / live な fuse mount 1 行 / unmount で deregister 0 行) + Layer 2 (ファイル作成で inodes 1→3・used_bytes>0・chunk_count≥1)。
-- **doc**: [Pgfsctl.md](../Pgfsctl.md) 新設 (config + status の CLI 仕様)、README / docs/README 一覧へ登録済。
+- **doc**: [Pgfsctl.ja.md](../Pgfsctl.ja.md) 新設 (config + status の CLI 仕様)、README / docs/README 一覧へ登録済。
 - **Layer 3 完了 (4d-1〜4d-4・実機 e2e 緑)** — 下 §Phase 4 Layer 3 確定設計の末尾 as-built を参照。
 
 ### Phase 4 Layer 3 確定設計
@@ -235,5 +235,5 @@
 
 時系列の記録はここに追記する (設計と as-built は上の各フェーズの章が正)。
 
-- [runtime-control-plane.md](runtime-control-plane.md) が 1,802 行に肥大したため、
+- [runtime-control-plane.ja.md](runtime-control-plane.ja.md) が 1,802 行に肥大したため、
   機能ごとに分割してこの doc を切り出した。内容は分割前のまま。

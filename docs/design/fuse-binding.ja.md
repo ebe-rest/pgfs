@@ -1,6 +1,6 @@
 # v0.2.0 (B): FUSE 内製バインディング設計
 
-> **道順**: [docs/README.md](../README.md) › [v0.2.0-plan.md](v0.2.0-plan.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [v0.2.0-plan.ja.md](v0.2.0-plan.ja.md) › **本書**
 >
 > **この doc が正である範囲**: libfuse3 の**内製バインディング** (`Pgfs.Fuse`) の設計と as-built の正。
 > `dlopen` + `dlvsym` によるシンボル解決 (symbol versioning)、構造体レイアウト (`fuse_config` /
@@ -10,19 +10,19 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [v0.2.0-plan.md](v0.2.0-plan.md) | **親計画** (決定1 内製化 / 決定2 Lib 分割 / A の移動先確定) |
-> | [../architecture.md](../architecture.md) | Core/Fuse/Dokan のプロジェクト構成・依存・ビルド手順 |
-> | [fstab-support.md](fstab-support.md) | `mount(8)` / fstab 経由の起動と、そこからの `-o` 伝播 |
-> | [../Mount.md](../Mount.md) | 利用者向けの CLI 契約とマウントオプションの分類 |
-> | [windows-parity.md](windows-parity.md) | 同じ機能を Dokan 側へ展開するときの設計 |
-> | [../tests.md](../tests.md) | e2e の一覧と実行方法 (本書の検証方針が依拠する実体) |
+> | [v0.2.0-plan.ja.md](v0.2.0-plan.ja.md) | **親計画** (決定1 内製化 / 決定2 Lib 分割 / A の移動先確定) |
+> | [../architecture.ja.md](../architecture.ja.md) | Core/Fuse/Dokan のプロジェクト構成・依存・ビルド手順 |
+> | [fstab-support.ja.md](fstab-support.ja.md) | `mount(8)` / fstab 経由の起動と、そこからの `-o` 伝播 |
+> | [../Mount.ja.md](../Mount.ja.md) | 利用者向けの CLI 契約とマウントオプションの分類 |
+> | [windows-parity.ja.md](windows-parity.ja.md) | 同じ機能を Dokan 側へ展開するときの設計 |
+> | [../tests.ja.md](../tests.ja.md) | e2e の一覧と実行方法 (本書の検証方針が依拠する実体) |
 >
 > 由来と実装の所在 (doc ではないので表に入れない): 原典 fork = [ebe-rest/Tmds.Fuse](https://github.com/ebe-rest/Tmds.Fuse)
 > (クリーン tip `d454274`)。`LibFuse.cs` / `LibFuse.structs.cs` / `FuseMount.cs` / `IFuseFileSystem.cs` を
 > [src/fuse/src/](../../src/fuse/src/) へ挙動保存で移植 (クレジットは [NOTICES.md](../../src/fuse/NOTICES.md))。
 > pgfs の FS 実装は [src/fuse/src/FileSystem.cs](../../src/fuse/src/FileSystem.cs) (25 op・path ベース)。
 
-> **実装済 + 両 OS e2e 緑**。本書は [v0.2.0-plan.md](v0.2.0-plan.md) の決定1 (FUSE 内製化) の詳細設計 (B)。実装状況は直下 §実装ステータス。
+> **実装済 + 両 OS e2e 緑**。本書は [v0.2.0-plan.ja.md](v0.2.0-plan.ja.md) の決定1 (FUSE 内製化) の詳細設計 (B)。実装状況は直下 §実装ステータス。
 > A (Lib 分割) は設計クローズ済。本書は **libfuse3 公開 API 全体 × pgfs 使用箇所** の対象表を作り、
 > その上に「自前の最小 libfuse P/Invoke バインディング」(= `vendor/Tmds.Fuse` fork の置換) を設計する。
 > 動詞 (関数) ベースで列挙し、構造体は §2 に参照形式で分離する。**設計判断 §4 ①〜⑥ は 確定。次は実装。**
@@ -48,7 +48,7 @@ Lib を `Pgfs.Core` / `Pgfs.Fuse` / `Pgfs.Dokan` に分割し、libfuse バイ�
 
 ## 目的とスコープ
 
-- **自前の最小 libfuse P/Invoke バインディング**を `Pgfs.Fuse` 内に持ち、`vendor/Tmds.Fuse` submodule + fork を廃止する ([v0.2.0-plan.md 決定1](v0.2.0-plan.md))。
+- **自前の最小 libfuse P/Invoke バインディング**を `Pgfs.Fuse` 内に持ち、`vendor/Tmds.Fuse` submodule + fork を廃止する ([v0.2.0-plan.ja.md 決定1](v0.2.0-plan.ja.md))。
 - **高レベル API (`fuse.h`) のみ**。low-level / session API (`fuse_lowlevel.h`) は不使用 (現行 fork も同じ)。
 - libfuse の **C ABI はインターフェース** (バインドするだけ・ソースは vendor しない)。`libfuse.so` は利用者が用意 (LGPL・`dlopen` 動的リンク)。
 
@@ -348,6 +348,6 @@ hard_remove=1   use_ino=1        nullpath_ok=1
 **ポインタを踏む前に気づける**。
 
 > **注**: `nullpath_ok` は**現在は立てていない**。理由と、立てようとして戻ってきた経緯は
-> [handle-context.md §なぜ `hard_remove` を立てないか](handle-context.md) が正。
+> [handle-context.ja.md §なぜ `hard_remove` を立てないか](handle-context.ja.md) が正。
 > **本節はオフセットと検算手順の記録**であり、「立てるべき」という意味ではない。
 > 低レベル API への移行を検討するときに、**この計算をやり直さずに済むように残してある。**

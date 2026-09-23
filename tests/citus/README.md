@@ -1,5 +1,7 @@
 # pgfs Citus verification
 
+> **Route**: [docs/README.md](../../docs/README.md) › [docs/tests.md](../../docs/tests.md) (the test hub) › **this document**
+>
 > For the full list of tests, environment requirements, and the docker-integration analysis, see [docs/tests.md](../../docs/tests.md) (the hub). This README covers the operational details of the Citus verification scripts in this directory.
 
 Verification scripts for the Citus support (distribution and cross-client locking).

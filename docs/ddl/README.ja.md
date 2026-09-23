@@ -1,6 +1,6 @@
 # PGFS DDL
 
-> **道順**: [docs/README.md](../README.md) › [design/database.md](../design/database.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [design/database.ja.md](../design/database.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **テーブル単位の DDL 本体** (`pgfs_*.sql` の一覧と、各ファイルが
 > 何を作るか)。**列の意味や設計意図は書かない** — それは database.md が持つ。
@@ -9,13 +9,13 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [../design/database.md](../design/database.md) | **スキーマ設計** (列の意味・タイムスタンプ規約・実占有バイト) |
-> | [../Mkfs.md](../Mkfs.md) | DDL を**適用する側** (mkfs CLI の挙動) |
-> | [../design/support_for_citus.md](../design/support_for_citus.md) | 分散テーブル化 (`create_distributed_table` の対象と分散キー) |
+> | [../design/database.ja.md](../design/database.ja.md) | **スキーマ設計** (列の意味・タイムスタンプ規約・実占有バイト) |
+> | [../Mkfs.ja.md](../Mkfs.ja.md) | DDL を**適用する側** (mkfs CLI の挙動) |
+> | [../design/support_for_citus.ja.md](../design/support_for_citus.ja.md) | 分散テーブル化 (`create_distributed_table` の対象と分散キー) |
 
 PostgreSQL Filesystem (PGFS) のスキーマ / テーブル定義を **テーブル単位**に分割した DDL ファイル群です。
 
-このディレクトリの DDL は **参照用 / 手動構築用**で、通常運用では [mkfs.pgfs](../../src/mkfs/) が同等のテーブルを動的に作成します。詳細な仕様は [database.md](../design/database.md) を参照。
+このディレクトリの DDL は **参照用 / 手動構築用**で、通常運用では [mkfs.pgfs](../../src/mkfs/) が同等のテーブルを動的に作成します。詳細な仕様は [database.ja.md](../design/database.ja.md) を参照。
 
 ## ファイル一覧
 
@@ -25,11 +25,11 @@ PostgreSQL Filesystem (PGFS) のスキーマ / テーブル定義を **テーブ
 | [pgfs_schema.sql](pgfs_schema.sql) | データベース | スキーマ `pgfs` を作成。PGFS ユーザーで対象 DB に接続して実行。 |
 | [pgfs_inode.sql](pgfs_inode.sql) | テーブル | inode テーブル + ルート inode (`id = 0`) の投入 + インデックス。 |
 | [pgfs_data.sql](pgfs_data.sql) | テーブル | データ本体の参照管理テーブル (`id` BIGSERIAL)。 |
-| [pgfs_data_chunk.sql](pgfs_data_chunk.sql) | テーブル | データ本体の bytea チャンク管理。`(data_id, chunk_index)` で PK。Citus Phase 1 で LO から bytea へ移行 ([docs/support_for_citus.md](../design/support_for_citus.md))。 |
-| [pgfs_lock.sql](pgfs_lock.sql) | テーブル | cross-client 排他制御用 lock token テーブル。`target_id` 単独 PK。Citus Phase 2 で先行作成、Phase 3 で Api の行ロックに接続済み ([docs/support_for_citus.md](../design/support_for_citus.md))。 |
+| [pgfs_data_chunk.sql](pgfs_data_chunk.sql) | テーブル | データ本体の bytea チャンク管理。`(data_id, chunk_index)` で PK。Citus Phase 1 で LO から bytea へ移行 ([docs/support_for_citus.ja.md](../design/support_for_citus.ja.md))。 |
+| [pgfs_lock.sql](pgfs_lock.sql) | テーブル | cross-client 排他制御用 lock token テーブル。`target_id` 単独 PK。Citus Phase 2 で先行作成、Phase 3 で Api の行ロックに接続済み ([docs/support_for_citus.ja.md](../design/support_for_citus.ja.md))。 |
 | [pgfs_settings.sql](pgfs_settings.sql) | テーブル | 設定値ストア (`Pgfs.Core.Config` の `SaveTo=Db` 永続化先)。`(scope, key)` で PK のフラット形。 |
-| [pgfs_audit.sql](pgfs_audit.sql) | テーブル | 監査ログ。メタデータ変更を `occurred_at` 月次 RANGE パーティション (DEFAULT 無し、月パーティションはアプリが ensure) に記録。`(occurred_at, id)` で PK。`audit.enabled` (mkfs `--audit`) で opt-in ([docs/audit-log.md](../design/audit-log.md))。 |
-| [pgfs_mounts.sql](pgfs_mounts.sql) | テーブル | 実行中マウントのレジストリ (揮発)。mount/assign が起動時 INSERT → 定期 heartbeat → 終了で DELETE。**喪失を出した unmount だけは DELETE せず墓標として残す** (`stats.unflushedLoss`・B-2)。`mount_id` 単独 PK ([docs/design/runtime-control-plane.md](../design/runtime-control-plane.md) Phase 2)。 |
+| [pgfs_audit.sql](pgfs_audit.sql) | テーブル | 監査ログ。メタデータ変更を `occurred_at` 月次 RANGE パーティション (DEFAULT 無し、月パーティションはアプリが ensure) に記録。`(occurred_at, id)` で PK。`audit.enabled` (mkfs `--audit`) で opt-in ([docs/audit-log.ja.md](../design/audit-log.ja.md))。 |
+| [pgfs_mounts.sql](pgfs_mounts.sql) | テーブル | 実行中マウントのレジストリ (揮発)。mount/assign が起動時 INSERT → 定期 heartbeat → 終了で DELETE。**喪失を出した unmount だけは DELETE せず墓標として残す** (`stats.unflushedLoss`・B-2)。`mount_id` 単独 PK ([docs/design/runtime-control-plane.ja.md](../design/runtime-control-plane.ja.md) Phase 2)。 |
 
 ## 実行順序
 
@@ -115,7 +115,7 @@ DB 保管の設定は `pgfs.toml` ではなく `pgfs_settings` の行で持つ�
 | `(file_system, default_chunk_size)` | `1048576` | 新規 data のチャンクサイズ |
 | `(file_system, max_file_size)` | `1099511627776` | 公称容量等に使用 |
 | `(database, tablespace)` / `(database, tablespace_path)` | `pg_default` / 空文字 | mkfs の DB 構築設定。TOML のマウント設定とは分離 |
-| `(audit, enabled)` | `false` | 監査ログ ([../audit-log.md](../design/audit-log.md))。使うなら `true` |
+| `(audit, enabled)` | `false` | 監査ログ ([../audit-log.ja.md](../design/audit-log.ja.md))。使うなら `true` |
 
 例 (監査ログを有効化。`value` は JSONB なので bool は `true`/`false`):
 

@@ -1,6 +1,6 @@
 # 設定スコープ再編 + plperlu ゲート + tablespace auto-mkdir (設計)
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: 合意した設定モデル変更の**設計と決定**。新スコープ `app`
 > (`app.plperlu` ゲート / `statfs.mode` からの移設)、`database.citus` と `file_system` サイズ系の DB 権威化、
@@ -11,16 +11,16 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [settings-matrix.md](settings-matrix.md) | 全設定項目の現在の一覧 (CLI / TOML / DB / 既定 / 参照タイミング)。本書の決定はそちらへ反映する |
-> | [../Mkfs.md](../Mkfs.md) | 利用者向けの `mkfs.pgfs` CLI 仕様と既定値表 |
-> | [df-support.md](df-support.md) | `app.statfs` が切り替える df/statfs 実装そのもの (plperlu 関数・3 段フォールバック) |
-> | [support_for_citus.md](support_for_citus.md) | Citus 分散そのものの設計。tablespace 制約の背景 |
-> | [database.md](database.md) | `{prefix}settings` を含む DB スキーマの設計 |
-> | [control-plane.md](control-plane.md) | 設定を実行時に読み書きする経路 (`pgfsctl config` / reload ポリシー) |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | 全設定項目の現在の一覧 (CLI / TOML / DB / 既定 / 参照タイミング)。本書の決定はそちらへ反映する |
+> | [../Mkfs.ja.md](../Mkfs.ja.md) | 利用者向けの `mkfs.pgfs` CLI 仕様と既定値表 |
+> | [df-support.ja.md](df-support.ja.md) | `app.statfs` が切り替える df/statfs 実装そのもの (plperlu 関数・3 段フォールバック) |
+> | [support_for_citus.ja.md](support_for_citus.ja.md) | Citus 分散そのものの設計。tablespace 制約の背景 |
+> | [database.ja.md](database.ja.md) | `{prefix}settings` を含む DB スキーマの設計 |
+> | [control-plane.ja.md](control-plane.ja.md) | 設定を実行時に読み書きする経路 (`pgfsctl config` / reload ポリシー) |
 
 レビューで合意した一連の設定モデル変更と、それに連なる Citus カスタム tablespace
 対応 (#23) の設計メモ。**設定モデルはプロジェクト指針が「慎重に」と指定する領域**なので、本書で合意してから
-実装する。設定項目の正は [Schema.cs](../../src/core/src/Config/Schema.cs) / [settings-matrix.md](settings-matrix.md)。
+実装する。設定項目の正は [Schema.cs](../../src/core/src/Config/Schema.cs) / [settings-matrix.ja.md](settings-matrix.ja.md)。
 
 ステータス: **実装・実機検証済み (2026-06-03)**。linux_client throwaway PG で 28/28 PASS (plperlu マトリクス /
 `--deny-plperlu`/`--plperlu false` / require+deny エラー / 生成 toml の DB キー非出力 + 配布コメント /
@@ -104,7 +104,7 @@ CLI (合意済み):
 
 ## plperlu × statfs の挙動マトリクス (合意済み)
 
-statfs 関数 (`{prefix}statfs` / `fs_free`) の設計・3 段フォールバック・Citus 多 worker 集約は [df-support.md](df-support.md) を正とする。本節は `app.plperlu` ゲートとの掛け合わせのみ示す。
+statfs 関数 (`{prefix}statfs` / `fs_free`) の設計・3 段フォールバック・Citus 多 worker 集約は [df-support.ja.md](df-support.ja.md) を正とする。本節は `app.plperlu` ゲートとの掛け合わせのみ示す。
 
 | `--statfs` | `app.plperlu` = allow | `app.plperlu` = deny |
 |---|---|---|
@@ -151,7 +151,7 @@ file_system サイズ系が新たに DB 行として増える)。
   `DatabaseConfig` の所属替え。Build* の配線。
 - [Initializer.cs](../../src/mkfs/src/Initializer.cs): plperlu ゲート参照、tablespace auto-mkdir、ガード撤廃、
   per-table TABLESPACE 句廃止 + CREATE DATABASE WITH TABLESPACE 化、PopulateSettingsRows に新キー。
-- [settings-matrix.md](settings-matrix.md): 表を更新。
+- [settings-matrix.ja.md](settings-matrix.ja.md): 表を更新。
 - ヘルプ ([HelpText](../../src/core/src/Config/HelpText.cs)) は Schema から自動生成なので追従。
 
 ## (F) mkfs 生成 toml に「配布用 mkfs パラメータ」をコメントで残す

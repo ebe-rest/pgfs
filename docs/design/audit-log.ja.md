@@ -1,6 +1,6 @@
 # 監査ログ (audit log)
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: 監査ログ機能の設計と実装ステータス。`{prefix}audit` のスキーマと `detail` の中身、
 > 月次 RANGE パーティションを「当月が無ければ op 前に ensure する」手順、記録する 6 操作とフック位置、
@@ -11,20 +11,20 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [../ddl/README.md](../ddl/README.md) | `{prefix}audit` の DDL 本体 ([pgfs_audit.sql](../ddl/pgfs_audit.sql)) |
-> | [database.md](database.md) | スキーマ全体の設計とタイムスタンプ規約。本書は audit テーブルの分だけを持つ |
-> | [metadata-write-back.md](metadata-write-back.md) | メタデータ遅延書き (1e) 本体の設計。監査行を flush tx へ畳む側 |
-> | [metadata-write-back-reviews.md](metadata-write-back-reviews.md) | 1e のレビュー記録 (`writeback_loss` や取り消しペアの同期化に至った経緯) |
-> | [windows-parity.md](windows-parity.md) | Windows (Dokan) 側の as-built。`GetRequestor` の取得位置と残差分 |
-> | [settings-matrix.md](settings-matrix.md) | `audit.enabled` の CLI / 保存先 / reload ポリシーの一覧 |
-> | [../Mkfs.md](../Mkfs.md) | 利用者向けの `mkfs --audit` 仕様と既定値 |
-> | [support_for_citus.md](support_for_citus.md) | audit を含む Citus 分散配置そのものの方針 |
-> | [../tests.md](../tests.md) | テストのハブ。件数・実行方法・環境要件はそちら |
+> | [../ddl/README.ja.md](../ddl/README.ja.md) | `{prefix}audit` の DDL 本体 ([pgfs_audit.sql](../ddl/pgfs_audit.sql)) |
+> | [database.ja.md](database.ja.md) | スキーマ全体の設計とタイムスタンプ規約。本書は audit テーブルの分だけを持つ |
+> | [metadata-write-back.ja.md](metadata-write-back.ja.md) | メタデータ遅延書き (1e) 本体の設計。監査行を flush tx へ畳む側 |
+> | [metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) | 1e のレビュー記録 (`writeback_loss` や取り消しペアの同期化に至った経緯) |
+> | [windows-parity.ja.md](windows-parity.ja.md) | Windows (Dokan) 側の as-built。`GetRequestor` の取得位置と残差分 |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | `audit.enabled` の CLI / 保存先 / reload ポリシーの一覧 |
+> | [../Mkfs.ja.md](../Mkfs.ja.md) | 利用者向けの `mkfs --audit` 仕様と既定値 |
+> | [support_for_citus.ja.md](support_for_citus.ja.md) | audit を含む Citus 分散配置そのものの方針 |
+> | [../tests.ja.md](../tests.ja.md) | テストのハブ。件数・実行方法・環境要件はそちら |
 
 chmod / chown / 削除 / リネーム / 作成 / ハードリンクといった **メタデータ変更操作** を、専用テーブル
 `{prefix}audit` に 1 操作 = 1 行で記録する機能 (「監査ログ」要件に対応)。
 
-当初の構想 ([docs/next.md](../next.md) の旧 §監査ログ 実装プラン) は「`Logger.Information` にテキスト 1 行
+当初の構想 ([docs/next.ja.md](../next.ja.md) の旧 §監査ログ 実装プラン) は「`Logger.Information` にテキスト 1 行
 出すだけ」だったが、設計協議の結果 **DB の日付パーティションテーブルに構造化して残す** 方針に変更した。
 本ドキュメントが現行の正。
 
@@ -67,7 +67,7 @@ chmod / chown / 削除 / リネーム / 作成 / ハードリンクといった 
   (1 行 JSONB のシンプル設計)。
 - **監査は `occurred_at` で読むこと (`id` 順は操作順ではない)**。`occurred_at` は**操作時刻**だが `id` は
   **INSERT 時に採番**されるので、書き込みが遅延する経路では両者の順序が乖離する。具体的には
-  メタデータ write-back ([metadata-write-back.md §1e](metadata-write-back.md)) が有効なとき、
+  メタデータ write-back ([metadata-write-back.ja.md §1e](metadata-write-back.ja.md)) が有効なとき、
   監査行は操作時にキャプチャされて **flush tx でまとめて INSERT** される (flush 失敗で latch されれば
   さらに遅れる) ため、後に起きた操作の `id` が先に採番され得る。ORDER BY / 範囲検索は常に
   `occurred_at` を使い、`id` は同一 `occurred_at` 内の tie-break にとどめる。
@@ -128,7 +128,7 @@ Citus は **分散書き込みトランザクションの途中での DDL (パ�
   親をまだ掴んでおらず、偶然安全 (= この順序は仕様として守ること)。
 - **1 tx に複数の月の監査行が混ざる形** (メタデータ write-back の pending が error latch で月を跨いだ場合など)
   では 2 件目の ensure が親を掴んだ後に走るので**確実に踏む**。よって
-  [metadata-write-back.md §1e](metadata-write-back.md) の flush tx は
+  [metadata-write-back.ja.md §1e](metadata-write-back.ja.md) の flush tx は
   **書く監査行の月集合を tx を開く前に一括 ensure** する。
 - 防御として `EnsureAuditPartition` の DDL には **`SET lock_timeout = '5s'`** を張ってある
   (規約が破れてもハングせず例外で落ちる)。FUSE のロック (NSGate 等) を握ったままハングすると
@@ -167,7 +167,7 @@ Api がコンストラクタで 1 回 `Dns.GetHostName()` 解決し、`caller_ip
   (Windows e2e 1 周で **3400 件**)、**v0.2.0 より前の assign.pgfs から行われた操作の監査行は
   `caller_uname` / `caller_domain` が NULL** になっている (Linux 側は `fuse_get_context` が毎コールバックで取れるので影響なし)。
   現在は `CreateFile` で確定した主体をハンドル (`FileSystem.OpenFile`) に保持し、以降の操作はそれを立て直す。
-  as-built は [windows-parity.md §実装ステータス](windows-parity.md)。
+  as-built は [windows-parity.ja.md §実装ステータス](windows-parity.ja.md)。
 
 ## フック箇所 ([src/core/src/Api/Api.cs](../../src/core/src/Api/Api.cs))
 
@@ -197,14 +197,14 @@ Api がコンストラクタで 1 回 `Dns.GetHostName()` 解決し、`caller_ip
   1 回の unmount = 1 行で、対象はマウントそのものなので `target_id` は null・`name` は mountpoint。
   `detail` に件数・内訳 (最大 32 件)・`timeout_ms` を入れる。`audit.enabled` が off なら書かれないので、
   そのときの手掛かりは `{prefix}mounts` の墓標だけになる (詳細は
-  [metadata-write-back-reviews.md §B-2 の as-built](metadata-write-back-reviews.md))。
+  [metadata-write-back-reviews.ja.md §B-2 の as-built](metadata-write-back-reviews.ja.md))。
 - **メタデータ write-back を有効にすると監査は耐久ではない** (明記)。`mount.write_back_metadata = true`
   のとき、pending inode に対する操作の監査行は **その inode の実体化 tx で初めて DB に入る**。
   つまり **`fsync` / `fsyncdir` していない操作は、クラッシュすると操作そのものと一緒に監査行も消える**
   (「操作は残ったが監査だけ消えた」ではなく「どちらも無かったことになる」)。unmount 時に書き切れなかったぶんは
   `op = writeback_loss` の行が残るが、**これは「失われた」ことの記録であって個々の操作の記録ではない**
   (件数とパスのサマリしか持たない)。**監査を証跡として使う運用では `write_back_metadata` を off のままにすること。**
-- **メタデータ write-back の制約**: pending の監査行は操作時にメモリへ捕捉し、実体化 tx で保存する。**取り消し (interval 内に作って消した pending) の create/delete ペアだけは 同期で書く** (B-3。それ以前は orphan キュー待ちで、`create → read → unlink` が痕跡ゼロで成立していた)。**それ以外の orphan キュー分は依然 flush 待ちであり、クラッシュ時には失われ得る**。live off 中は orphan flush が return して残留し得る。操作成功が監査の即時永続化を意味するとは限らない。**この制約は利用者向けの言い方で [CHANGELOG.md §既知の制限](../../CHANGELOG.md) にも載せてある。**
+- **メタデータ write-back の制約**: pending の監査行は操作時にメモリへ捕捉し、実体化 tx で保存する。**取り消し (interval 内に作って消した pending) の create/delete ペアだけは 同期で書く** (B-3。それ以前は orphan キュー待ちで、`create → read → unlink` が痕跡ゼロで成立していた)。**それ以外の orphan キュー分は依然 flush 待ちであり、クラッシュ時には失われ得る**。live off 中は orphan flush が return して残留し得る。操作成功が監査の即時永続化を意味するとは限らない。**この制約は利用者向けの言い方で [CHANGELOG.ja.md §既知の制限](../../CHANGELOG.ja.md) にも載せてある。**
 
 ## 実装状況 (実装済・**実機で完全クローズ**)
 
@@ -235,7 +235,7 @@ Api がコンストラクタで 1 回 `Dns.GetHostName()` 解決し、`caller_ip
 
 既存スイートの件数 (34/24) は監査追加でも不変 = 監査固有の検証は専用スクリプト
 [tests/citus/audit.sh](../../tests/citus/audit.sh) に分けた。docker 2 ノード Citus + mount.pgfs × 1 を立て、
-次を検証する (詳細は [tests/citus/README.md](../../tests/citus/README.md) §audit.sh)。**linux_client で 12/12 PASS 済み**
+次を検証する (詳細は [tests/citus/README.ja.md](../../tests/citus/README.ja.md) §audit.sh)。**linux_client で 12/12 PASS 済み**
 (caller_uid / uname / host / ip と create detail.mode=100664 / kind=file を確認):
 
 - **A**: 各 op (create/delete/rename/chmod/chown/hardlink) で `pgfs_audit` に期待行が入る。create 行の name / detail.kind を精査。

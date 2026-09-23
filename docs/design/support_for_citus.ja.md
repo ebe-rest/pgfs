@@ -1,6 +1,6 @@
 # Citus 対応設計メモ
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **Citus 水平分散の設計判断** — bytea 化 (Phase 1)、テーブル別の分散戦略と
 > 分散キーの選択、shard 数 / replication factor、`{prefix}lock` + `SELECT FOR UPDATE` による排他制御 (Phase 3)、
@@ -10,14 +10,14 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [database.md](database.md) | **スキーマ本体** (各テーブルの役割・列の意味・タイムスタンプ規約) |
-> | [../ddl/README.md](../ddl/README.md) | **DDL 本体** (テーブル 1 つ = 1 ファイル) |
-> | [../Mkfs.md](../Mkfs.md) | `--citus` / `--shard-count` / `--rf` / `--distribute-existing` の **CLI 仕様と既定値** |
-> | [performance.md](performance.md) | 性能の**実測と改善候補** (cross-shard hop の緩和、InodeCache) |
-> | [df-support.md](df-support.md) | 多ノードの**空き容量集約** (`pgfs_statfs` / plperlu) |
-> | [raid.md](raid.md) | **複数 PostgreSQL** を 1 FS に束ねる別レイヤ (本書は単一 DB 内の分散) |
-> | [../tests.md](../tests.md) | Citus 環境での**テスト一覧・件数・実行方法** |
-> | [../history.md](../history.md) | 専用 doc を持たない完了項目の経緯 (Notify の設計など) |
+> | [database.ja.md](database.ja.md) | **スキーマ本体** (各テーブルの役割・列の意味・タイムスタンプ規約) |
+> | [../ddl/README.ja.md](../ddl/README.ja.md) | **DDL 本体** (テーブル 1 つ = 1 ファイル) |
+> | [../Mkfs.ja.md](../Mkfs.ja.md) | `--citus` / `--shard-count` / `--rf` / `--distribute-existing` の **CLI 仕様と既定値** |
+> | [performance.ja.md](performance.ja.md) | 性能の**実測と改善候補** (cross-shard hop の緩和、InodeCache) |
+> | [df-support.ja.md](df-support.ja.md) | 多ノードの**空き容量集約** (`pgfs_statfs` / plperlu) |
+> | [raid.ja.md](raid.ja.md) | **複数 PostgreSQL** を 1 FS に束ねる別レイヤ (本書は単一 DB 内の分散) |
+> | [../tests.ja.md](../tests.ja.md) | Citus 環境での**テスト一覧・件数・実行方法** |
+> | [../history.ja.md](../history.ja.md) | 専用 doc を持たない完了項目の経緯 (Notify の設計など) |
 >
 > **外部参照**: [Citus docs](https://docs.citusdata.com/) — distributed table 一般 (実装コードへのリンクは各節に置く)
 
@@ -149,13 +149,13 @@ ALTER TABLE pgfs_data_chunk ALTER COLUMN payload SET NOT NULL;
 - Api 側の Citus 互換化 ([Api.Rename](../../src/core/src/Api/Api.cs) / [Api.EnsureDataRow](../../src/core/src/Api/Api.cs) / [Api.WriteChunkSlice](../../src/core/src/Api/Api.cs) / [ConfigStore.Save](../../src/core/src/Config/ConfigStore.cs))
 - DDL 変更 ([pgfs_inode.sql](../ddl/pgfs_inode.sql) PK 複合化 + [pgfs_lock.sql](../ddl/pgfs_lock.sql) 新設)
 
-検証は [tests/citus/](../../tests/citus/README.md) に 2 種類:
+検証は [tests/citus/](../../tests/citus/README.ja.md) に 2 種類:
 - [multinode_probe.sh](../../tests/citus/multinode_probe.sh) — Citus 仕様 (auto-sync / DDL 伝搬 / shard 配置 等) の挙動確認用 one-off probe
 - [test_matrix.sh](../../tests/citus/test_matrix.sh) — mkfs の **18 ケース** マトリックス (3 initial × 6 target)。Citus 14 (docker) + linux_client 上で **18/18 PASS** (2026-05-26)
 
 ### 設計の核となる制約 (覚えておくべき判断)
 
-1. **`--citus` × カスタム `--tablespace` は両立可能** (禁止ガードを撤廃)。per-table `TABLESPACE` 句をやめ **`CREATE DATABASE WITH TABLESPACE` で既定 tablespace を継承**させる方式に変更したため、shard も worker DB の既定 tablespace を継承する。tablespace はノードローカルなので [EnsureTablespaceAsync](../../src/mkfs/src/Initializer.cs) が **coordinator + 全 worker** に作成 (Citus は CREATE TABLESPACE を伝搬しない)。LOCATION dir は `app.plperlu` 許可時に plperlu auto-mkdir (postgres 所有 0700) で自動作成。多ノードは各 worker に dir が必要 (mkfs は SQL のみで remote mkdir 不可だが、各 worker 接続で plperlu mkdir が走る)。設計は [settings-and-plperlu.md](settings-and-plperlu.md)。
+1. **`--citus` × カスタム `--tablespace` は両立可能** (禁止ガードを撤廃)。per-table `TABLESPACE` 句をやめ **`CREATE DATABASE WITH TABLESPACE` で既定 tablespace を継承**させる方式に変更したため、shard も worker DB の既定 tablespace を継承する。tablespace はノードローカルなので [EnsureTablespaceAsync](../../src/mkfs/src/Initializer.cs) が **coordinator + 全 worker** に作成 (Citus は CREATE TABLESPACE を伝搬しない)。LOCATION dir は `app.plperlu` 許可時に plperlu auto-mkdir (postgres 所有 0700) で自動作成。多ノードは各 worker に dir が必要 (mkfs は SQL のみで remote mkdir 不可だが、各 worker 接続で plperlu mkdir が走る)。設計は [settings-and-plperlu.ja.md](settings-and-plperlu.ja.md)。
 2. **DB 既存 (--clean なし or --clean しても drop 失敗等) なら Citus 関連 mutate は全部スキップ**: `EnsureDatabaseAsync` の冒頭で coordinator DB の存在チェックを行い、既存なら現状把握 ([LogExistingCitusStateAsync](../../src/mkfs/src/Initializer.cs)) だけして即 return。`citus_add_node` / `citus_set_coordinator_host` / `shouldhaveshards` と worker bootstrap は **一切呼ばない** (訂正, スキップされるのは **topology 系だけ**で、`create_distributed_table` / `citus_add_local_table_to_metadata` は「新規作成したテーブル」に対しては実行される。既存テーブルまで Citus 化したいときは `--distribute-existing`)。これにより:
    - 一度立ち上げた Citus クラスタを mkfs 再実行で意図せず壊さない
    - `mkfs --citus --worker w1` を間違って空 DB に走らせた → やり直しは `--clean` 必須
@@ -245,7 +245,7 @@ rf ≥ 2 の Citus は statement-based replication の一貫性維持のため�
 かつて write-through / flush の tx は冒頭の `UPDATE inode SET data_id` (EnsureDataRow) で inode shard を
 掴んだまま chunk/data shard の書き込みへ進んでいた = **「inode を持って data を待つ」hold-and-wait**。
 逆順で待つ tx と合わさると分散デッドロック (40P01) の閉路になり、5 並行 create+write で 15〜20%/周の
-フレークを起こしていた (`citus_lock_waits` の実測で特定。経緯は [tests.md §根治済み](../tests.md))。
+フレークを起こしていた (`citus_lock_waits` の実測で特定。経緯は [tests.ja.md §根治済み](../tests.ja.md))。
 
 **規約**: 書き込み tx は shard を **`{prefix}lock` (coordinator local) → chunk/data (colocated) →
 inode (最後に 1 文)** の順で触る。data_id リンクは tx 冒頭で打たず、末尾の size/mtime UPDATE に畳む
@@ -404,7 +404,7 @@ COMMIT;
 - `TruncateData`: write 中に truncate されると不整合
 - `Rename`: 2 client が同じファイルを別パスへ rename しようとすると 1 つは ON CONFLICT で弾かれるが、メモリ側の InodeCache が古い state を保持する
 
-[Notify (LISTEN/NOTIFY)](../history.md) は **変更の事後通知** であって race の防止ではない。書き込み中の排他制御として別途必要。
+[Notify (LISTEN/NOTIFY)](../history.ja.md) は **変更の事後通知** であって race の防止ではない。書き込み中の排他制御として別途必要。
 
 ### なぜ自作テーブル + `SELECT FOR UPDATE` か
 

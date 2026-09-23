@@ -1,6 +1,6 @@
 # GUI — 運用ダッシュボード (Avalonia)
 
-> **道順**: [docs/README.md](../README.md) › [runtime-control-plane.md](runtime-control-plane.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [runtime-control-plane.ja.md](runtime-control-plane.ja.md) › **本書**
 >
 > **この doc が正である範囲**: `src/gui/` (`Pgfs.Gui` / 出力 `pgfsgui`) の設計・実装状況・変更記録。
 > GUI の技術選定、画面構成、Core の呼び方 (in-process 直呼び) はここに書く。
@@ -9,10 +9,10 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [control-plane.md](control-plane.md) | GUI が読む `StatusAdmin` / `ConfigAdmin` そのものの設計 (Phase 2/3/4) |
-> | [../Pgfsctl.md](../Pgfsctl.md) | CLI (`pgfsctl config` / `status`) の仕様。GUI と同じ Core API を使う |
-> | [runtime-control-plane.md](runtime-control-plane.md) | 運用フェーズ全体の構成とフェーズ間の関係 (ハブ) |
-> | [settings-matrix.md](settings-matrix.md) | GUI の Config 画面が並べる設定項目そのもの |
+> | [control-plane.ja.md](control-plane.ja.md) | GUI が読む `StatusAdmin` / `ConfigAdmin` そのものの設計 (Phase 2/3/4) |
+> | [../Pgfsctl.ja.md](../Pgfsctl.ja.md) | CLI (`pgfsctl config` / `status`) の仕様。GUI と同じ Core API を使う |
+> | [runtime-control-plane.ja.md](runtime-control-plane.ja.md) | 運用フェーズ全体の構成とフェーズ間の関係 (ハブ) |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | GUI の Config 画面が並べる設定項目そのもの |
 
 `config` / `status` を読む薄い運用フロント。**DB 集約・クラスタ横断**の思想に沿い、1 画面で全 mount を一望する。
 
@@ -54,5 +54,5 @@
 
 時系列の記録はここに追記する (設計と as-built は上の 2 章が正)。
 
-- [runtime-control-plane.md](runtime-control-plane.md) が 1,802 行に肥大したため、
+- [runtime-control-plane.ja.md](runtime-control-plane.ja.md) が 1,802 行に肥大したため、
   機能ごとに分割してこの doc を切り出した。内容は分割前のまま。

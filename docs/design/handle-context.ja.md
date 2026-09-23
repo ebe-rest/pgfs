@@ -1,6 +1,6 @@
 # ハンドル文脈 (OpenFileContext) の共通化 設計
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: ハンドル文脈 (`OpenFileContext` / `HandleTable`) の設計・段階・
 > 未解決の論点・分担。**段階 A〜D の進め方はここが正**。
@@ -9,15 +9,15 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [windows-parity.md](windows-parity.md) | Windows 展開設計 (§共通クラスと責務 が段階 D の元案) |
-> | [metadata-write-back.md](metadata-write-back.md) | 同期 close 印 (A-4〜A-7)。**ハンドルには移さない**判断の根拠 |
-> | [fuse-binding.md](fuse-binding.md) | `fuse_file_info` の扱い |
+> | [windows-parity.ja.md](windows-parity.ja.md) | Windows 展開設計 (§共通クラスと責務 が段階 D の元案) |
+> | [metadata-write-back.ja.md](metadata-write-back.ja.md) | 同期 close 印 (A-4〜A-7)。**ハンドルには移さない**判断の根拠 |
+> | [fuse-binding.ja.md](fuse-binding.ja.md) | `fuse_file_info` の扱い |
 
 **設計案。段階 A〜C-3 は実装済み** 。**段階 D (共通操作クラス) だけが未着手**である。
 本文には**当時の設計案のまま残している節**があるので、**as-built は各段階の §実装ステータス / §as-built を見ること**
 (C-1 / C-2 / C-3 はこの doc の後半にある)。**冒頭のこの行と本文が食い違っていたのを 直した** —
 索引側のラベルも同時に直してある。
-Windows 側の as-built は [windows-parity.md §実装ステータス](windows-parity.md) を参照。
+Windows 側の as-built は [windows-parity.ja.md §実装ステータス](windows-parity.ja.md) を参照。
 
 ## なぜやるか (実測した問題)
 
@@ -103,10 +103,10 @@ Phase 0 ② で `FlushPath` が `fi.fh` に inode id を載せているので、
 
 | 段階 | 内容 | 受入条件 |
 |---|---|---|
-| **A. 抽出** | `OpenFileContext` を Core に作り、Dokan の `OpenFile` を置き換える。FUSE はハンドル表を作って `fh` を載せ替える (**ファイルとディレクトリの両方**)。**挙動は変えない** | 両 OS の既存スイートが全部緑。**件数は増え続けるので [tests.md](../tests.md) を正とする** |
+| **A. 抽出** | `OpenFileContext` を Core に作り、Dokan の `OpenFile` を置き換える。FUSE はハンドル表を作って `fh` を載せ替える (**ファイルとディレクトリの両方**)。**挙動は変えない** | 両 OS の既存スイートが全部緑。**件数は増え続けるので [tests.ja.md](../tests.ja.md) を正とする** |
 | **B. 識別をハンドルへ** | `Read` / `Write` / `Flush` / `SetEndOfFile` を **`InodeId` 起点**に変える (パス解決をやめる)。属性は**毎回引き直す** | ① 問題 1 の再現: 「A で開いたまま B が rename + 同名再作成 → A の read/write/fsync が最初の inode に向かう」(Windows は `crossclient.ps1`、Linux は e2e) ② **問題 2 の再現: flush による `data_id` 付け替え (materialize / A-1 の兄弟付け替え) を跨いだ write が、付け替え後の data に届く** ③ **性能を測る** (下) |
 | **C. 生存管理** | 最終ハンドルの解放まで実体を保つ (`DeletePending` + 参照カウント)。削除後 I/O を Windows の意味論に合わせる | 「開いたまま削除 → 既存ハンドルで読める → 最後の close で消える」。Windows は実測済みの delete-pending 挙動 (別ハンドル保持中は列挙に出るが open は失敗) と整合させる |
-| **D. 共通操作クラス** | [windows-parity.md §共通クラスと責務](windows-parity.md) の `FileSystemOperationsBase` + OS 派生を、C までで揃った文脈の上に置く | 既存テスト緑 + 重複コード (create / flush / close / rename の手順) が 1 箇所に寄る |
+| **D. 共通操作クラス** | [windows-parity.ja.md §共通クラスと責務](windows-parity.ja.md) の `FileSystemOperationsBase` + OS 派生を、C までで揃った文脈の上に置く | 既存テスト緑 + 重複コード (create / flush / close / rename の手順) が 1 箇所に寄る |
 
 **A だけでも価値がある**: 3 (監査主体) と 4 (WriteThrough) が Core の語彙になるので、
 **write-back の背景 flush に「誰が・どのハンドルの要求で」を持ち回れる**ようになる (1e の監査の積み残し)。
@@ -129,7 +129,7 @@ Phase 0 ② で `FlushPath` が `fi.fh` に inode id を載せているので、
 | 2 | flush による `data_id` 付け替え (materialize / A-1 の兄弟付け替え) を跨いだ write が、**付け替え後の data に届く** (問題 2) | e2e | crossclient。Windows では `FileSystem.Resolve` が **キャッシュした `Inode` を返し続ける**のが同じ問題の姿である |
 
 **新規テストは修正前ビルドに当てて、落ちること + 落ち方のメッセージが原因を指していることまで
-確認してから land する** ([next.md §引き継ぐ作法](../next.md))。
+確認してから land する** ([next.ja.md §引き継ぐ作法](../next.ja.md))。
 
 ### ② 変わってはいけない (既存スイートが緑)
 
@@ -138,7 +138,7 @@ Phase 0 ② で `FlushPath` が `fi.fh` に inode id を載せているので、
   `TruncatedByThisHandle` を足さない (§同期 close 印はハンドルに移さない)。
 - **POSIX の「unlink 後も fd が生きている」は段階 B では実現しない**。ハンドルの解決に失敗したら
   **現状と同じくエラー**を返す (いまもパス解決が `ENOENT` で落ちるので回帰ではない)。生存管理は段階 C。
-- 件数の正は [tests.md](../tests.md)。着手時点では **Linux 7 スイート** (e2e off 47+1skip /
+- 件数の正は [tests.ja.md](../tests.ja.md)。着手時点では **Linux 7 スイート** (e2e off 47+1skip /
   e2e on 47+1skip / writeback 9 / wbmeta 27 / negcache 7 / crossclient 8 / startup 5) と
   **Windows 5 スイート 59 件** (e2e 35 / crossclient 7 / writeback 6 / wbmeta 5 = 4+1skip / control-plane 6)。
 
@@ -193,7 +193,7 @@ public void FlushDirectory(OpenFileContext h);
 
 ### ④ 性能ゲートは「先に測る」+ 実装と並行でよい
 
-測定は Linux 実機でしかできないので **FUSE 側が [performance.md](performance.md) の
+測定は Linux 実機でしかできないので **FUSE 側が [performance.ja.md](performance.ja.md) の
 作法 (デーモンの消滅まで待つ / 毎回 md5 で整合性を確認する) で回す**。
 
 **ただしゲートの中身は変わった (Linux 側の静的確認)。** 当初の懸念
@@ -210,18 +210,18 @@ public void FlushDirectory(OpenFileContext h);
 - **ヒット時のコストはむしろ下がる**。`get(path)` は `byPath` → `byId` の**辞書 2 回**、
   `get(id)` は `byId` の**1 回**。さらに `Read` / `Write` の先頭の `PathToString`
   (= `Encoding.UTF8.GetString` + string アロケーション) が**丸ごと不要になる**。
-  これは [performance.md](performance.md) の改善候補 5 (ROI 中 / 工数 **極高**) が、
+  これは [performance.ja.md](performance.ja.md) の改善候補 5 (ROI 中 / 工数 **極高**) が、
   **ホットパスの 2 本に限っては段階 B のついでに片付く**ということでもある。
 - **ミス時も増えない**。id ミスは `selectInodeByIdQuery` の **SELECT 1 本**、
   path ミスは `load(parser, ...)` の**パスチェーン走査**である。
 
 → **ゲートは通った**。FUSE アダプタ反転後に取り直して **tx/file = 32.1 で変化なし**
 (= DB 往復は増えていない)、時間も全ワークロードが振れ幅の内側だった
-([performance.md §結果: 段階 B (FUSE アダプタ反転後)](performance.md))。
+([performance.ja.md §結果: 段階 B (FUSE アダプタ反転後)](performance.ja.md))。
 **時間の改善は主張しない** — W1 は 2.12 → 1.95 s と縮んだが振れ幅 36% の内側でノイズと区別できない。
 
 以下は判断の経緯。**段階 A の基線は取得済み**
-([performance.md §実測: handle-context 段階 B の基線](performance.md))— 単一 PG で
+([performance.ja.md §実測: handle-context 段階 B の基線](performance.ja.md))— 単一 PG で
 W1 rsync 4 KB × 300 = 2.12 s / W3 write 64 MiB = 0.88 s / W4 cold read 64 MiB = 0.23 s、
 **W1 の `xact_commit` = 32.1 tx/file**。
 
@@ -259,7 +259,7 @@ W1 rsync 4 KB × 300 = 2.12 s / W3 write 64 MiB = 0.88 s / W4 cold read 64 MiB =
 `Api.StaleHandleException` は **`-ESTALE`** に落とす (`-EIO` ではない)。
 
 **ホットパスから `PathToString` が消えた** — `Read` / `Write` はエラー時しかパスを文字列化しない。
-[performance.md](performance.md) の改善候補 5 (工数 **極高**) が、この 2 本に限って反転のついでに片付いた形である。
+[performance.ja.md](performance.ja.md) の改善候補 5 (工数 **極高**) が、この 2 本に限って反転のついでに片付いた形である。
 
 **テスト** ([tests/linux/crossclient.sh](../../tests/linux/crossclient.sh) に 2 件追加・8 → 10 件):
 
@@ -346,7 +346,7 @@ Dokan 側)。これが出れば **ハンドルリークの回帰を Linux の e2
   診断のために open / close のホットパスを止めることになる。id は払い出しごとに一意で `Return` は
   存在したときだけ減らすため、辞書の件数と必ず一致する。
 - **Windows は常に `0 open / peak 0`** — Dokan は表を通さず `DokanFileInfo.Context` にオブジェクトを
-  載せるため。「開いていない」ではなく**「数えていない」**であることを [Pgfsctl.md](../Pgfsctl.md) に明記した。
+  載せるため。「開いていない」ではなく**「数えていない」**であることを [Pgfsctl.ja.md](../Pgfsctl.ja.md) に明記した。
   Windows でも数えたくなったら、Dokan アダプタが `Rent` / `Return` を通るようにするのが先である
   (`FileSystem.Resolve` が作る**使い捨て文脈は close されない**ので、そのまま借りると漏れる)。
 - **テスト**: [control_plane.ps1](../../tests/windows/control_plane.ps1) の `test_cp_status_json_shape` に
@@ -373,7 +373,7 @@ Dokan 側)。これが出れば **ハンドルリークの回帰を Linux の e2
 
 - **write-back 中は手元の dirty サイズが権威** (`AppendOffsetOf`)。`Inode.Size` だけを見ると、
   **その inode が LRU から落ちて DB から読み直された**ときに flush 前の dirty 領域の途中へ書いてしまう。
-- **契約の正は [Mount.md §append の契約](../Mount.md)**。不可分を保証するのは
+- **契約の正は [Mount.ja.md §append の契約](../Mount.ja.md)**。不可分を保証するのは
   **① write-through かつ ② 1 回のコールバックに収まる書き込み**のときだけである。
 - **②でも「喪失 → 交錯」への変化は起きる**ので、**契約文は実装と同じコミットで land する**
   (Linux 側の指摘。挙動が変わったのに契約が追いついていない状態を作らない)。
@@ -428,7 +428,7 @@ if (appendAtEnd) { offset = this.ReadSizeInTx(conn, tx, inode.Id) ?? inode.Size;
 | `st_size` の単調化のみ | Linux **−40** / Windows **−10** |
 | **末尾を tx の中で確定 (現行)** | **0** (Linux 3 回 / Windows 3 回とも緑) |
 
-**契約の正は [Mount.md §append の契約](../Mount.md)**。「交錯する (順序が混ざる)」と書く予定だった
+**契約の正は [Mount.ja.md §append の契約](../Mount.ja.md)**。「交錯する (順序が混ざる)」と書く予定だった
 部分は**不要になった** — 各コールバックが直前のコミットの続きから書くので、混ざるのは
 「**他マウントの追記が分割の隙間に挟まる**」であって、1 回の `write(2)` のバイトが失われたり
 前後したりはしない。
@@ -444,7 +444,7 @@ if (appendAtEnd) { offset = this.ReadSizeInTx(conn, tx, inode.Id) ?? inode.Size;
 3. **削除後 I/O の契約**: Linux (POSIX) は「unlink 後も fd が生きている」が正、Windows は「最後のハンドルまで名前も残る」。
    **どちらに寄せるか**ではなく、**Core は参照カウントだけ持ち、名前の見え方は OS 層が決める**という分担にしたい。
 4. **ロック**: ハンドル表はロックフリー (ConcurrentDictionary) で足りるが、C の参照カウントは inode 単位の排他が要る。
-   Citus の shard 接触順の規約 ([support_for_citus.md](support_for_citus.md)) を壊さないこと。
+   Citus の shard 接触順の規約 ([support_for_citus.ja.md](support_for_citus.ja.md)) を壊さないこと。
 
 #### ⑥ のリーク回帰 (as-built, FUSE 側)
 
@@ -561,7 +561,7 @@ libfuse が `.fuse_hidden` へ rename してしのいでいるのは、まさに
 
 案 ③ が plain SELECT で済んだのは**例外**である。段階 C の最終解放は **inode / data / chunk を消す tx** で、
 **既存の削除経路と同じロック順**に載せる必要がある。`LockInode` → `LockData` の順を崩さないこと
-([support_for_citus.md](support_for_citus.md))。**参照カウント自体はメモリなので DB ロックを増やさない。**
+([support_for_citus.ja.md](support_for_citus.ja.md))。**参照カウント自体はメモリなので DB ロックを増やさない。**
 
 ### cross-mount の割り切り (**契約に書く**)
 
@@ -730,12 +730,12 @@ metadata write-back 4 passed + 1 skip / control-plane 7/7。
   > **`Remove-Item` / エクスプローラのように列挙を経由する経路から消せない**
   > (`[System.IO.File]::Delete` = Win32 `DeleteFile` 直接なら消せる)。
   > **「消せない」より「消す方法があるのに誰も辿り着けない」ほうが厄介**という判断である。
-  > **決定と代替案の比較は [namespace-policy.md](namespace-policy.md) が正**。
+  > **決定と代替案の比較は [namespace-policy.ja.md](namespace-policy.ja.md) が正**。
 - **パス解決 (`GetByPath`) からは外さない。** 外すと**その fd を生かしている当のマウントが自分の
   隠しファイルを引けなくなる** (libfuse は隠し名で `getattr` / `release` を撃つ)。
 - **判定は libfuse の書式に厳密に合わせる** (`.fuse_hidden` + **16 桁の 16 進**)。接頭辞だけで弾くと
   **利用者が作った `.fuse_hidden...` という名前まで消える**。
-- **`kill -9` の永久残骸は [`pgfsctl prune`](../Pgfsctl.md) が担当**する (C-3 で入った)。
+- **`kill -9` の永久残骸は [`pgfsctl prune`](../Pgfsctl.ja.md) が担当**する (C-3 で入った)。
 
 **代償 (doc に書く)** — **変更後は Linux にだけ残る**:
 
@@ -755,7 +755,7 @@ metadata write-back 4 passed + 1 skip / control-plane 7/7。
 ### C-3 の実装ステータス (as-built, Dokan 側)
 
 **入った**。[PruneAdmin.cs](../../src/core/src/Api/PruneAdmin.cs) (Core) + `pgfsctl prune`
-([PruneCommand.cs](../../src/ctl/src/PruneCommand.cs))。**CLI 仕様の正は [Pgfsctl.md](../Pgfsctl.md)**。
+([PruneCommand.cs](../../src/ctl/src/PruneCommand.cs))。**CLI 仕様の正は [Pgfsctl.ja.md](../Pgfsctl.ja.md)**。
 
 **3 つの残骸を 1 本にまとめた** — `{prefix}mounts` の古い行 / 孤児 data 行 / `.fuse_hidden*`。
 **live 判定を種類ごとに分ける** (レビュー ④) もそのとおり実装した:
@@ -770,7 +770,7 @@ DISTINCT を別々に引いて手元で差を取る**。同じ制約は実測で
 
 **`Apply` は `.fuse_hidden*` の inode を消したあとに data 側だけ再スキャンする。** 消した瞬間に
 その実体が孤児になるので、**同じ実行で拾えないと 2 回撃つ必要が出る**ため。inode を先に消すのは、
-途中で落ちたときに「名前はあるのに実体が無い」行を残さないため ([data-id-lifecycle.md](data-id-lifecycle.md)
+途中で落ちたときに「名前はあるのに実体が無い」行を残さないため ([data-id-lifecycle.ja.md](data-id-lifecycle.ja.md)
 が直した不具合と同じ形)。
 
 **実機確認 (2026-09-21・pgsql_server の `pgfs` スキーマ)**:
@@ -1075,7 +1075,7 @@ Windows の delete-pending (別ハンドル保持中は列挙に出るが open �
     ときにだけ実行する**という運用にするか、どちらかを決めること。
 - **write-back 有効時の `DeletePending`。** pending の inode が `DeletePending` になったときに
   台帳 (`DirtySet` / `DirtyNamespace`) をどう畳むか。A-1 (ハードリンク兄弟への付け替え) と
-  同じ場所を触るので、[metadata-write-back.md](metadata-write-back.md) 側と整合を取ること。
+  同じ場所を触るので、[metadata-write-back.ja.md](metadata-write-back.ja.md) 側と整合を取ること。
 
 ### 回帰テストの置き場
 

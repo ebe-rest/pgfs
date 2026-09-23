@@ -1,6 +1,6 @@
 # 権限・所有権・ACL の Linux↔Windows 相互運用 設計
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **権限・所有権・ACL の内部モデルと相互運用の設計判断** — POSIX ACL を正準とし
 > Windows をその投影ビューとする決定、名前正規化と principal マッピング、ACL の評価順、新規作成時の
@@ -11,15 +11,15 @@
 > | doc | そちらに書くもの |
 > |---|---|
 > | [permission-interop-diagram.html](permission-interop-diagram.html) | 本設計の**図** (HTML/SVG) |
-> | [../Mount.md](../Mount.md) | **Linux 側**の現行 CLI 契約とオペレーション一覧 |
-> | [../Assign.md](../Assign.md) | **Windows 側**の現行 CLI 契約とオペレーション一覧 |
-> | [windows-parity.md](windows-parity.md) | Windows 展開の **as-built と未実装の段取り** |
-> | [audit-log.md](audit-log.md) | ACL / 所有権**変更の監査行** |
-> | [settings-matrix.md](settings-matrix.md) | `mount.fallback_uname` / `fallback_gname` 等の**設定項目** |
-> | [xattr-bytea.md](xattr-bytea.md) | ACL を運ぶ **xattr のバイト列透過** |
-> | [../next.md](../next.md) | 残課題の**優先順位** (punch-list) |
+> | [../Mount.ja.md](../Mount.ja.md) | **Linux 側**の現行 CLI 契約とオペレーション一覧 |
+> | [../Assign.ja.md](../Assign.ja.md) | **Windows 側**の現行 CLI 契約とオペレーション一覧 |
+> | [windows-parity.ja.md](windows-parity.ja.md) | Windows 展開の **as-built と未実装の段取り** |
+> | [audit-log.ja.md](audit-log.ja.md) | ACL / 所有権**変更の監査行** |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | `mount.fallback_uname` / `fallback_gname` 等の**設定項目** |
+> | [xattr-bytea.ja.md](xattr-bytea.ja.md) | ACL を運ぶ **xattr のバイト列透過** |
+> | [../next.ja.md](../next.ja.md) | 残課題の**優先順位** (punch-list) |
 
-> **ステータス**: 設計合意済 (合意後に**改訂**)。**実装は主目的まで完了** — 即時 5 項目 + ACL 本体 3-0〜3-3 実装済 (回帰 Windows 26/26・Linux 35/35、進捗は下表「合意事項」)。**named ACL の厳密 enforce (3-4) のみ要件待ちで保留**。設計判断は本書を正とし、**実装詳細は [Mount.md](../Mount.md) / [Assign.md](../Assign.md) / [FileSystemUtils.cs](../../src/dokan/src/FileSystemUtils.cs) を参照**。
+> **ステータス**: 設計合意済 (合意後に**改訂**)。**実装は主目的まで完了** — 即時 5 項目 + ACL 本体 3-0〜3-3 実装済 (回帰 Windows 26/26・Linux 35/35、進捗は下表「合意事項」)。**named ACL の厳密 enforce (3-4) のみ要件待ちで保留**。設計判断は本書を正とし、**実装詳細は [Mount.ja.md](../Mount.ja.md) / [Assign.ja.md](../Assign.ja.md) / [FileSystemUtils.cs](../../src/dokan/src/FileSystemUtils.cs) を参照**。
 > **改訂点**: 旧版の「双方向フル往復 + `opaque` で Windows 固有 ACL を verbatim 保持」を撤回し、
 > **POSIX 正準 + Windows は投影ビュー (lossy projection)** に変更。併せて名前正規化・principal マッピング表を確定。
 
@@ -28,7 +28,7 @@ PGFS は **認証システムではなく、名前ベース ACL を保持する�
 クライアントドライバ (mount / assign) が行う。内部モデルは **POSIX ACL** を正準とし、**Windows ACL はその投影
 ビュー**として描画する。
 
-> **2026-09-19 静的照合**: 以下の合意事項は設計目標を含む。Linux の `Access` は未実装で、named ACL の厳密 enforce・default ACL の作成時継承は完成していない。Windows の作成者にはプロセスの既定名を使う経路があり、ACL 投影の成功と要求元ごとのアクセス制御を同一視しない。今回の実機挙動は未検証。**`Access` を実装しないのは意図した設計** — アクセス可否の判定はマウント時の `default_permissions` でカーネルに委ねる。**いま残っている制限は [CHANGELOG.md §既知の制限](../../CHANGELOG.md) が正**で、展開案は [Windows 設計](windows-parity.md) を参照する。
+> **2026-09-19 静的照合**: 以下の合意事項は設計目標を含む。Linux の `Access` は未実装で、named ACL の厳密 enforce・default ACL の作成時継承は完成していない。Windows の作成者にはプロセスの既定名を使う経路があり、ACL 投影の成功と要求元ごとのアクセス制御を同一視しない。今回の実機挙動は未検証。**`Access` を実装しないのは意図した設計** — アクセス可否の判定はマウント時の `default_permissions` でカーネルに委ねる。**いま残っている制限は [CHANGELOG.ja.md §既知の制限](../../CHANGELOG.ja.md) が正**で、展開案は [Windows 設計](windows-parity.ja.md) を参照する。
 
 ## 合意事項 (10 項目)
 
@@ -66,7 +66,7 @@ PGFS は **認証システムではなく、名前ベース ACL を保持する�
 親から継承すれば「同じツリーは同じグループ」になり、Linux から見ても意味のある値になる。
 → **Linux で作ったファイルと Windows で作ったファイルでは group の出どころが違う**ので、
 同一ディレクトリ内で `gname` が混在し得る (どちらも正規化済みの名前なので読み書きはできる)。
-設計の背景は [windows-parity.md §所有者 / グループの決め方](windows-parity.md)。
+設計の背景は [windows-parity.ja.md §所有者 / グループの決め方](windows-parity.ja.md)。
 
 **⚠ ドメインは潰れる**: 正規化でドメインを落とすので、**`CORP\alice` と `LOCAL\alice` は同じ `alice` になる**。
 読み取り投影では以前からそうだったが、 Windows の**書き込み (所有者の決定)** も要求元由来になったため、
@@ -210,7 +210,7 @@ pgfs_inode
 
 > **回帰**: 即時適用 5 項目 ([1][2][3][6][7]) 実装後、Windows e2e **24/24** (属性系含む) / Linux e2e **34/34** + race **4/4** (chmod/chown/fallback 含む) / 監査専用 [audit.sh](../../tests/citus/audit.sh) **12/12** (caller_uname も正規化経由) すべて PASS。
 >
-> 監査連携: ACL/所有権変更は [監査ログ](audit-log.md) の対象。chmod/chown フックに加え `setacl` op を検討 (Phase)。
+> 監査連携: ACL/所有権変更は [監査ログ](audit-log.ja.md) の対象。chmod/chown フックに加え `setacl` op を検討 (Phase)。
 
 ### Phase 3-4 (ドライバ評価) の再評価
 

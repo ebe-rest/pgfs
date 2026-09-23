@@ -1,6 +1,6 @@
 # キャッシュ — inode LRU / content read キャッシュ / read-ahead
 
-> **道順**: [docs/README.md](../README.md) › [runtime-control-plane.md](runtime-control-plane.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [runtime-control-plane.ja.md](runtime-control-plane.ja.md) › **本書**
 >
 > **この doc が正である範囲**: 読み取り側のキャッシュ (Phase 1a / 1b / 1c) の設計・実装状況・変更記録。
 > `InodeCache` の上限と LRU、content (本体) read キャッシュ、data-write NOTIFY による cross-client
@@ -10,17 +10,17 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [write-back.md](write-back.md) | **書き込み側**のキャッシュ (1d)。dirty チャンクと flush |
-> | [metadata-write-back.md](metadata-write-back.md) | メタデータの遅延書き (1e)。pending inode 台帳 |
-> | [control-plane.md](control-plane.md) | キャッシュ上限を実行時に変える経路 (`pgfsctl config`) と統計の出し方 (Layer 3) |
-> | [performance.md](performance.md) | 実測と改善候補の全体。ここは設計、あちらは数字 |
-> | [settings-matrix.md](settings-matrix.md) | `mount.cache_*` の既定値と reload ポリシー |
-> | [runtime-control-plane.md](runtime-control-plane.md) | 運用フェーズ全体の構成 (ハブ) |
+> | [write-back.ja.md](write-back.ja.md) | **書き込み側**のキャッシュ (1d)。dirty チャンクと flush |
+> | [metadata-write-back.ja.md](metadata-write-back.ja.md) | メタデータの遅延書き (1e)。pending inode 台帳 |
+> | [control-plane.ja.md](control-plane.ja.md) | キャッシュ上限を実行時に変える経路 (`pgfsctl config`) と統計の出し方 (Layer 3) |
+> | [performance.ja.md](performance.ja.md) | 実測と改善候補の全体。ここは設計、あちらは数字 |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | `mount.cache_*` の既定値と reload ポリシー |
+> | [runtime-control-plane.ja.md](runtime-control-plane.ja.md) | 運用フェーズ全体の構成 (ハブ) |
 
 ## 設計
 
 読み取り側のキャッシュ 2 本 (1a / 1b)。フェーズ全体の位置づけは
-[runtime-control-plane.md §Phase 1](runtime-control-plane.md) の一覧表を参照。
+[runtime-control-plane.ja.md §Phase 1](runtime-control-plane.ja.md) の一覧表を参照。
 
 ### 1a 確定設計 — InodeCache の上限 / LRU 配線
 
@@ -30,7 +30,7 @@
 
 1. **退避ポリシ = LRU**。既存 `Inode.CacheTime` (Get/Put 毎に `UpdateCacheTime()` 更新済) を recency に使う (新規状態を増やさない)。
 2. **上限は `byId` を権威に 1 本**。`byId.Count > cache_max_entries` で LRU 退避し、退避後に `byPath`/`childrenByParent` から **byId に存在しない id を指すエントリを掃除**して整合させる (3 辞書を byId の 1 上限で間接 bound)。root は `CacheTime = DateTime.MaxValue` 固定なので**決して退避されない**。
-3. **スレッド安全は現状維持** (`lock(this)` 配下で退避)。`lock(this)` + ロック内 DB クエリの解消 ([performance.md #2](performance.md)) は **別ステップ**に切る (1a に混ぜない)。
+3. **スレッド安全は現状維持** (`lock(this)` 配下で退避)。`lock(this)` + ロック内 DB クエリの解消 ([performance.ja.md #2](performance.ja.md)) は **別ステップ**に切る (1a に混ぜない)。
 
 **退避機構 = overflow 時の batch**:
 - トリガ: byId に書く 2 箇所 (`put` / `PutChildren`) の直後。
@@ -59,7 +59,7 @@
 
 **stale read 競合の封じ (重要・グローバル世代カウンタ)**: read が古い chunk を読んでいる最中に他スレッド/他 client が write+invalidate すると、古い payload をキャッシュに焼く危険がある。`ContentCache.Generation` を read 開始時に捕捉 → `PutIfGeneration(..., gen)` は**世代が変わっていなければだけ採用**、`InvalidateData` は世代を `++`。これで「最後の write より古い payload がキャッシュに残る」状態は不可能 (= 永続 stale なし)。並行 write 中の単一 read が新旧混在するのは **page cache 同等**として許容 (実 FS も read() スナップショットは保証しない)。**O(1) 状態** (per-data_id 辞書不要)。
 
-**新 Field**: `mount.cache_data_max_bytes` (LongField・SaveTo=File・AppliesTo=Mount|Assign・既定 64MiB)。[settings-matrix.md](settings-matrix.md) / [Mkfs.md](../Mkfs.md) に追記。
+**新 Field**: `mount.cache_data_max_bytes` (LongField・SaveTo=File・AppliesTo=Mount|Assign・既定 64MiB)。[settings-matrix.ja.md](settings-matrix.ja.md) / [Mkfs.ja.md](../Mkfs.ja.md) に追記。
 
 **不変**: `pgfs_lock` / tx 排他は不変。content キャッシュは DB の上の純キャッシュで、書き込み一貫性 (1d) には踏み込まない。
 
@@ -77,13 +77,13 @@ negative キャッシュはその後に追加され、回帰は [tests/linux/neg
 **1c (read-ahead) は未着手**。
 
 > 個別の as-built がこの粒度に留まっているのは、1a / 1b が分割前の
-> [runtime-control-plane.md](runtime-control-plane.md) でも確定設計しか持っていなかったためである
+> [runtime-control-plane.ja.md](runtime-control-plane.ja.md) でも確定設計しか持っていなかったためである
 > (実装の詳細は当時 punch-list 側に書かれていた)。**追記するときはこの章に書く**。
 
 ## 変更記録
 
 時系列の記録はここに追記する (設計と as-built は上の 2 章が正)。
 
-- [runtime-control-plane.md](runtime-control-plane.md) が 1,802 行に肥大したため、
+- [runtime-control-plane.ja.md](runtime-control-plane.ja.md) が 1,802 行に肥大したため、
   機能ごとに分割してこの doc を切り出した。設計の内容は分割前のまま。
   §実装ステータス は分割時に新設した (分割前は独立した節を持っていなかった)。

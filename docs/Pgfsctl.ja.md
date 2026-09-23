@@ -1,6 +1,6 @@
 # pgfsctl 仕様
 
-> **道順**: [docs/README.md](README.md) › **本書**
+> **道順**: [docs/README.ja.md](README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **`pgfsctl` の仕様** — `config` (get / list / set) と `status`
 > (Layer 1 クラスタ / Layer 2 FS 統計 / Layer 3 稼働プロセス) の CLI と出力、および `prune` (異常終了が残したものの掃除)。
@@ -9,20 +9,20 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [design/control-plane.md](design/control-plane.md) | コントロールプレーンの**設計** (制御メッセージ / `{prefix}mounts` / live 反映) |
-> | [design/settings-matrix.md](design/settings-matrix.md) | 全設定項目と reload ポリシー (何が live で変えられるか) |
-> | [Mkfs.md](Mkfs.md) / [Mount.md](Mount.md) / [Assign.md](Assign.md) | 他ツールの仕様 |
-> | [../tests/docker/README.md](../tests/docker/README.md) | docker ランナー (`control_plane_ctl.sh` / `status.sh`) |
+> | [design/control-plane.ja.md](design/control-plane.ja.md) | コントロールプレーンの**設計** (制御メッセージ / `{prefix}mounts` / live 反映) |
+> | [design/settings-matrix.ja.md](design/settings-matrix.ja.md) | 全設定項目と reload ポリシー (何が live で変えられるか) |
+> | [Mkfs.ja.md](Mkfs.ja.md) / [Mount.ja.md](Mount.ja.md) / [Assign.ja.md](Assign.ja.md) | 他ツールの仕様 |
+> | [../tests/docker/README.ja.md](../tests/docker/README.ja.md) | docker ランナー (`control_plane_ctl.sh` / `status.sh`) |
 
 PGFS の **実行時コントロールプレーン CLI** `pgfsctl` の仕様です。`config`（設定の参照・変更）と `status`（クラスタ稼働状況 / FS 統計）の 2 サブコマンドを持ちます。
 
-設計の正は [docs/design/control-plane.md](design/control-plane.md)。実装は [src/ctl/](../src/ctl/)（`Pgfs.Ctl`・出力 `pgfsctl`）で、ロジックは Core の [ConfigAdmin](../src/core/src/Config/ConfigAdmin.cs) / [StatusAdmin](../src/core/src/Api/StatusAdmin.cs)（GUI も再利用可）。
+設計の正は [docs/design/control-plane.ja.md](design/control-plane.ja.md)。実装は [src/ctl/](../src/ctl/)（`Pgfs.Ctl`・出力 `pgfsctl`）で、ロジックは Core の [ConfigAdmin](../src/core/src/Config/ConfigAdmin.cs) / [StatusAdmin](../src/core/src/Api/StatusAdmin.cs)（GUI も再利用可）。
 
 ## 役割と位置づけ
 
 - `mkfs.pgfs` / `mount.pgfs` / `assign.pgfs` が「FS を作る・マウントする」ツールなのに対し、`pgfsctl` は**動いている FS を運用する**ツール（systemctl 風の admin コマンド）。
 - **FUSE / Dokan に依存せず Core のみ**を参照するので、Linux / Windows どちらでも動く。
-- 命名は `{役割}.pgfs` 規約（`mkfs.pgfs` 等）の**意図的な例外**で、admin ツールらしい 1 語 `pgfsctl`（[runtime-control-plane.md §Phase 3 P3-1](design/runtime-control-plane.md)）。
+- 命名は `{役割}.pgfs` 規約（`mkfs.pgfs` 等）の**意図的な例外**で、admin ツールらしい 1 語 `pgfsctl`（[runtime-control-plane.ja.md §Phase 3 P3-1](design/runtime-control-plane.ja.md)）。
 
 ## 接続オプション（全サブコマンド共通）
 
@@ -36,7 +36,7 @@ PGFS の **実行時コントロールプレーン CLI** `pgfsctl` の仕様で�
 | `-f` / `--setting-file <toml>` | 設定ファイル名 |
 | `--setting-path <dirs>` | 設定ファイル探索パス（カンマ区切り）|
 
-`pgfs.toml` が探索パス上にあれば CLI 未指定分はそこから補完されます（優先順位は CLI > TOML > DB > 既定）。詳細は [settings-matrix.md](design/settings-matrix.md)。
+`pgfs.toml` が探索パス上にあれば CLI 未指定分はそこから補完されます（優先順位は CLI > TOML > DB > 既定）。詳細は [settings-matrix.ja.md](design/settings-matrix.ja.md)。
 
 ---
 
@@ -65,7 +65,7 @@ pgfsctl config set <scope.key> <value> [接続オプション]
 | Format | `file_system.*` | 拒否 | — |
 | None | `--clean` / `foreground` / `setting.*` | 拒否 | — |
 
-- ライブ反映は走行中 mount が NOTIFY を受けて即適用する。**制御チャネルは `notify_enabled` に関係なく常時 ON**（[P3-0](design/runtime-control-plane.md)）なので、単一クライアント mount（既定 notify OFF）にも届く。
+- ライブ反映は走行中 mount が NOTIFY を受けて即適用する。**制御チャネルは `notify_enabled` に関係なく常時 ON**（[P3-0](design/runtime-control-plane.ja.md)）なので、単一クライアント mount（既定 notify OFF）にも届く。
 - File 保管 Live は **DB 行を作らないエフェメラル反映**（remount でベースライン = toml に戻る。永続化したい場合は各クライアントの `pgfs.toml` を編集）。
 - 出力の mount 数は `{prefix}mounts` 登録表の現在行数であり、適用成功数ではない（NOTIFY は ack を取らない）。
 - **write-back の Live off は二相 flip で drain を待つ** (修正済。第 1 相で受付を止め、書き切ってからモードを落とす)。ただし **CLI の成功を全 mount の保存成功と解釈しない** — NOTIFY は ack を取らないので、届いたかは `status` の実効設定で確かめる。
@@ -84,7 +84,7 @@ pgfsctl config set <scope.key> <value> [接続オプション]
 - **エラーステートの鮮度** (追加): 赤行に `[heartbeat 42s 前の情報]` を併記する。エラーステートは heartbeat 経由でしか届かないので、**DB に書けない障害では赤が出ないまま緑に見える**。Layer 3 のホスト行の `[stale: heartbeat 5m 前]` (赤) が唯一の手掛かりになるので、そこを先に見ること。遷移そのものは heartbeat 周期 (30 秒) を待たず即書きされる。
 - **喪失した unmount の墓標** (追加): `{prefix}mounts` に残った行を Layer 1 の `LIVE` 欄で `ENDED` と表示し、続けて赤で `!! write-back UNFLUSHED LOSS (N mount(s))` と内訳を出す。**自動では消えない**ので、確認したら `DELETE FROM <schema>.<prefix>mounts WHERE (stats->>'unflushedLoss')::int > 0` で消す。
 
-reload ポリシー（Live / NextMount / Format）の全項目割り当ては [settings-matrix.md §reload ポリシー](design/settings-matrix.md)。
+reload ポリシー（Live / NextMount / Format）の全項目割り当ては [settings-matrix.ja.md §reload ポリシー](design/settings-matrix.ja.md)。
 
 ### 例
 
@@ -111,7 +111,7 @@ DB 由来の read-only 情報を 1 コマンドでセクション表示します
 
 1. **Mounts（クラスタ稼働一覧・Layer 1）** … `{prefix}mounts` 登録表から host / pid / mode（`fuse`/`dokan`）/ mountpoint / uptime / heartbeat 経過 / live?（経過 < 90s）。テーブル不在（Phase 2 前の mkfs）は「table not present」と表示。
 2. **Filesystem（FS 統計・Layer 2）** … schema/prefix/version/volume_label、inode 数、file 数、chunk 数、使用バイト（`sum(length(payload))`）、cluster_size、max_file_size、audit on/off、Citus 有無（+ `pg_dist_node` 数）。集計失敗値は `?`。
-3. **Process detail（稼働プロセス詳細・Layer 3）** … 各 mount が直近 heartbeat 時に書いたスナップショット（[P4-2/P4-4](design/runtime-control-plane.md)）。**inode キャッシュ**（entries / capacity / hit率 / hits・misses・evictions）、**content キャッシュ**（chunk 数 / bytes / max / hit率 / hits・misses・evictions）、**write-back**（dirty bytes/files、flush/failure、pending inode/監査、error state 等）、**handles**（開いているハンドル数 / これまでの最大数 / **開かれている実体の数**）、**notify**（listen / data / connected）、**実効 config**（走行中 `RootConfig` の運用関連サブセット = logging/retry/cache/statfs/audit/version 等・values-only・password 非含）。live でない行は `[stale]` 付き。
+3. **Process detail（稼働プロセス詳細・Layer 3）** … 各 mount が直近 heartbeat 時に書いたスナップショット（[P4-2/P4-4](design/runtime-control-plane.ja.md)）。**inode キャッシュ**（entries / capacity / hit率 / hits・misses・evictions）、**content キャッシュ**（chunk 数 / bytes / max / hit率 / hits・misses・evictions）、**write-back**（dirty bytes/files、flush/failure、pending inode/監査、error state 等）、**handles**（開いているハンドル数 / これまでの最大数 / **開かれている実体の数**）、**notify**（listen / data / connected）、**実効 config**（走行中 `RootConfig` の運用関連サブセット = logging/retry/cache/statfs/audit/version 等・values-only・password 非含）。live でない行は `[stale]` 付き。
 
 > 鮮度は「直近 heartbeat 値」。snapshot は register 直後 + 30s heartbeat + `ping` 制御 NOTIFY 受信で更新される（req-rep はしない）。CLI が即時を要するときは `pg_notify('{schema}_{prefix}notify','{"c":"ping"}')` を送って更新を要求できるが、応答待ちをしないため直後の status に反映済みとは限らない。
 
@@ -136,7 +136,7 @@ pgfsctl prune [--apply] [--force] [--mounts-older-than <sec>] [--json] [接続�
 **消すものを先に目で見られない掃除コマンドは危ない**ので、この既定は変えません。
 
 対象は 3 つで、どれも **「異常終了したマウントが残したものを、誰も掃除しない」** という同じ形です
-(設計は [handle-context.md §段階 C の Core 設計](design/handle-context.md)):
+(設計は [handle-context.ja.md §段階 C の Core 設計](design/handle-context.ja.md)):
 
 | 残骸 | 何が残るか | 害 |
 |---|---|---|
@@ -159,7 +159,7 @@ pgfsctl prune [--apply] [--force] [--mounts-older-than <sec>] [--json] [接続�
   `--force` で上書きできますが、**全マウントを止めてから**使うものです。
 - **`{prefix}mounts` を読めないとき (未移行の既存 FS など) は、`--force` でもデータを消す側に触りません。**
   誰が生きているか分からない = 「居ない」ではなく「見えない」からです。先に移行
-  ([CHANGELOG.md](../CHANGELOG.md) §移行が必要な変更) を流してください。JSON では
+  ([CHANGELOG.ja.md](../CHANGELOG.ja.md) §移行が必要な変更) を流してください。JSON では
   `applied.skipped_because_unknown = true` になります。
 - **マウントは、自分の登録行が消えていたら heartbeat の周期 (30 秒) で登録し直します**。起動時の DB の
   瞬断で登録に失敗したマウントも同じです。以前は一度消えると以後ずっと見えず、上の「生きている

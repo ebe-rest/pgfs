@@ -1,8 +1,10 @@
 # pgfs Linux e2e tests
 
-> 全テストの一覧 / 環境要件 / docker 統合の検討は [docs/tests.md](../../docs/tests.md) (ハブ) を参照。本 README はこのディレクトリのランナー (`e2e.sh` / `flow.ps1` / `run.cmd`) の操作詳細を扱う。
+> **道順**: [docs/README.ja.md](../../docs/README.ja.md) › [docs/tests.ja.md](../../docs/tests.ja.md) (テストのハブ) › **本書**
+>
+> 全テストの一覧 / 環境要件 / docker 統合の検討は [docs/tests.ja.md](../../docs/tests.ja.md) (ハブ) を参照。本 README はこのディレクトリのランナー (`e2e.sh` / `flow.ps1` / `run.cmd`) の操作詳細を扱う。
 
-mount.pgfs (Linux) でマウント済みの PGFS に対して、実装済み機能 ([docs/Mount.md](../../docs/Mount.md)) を一括で動作確認する e2e テスト。
+mount.pgfs (Linux) でマウント済みの PGFS に対して、実装済み機能 ([docs/Mount.ja.md](../../docs/Mount.ja.md)) を一括で動作確認する e2e テスト。
 
 ## ファイル
 
@@ -23,7 +25,7 @@ mount.pgfs (Linux) でマウント済みの PGFS に対して、実装済み機�
 ## 0 件で緑にしない (2026-09-21 追加)
 
 **どのスイートも「1 件も走らなかった」「1 件も PASS しなかった」なら `exit 1`** にしてある
-(Windows 側の [tests/windows/README.md](../windows/README.md) §0 件で緑にしない と同じ形)。
+(Windows 側の [tests/windows/README.ja.md](../windows/README.ja.md) §0 件で緑にしない と同じ形)。
 **「落ちなかった」と「確かめた」は違う**のを、スクリプト側で守るため。
 
 塞いだ穴は実測した 2 つ。**どちらも塞ぐ前は exit 0** だった:
@@ -92,7 +94,7 @@ TEST_FILTER=fsync bash tests/linux/writeback.sh
   - **対策は python から `os.open(path, os.O_WRONLY)` + `os.pwrite` して fd を持ったまま待つこと**
     (`crossclient.sh` の `test_xc_writeback_flush_does_not_undo_remote_truncate` が実例)。
   - Windows 側も**同じ形**を踏んでいる (`.NET FileStream` の既定 4096B バッファで小さい書き込みが
-    `Dispose` まで FS に届かない)。詳細は [tests/windows/README.md](../windows/README.md) の
+    `Dispose` まで FS に届かない)。詳細は [tests/windows/README.ja.md](../windows/README.ja.md) の
     §テストを書くときに踏んだ罠 (Windows)。**共通の教訓は「書いたつもりが FS に届いていない」で、
     どちらもテストが緑になる向きに転ぶ**こと。
 - **Citus では `inode` と `data_chunk` を join できない。** 分散キーが違うので
@@ -142,7 +144,7 @@ TEST_FILTER=hardlink bash tests/linux/crossclient.sh
 
 > ⚠ **両マウントを `--notify` で起動する**。cross-client の可視性は
 > `database.notify_enabled` に完全依存で、既定 (false) では他マウントの作成 / 上書き /
-> 削除 / 置換 rename が**いつまでも見えない** ([Assign.md](../../docs/Assign.md) の注記と同じ)。
+> 削除 / 置換 rename が**いつまでも見えない** ([Assign.ja.md](../../docs/Assign.ja.md) の注記と同じ)。
 > スクリプトが自分で付けるので呼び出し側の設定は要らない。
 
 内訳 (7 件):
@@ -150,7 +152,7 @@ TEST_FILTER=hardlink bash tests/linux/crossclient.sh
 | 群 | 件数 | テスト |
 |---|---|---|
 | 可視性 | 4 | `test_xc_create_visible` / `test_xc_delete_visible` / `test_xc_overwrite_visible` / `test_xc_rename_replace_visible` |
-| **ハードリンクの実体共有** | 2 | `test_xc_hardlink_size_propagates` / `test_xc_hardlink_truncate_propagates` — **配布した兄弟 id を通知に載せる修正の回帰ガード** ([data-id-lifecycle.md](../../docs/design/data-id-lifecycle.md))。**B 側で先に stat してキャッシュに載せてから A で書く**のが要点で、載せずに書くと B は DB から読み直すので不具合を素通りする |
+| **ハードリンクの実体共有** | 2 | `test_xc_hardlink_size_propagates` / `test_xc_hardlink_truncate_propagates` — **配布した兄弟 id を通知に載せる修正の回帰ガード** ([data-id-lifecycle.ja.md](../../docs/design/data-id-lifecycle.ja.md))。**B 側で先に stat してキャッシュに載せてから A で書く**のが要点で、載せずに書くと B は DB から読み直すので不具合を素通りする |
 | 排他 | 1 | `test_xc_exclusive_create_races` — 同名 `O_EXCL` を A/B から同時に撃って**成功が 1 件だけ**であることを 5 ラウンド |
 | **孤児化の防御** | 1 | `test_xc_create_under_removed_parent_fails` — 他クライアントが消したディレクトリの下に **create / mkdir / ln -s / ln の 4 経路すべて**で子を作れないこと。**ENOENT であること**まで見る (「失敗すればよい」だと EEXIST でも通ってしまい、実際に見落とした)。**この 1 件だけ notify OFF で張り直す** (ON だと rmdir 通知で A のキャッシュが落ちて窓が閉じる) |
 
@@ -238,7 +240,7 @@ TEST_FILTER=truncate bash tests/linux/wbmeta.sh
 
 ## カバー範囲
 
-[docs/Mount.md](../../docs/Mount.md) で ✅ になっている全 FUSE オペレーションを exercise する。
+[docs/Mount.ja.md](../../docs/Mount.ja.md) で ✅ になっている全 FUSE オペレーションを exercise する。
 
 | カテゴリ | テスト |
 |---|---|
@@ -420,12 +422,12 @@ Results: 35 passed, 0 failed, 0 skipped (out of 35)
 
 ## 現状
 
-**件数と最新の実行結果は [docs/tests.md](../../docs/tests.md) を正とする** (このファイルに二重に持つと必ず片方が腐るため)。
+**件数と最新の実行結果は [docs/tests.ja.md](../../docs/tests.ja.md) を正とする** (このファイルに二重に持つと必ず片方が腐るため)。
 は e2e が **43 passed / 0 failed / 1 skipped (44 件)**、`wbmeta.sh` が **27/27**。
 
 過去の記録: は 35 件で **35 passed / 0 failed / 0 skipped** (単 PG モード + 1 ノード Citus +
 多ノード Citus on docker、いずれも 35/35。POSIX ACL `test_posix_acl_named_user` を追加)。
-多ノード Citus 検証は [tests/citus/race_multinode.sh](../citus/README.md) 経由。
+多ノード Citus 検証は [tests/citus/race_multinode.sh](../citus/README.ja.md) 経由。
 
 ## 終了コード
 
@@ -447,10 +449,10 @@ sudo dnf install attr   # Fedora/RHEL
 
 ## カバーしていないもの
 
-[docs/Mount.md](../../docs/Mount.md) の TODO 表の ❌ 項目は未実装のため対象外:
+[docs/Mount.ja.md](../../docs/Mount.ja.md) の TODO 表の ❌ 項目は未実装のため対象外:
 
 - macOS 動作確認 (libfuse の macOS 対応次第)
 - Access チェック (`Access` 操作)
 - Mount オプション `-o` (フル対応)
 
-未実装機能の残一覧は [docs/next.md](../../docs/next.md) を参照。
+未実装機能の残一覧は [docs/next.ja.md](../../docs/next.ja.md) を参照。

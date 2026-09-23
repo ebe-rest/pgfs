@@ -1,7 +1,7 @@
 # metadata write-back のレビュー記録 (ラウンド A / B)
 
-> **道順**: [docs/README.md](../README.md) › [runtime-control-plane.md](runtime-control-plane.md) ›
-> [metadata-write-back.md](metadata-write-back.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [runtime-control-plane.ja.md](runtime-control-plane.ja.md) ›
+> [metadata-write-back.ja.md](metadata-write-back.ja.md) › **本書**
 >
 > **この doc が正である範囲**: 1e ステージ 2 に対する敵対的レビューで出た指摘と、その修正の
 > **時系列の記録**。ラウンド A (A-1〜A-10) とラウンド B (B-1〜B-13) の as-built はここが正。
@@ -11,10 +11,10 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [metadata-write-back.md](metadata-write-back.md) | **確定設計と実装ステータス**。「いまどう動くか」はそちら |
-> | [write-back.md](write-back.md) | データ本体の遅延書き (1d)。**ライブ無効化の二相化**はレビュー由来なので本書にある |
-> | [windows-parity.md](windows-parity.md) | 同じ指摘の Windows 側の受け入れ (B-1 / B-7 / B-9 / B-12 の配線) |
-> | [../tests.md](../tests.md) | 回帰テストの件数と実行方法 |
+> | [metadata-write-back.ja.md](metadata-write-back.ja.md) | **確定設計と実装ステータス**。「いまどう動くか」はそちら |
+> | [write-back.ja.md](write-back.ja.md) | データ本体の遅延書き (1d)。**ライブ無効化の二相化**はレビュー由来なので本書にある |
+> | [windows-parity.ja.md](windows-parity.ja.md) | 同じ指摘の Windows 側の受け入れ (B-1 / B-7 / B-9 / B-12 の配線) |
+> | [../tests.ja.md](../tests.ja.md) | 回帰テストの件数と実行方法 |
 
 ## ステージ 2 の敵対的レビュー結果 (**A-1〜A-10 / B-1〜B-13 とも 対応済**)
 
@@ -55,14 +55,14 @@
 | A-4 / A-5 | 同期 close 印を **inode 単位 → inode と data 本体の両方** (同じ符号規約) に積む。inode 側だけだと兄弟経由の close が印を見ず、data 側だけだと `truncate 0` で data 行ごと消える対象を追えないため両方要る。**上限 4096 に達したときは黙って印を捨てず、`syncOnCloseOverflow` を立てて全 close を同期に格上げする** (fail-safe。データ安全の仕掛けが静かに無効化されるより、性能を落として 1d の挙動に縮退するほうがよい)。**削除・純キャンセルでも印を落とす** ので単調増加しない | `Api.WriteBackMetadata.cs` `MarkSyncOnClose` / `AddSyncOnCloseKey` / `ClearSyncOnClose` / `RequiresSyncClose` |
 | A-6 / A-7 | 印を落とす条件を **「実際に未 flush を書き切ったときだけ」** に変更 (`FlushInode` が flush 前に `HasUnflushed` を取り、flush 後にも見る)。① 何も書いていない close では落とさない → `truncate -s 0 f; cmd >> f` の印が truncate 側の close で消費されなくなる (**`wbmeta.sh` の唯一の FAIL が解消**) ② flush 中に積まれた dirty が残っていれば印も残す | `Api.cs` `FlushInode` / `HasUnflushed` |
 | A-8 | 期限判定を **1 巡の中へ**。`FlushAll(DateTime? deadline)` を足して `FlushAllPendingInodes` / data ループ / `ApplyInodeBackPressure` の内側で期限を見る。1 件あたりの失敗が遅い障害 (監査パーティション ensure の `lock_timeout` 5 秒) でも round 1 が何時間にもならない | `Api.cs` `FlushAll` / `Api.WriteBackMetadata.cs` `ApplyInodeBackPressure` / `FlushAllForShutdown` |
-| A-10 | **persisted inode (既に DB にある実体) への write が始まったら同期 close 印を付ける** = close-no-flush を **pending-born 限定**にする。既存ファイルの上書きが interval ごとに別 tx で部分 commit され「前半が新・後半が旧」のキメラになる窓を塞ぐ。close-no-flush の取り分は create 側なので bulk copy の性能は落ちない見込み → **2026-09-19 に実測** ([performance.md §A-10 の影響](performance.md))。**1 回ずつの上書きは総計で差が出ない** (測定限界以下)。代償は **1 ファイルを開き直して上書きし続けるワークロード** に集中し、A-10 無しとの比は **125×** になるが、**その値は metadata off の既定とぴったり同じ** (112.8 ms/close) = 既定より遅くはしていない | `Api.cs` `WriteDataBuffered` / `IsPendingBorn` |
+| A-10 | **persisted inode (既に DB にある実体) への write が始まったら同期 close 印を付ける** = close-no-flush を **pending-born 限定**にする。既存ファイルの上書きが interval ごとに別 tx で部分 commit され「前半が新・後半が旧」のキメラになる窓を塞ぐ。close-no-flush の取り分は create 側なので bulk copy の性能は落ちない見込み → **2026-09-19 に実測** ([performance.ja.md §A-10 の影響](performance.ja.md))。**1 回ずつの上書きは総計で差が出ない** (測定限界以下)。代償は **1 ファイルを開き直して上書きし続けるワークロード** に集中し、A-10 無しとの比は **125×** になるが、**その値は metadata off の既定とぴったり同じ** (112.8 ms/close) = 既定より遅くはしていない | `Api.cs` `WriteDataBuffered` / `IsPendingBorn` |
 | (追加) | **`Api.Rename` に source == replaceTarget の no-op 成功判定**。置換は「target を削除してから source を UPDATE する」ので同一対象だと自分を消す。Linux は VFS が `rename("a","a")` を弾くので到達しないが、**Dokan 経路には同じ保護が無い**ため Core を最後の防波堤にする (Dokan 側からの依頼) | `Api.cs` `Rename` |
 
 ### ラウンド B (ノブ + 残り)
 
 | # | 指摘 | 深刻度 |
 |---|---|---|
-| B-1 | **ノブ `mount.write_back_metadata_exclusive_create` (`write_through` / `defer`・既定 `write_through`) を追加** (決定)。`defer` で `O_EXCL` create も pending にする。同一マウント内の排他は台帳の `TryAdd` が (parent, name) 衝突で EEXIST を返すので維持され、失うのは cross-client の排他だけ。**`defer` 由来の inode が flush 時に名前衝突したら last-flush-wins で相手を消してはいけない** — アプリに「自分だけが作った」と返している以上、相手 (ロックファイルかもしれない) を黙って DELETE + INSERT で潰すのは最悪なので、**種別違い衝突と同じ error latch** にする。狙いと実測は [performance.md](performance.md) | 機能 |
+| B-1 | **ノブ `mount.write_back_metadata_exclusive_create` (`write_through` / `defer`・既定 `write_through`) を追加** (決定)。`defer` で `O_EXCL` create も pending にする。同一マウント内の排他は台帳の `TryAdd` が (parent, name) 衝突で EEXIST を返すので維持され、失うのは cross-client の排他だけ。**`defer` 由来の inode が flush 時に名前衝突したら last-flush-wins で相手を消してはいけない** — アプリに「自分だけが作った」と返している以上、相手 (ロックファイルかもしれない) を黙って DELETE + INSERT で潰すのは最悪なので、**種別違い衝突と同じ error latch** にする。狙いと実測は [performance.ja.md](performance.ja.md) | 機能 |
 | B-2 | ✅ **修正済** (下 §B-2 の as-built)。**喪失レポートと exit 4 が既定の起動方法では誰にも届かない**。daemonize すると親は `PGFS_MOUNTED_OK` 読取後に `return 0`、子は `Console.SetOut/SetError(TextWriter.Null)` してから `return 4`。しかも `Dispose` が `{prefix}mounts` の行を DELETE するので **DB 側にも痕跡が残らない** → 喪失を DB 側 (監査行 `op=writeback_loss` or mounts 行に `unflushedLoss`) に残す + 起動時警告 | High |
 | B-3 | ✅ **修正済** (下 §B-3 の as-built)。**`create → read → unlink` が痕跡ゼロで成立する**。純キャンセルの監査ペアはメモリキューだけなので `kill -9` / PG 障害で消える = 設計 §監査 が明示的に塞ぐと書いた回避チャネルが復活。件数は少ないので **`audit.enabled` 時は即 write-through** が妥当 | High |
 | B-4 | ✅ **解消** (下 §B-4)。**`audit.enabled` を live で off にすると以後の unmount が必ず期限満了 + exit 4**。`FlushOrphanAudits` が `!auditEnabled` で return するのにキューは `UnflushedCount()` に数えられるため、**実喪失ゼロなのに「以下は失われます」レポート**が出て systemd が failed 扱いにする | Medium |
@@ -80,9 +80,9 @@
 
 > ノブ `mount.write_back_metadata_exclusive_create` の設計。**設計どおり実装し、
 > dev サーバ実機で検証した** (差分は下の §as-built 差分)。実測は **`rsync` が 3.28×**
-> ([performance.md §B-1 `defer` の実測](performance.md))。
+> ([performance.ja.md §B-1 `defer` の実測](performance.ja.md))。
 > 狙いは「`rsync` / `cp` が `O_CREAT|O_EXCL` を使うせいでヒューリスティック (c) が全部 write-through に
-> 落とし、1e の畳み込みが 1 回も起きない」([performance.md §1e ステージ 2 の効果](performance.md)) を、
+> 落とし、1e の畳み込みが 1 回も起きない」([performance.ja.md §1e ステージ 2 の効果](performance.ja.md)) を、
 > **失う排他を明示したうえで**選べるようにすること。
 
 ##### 値と既定
@@ -152,7 +152,7 @@ flush tx で名前衝突を解決する `AdoptOrRemoveOccupant` に、**`BornExc
 **複数マウントで同じ FS を使うなら `defer` にしない**。Windows 側の確認 で、
 cross-client の相互排除として実際に効いているのは **`CREATE_NEW` の DB 一意制約だけ**だと分かっている
 (Dokan アダプタは share mode を強制せず `LockFile` / `UnlockFile` も常に成功を返すため。
-[windows-parity.md](windows-parity.md))。`defer` はその最後の 1 本を抜く操作になる。
+[windows-parity.ja.md](windows-parity.ja.md))。`defer` はその最後の 1 本を抜く操作になる。
 
 そのため次の 2 つを実装に含める。
 
@@ -169,14 +169,14 @@ cross-client の相互排除として実際に効いているのは **`CREATE_NE
 - **`mkdir` は対象外**。`Api.CreateDirectory` は今も `exclusive: false` 固定で、このノブでも変えない
   (同期化すると pending ディレクトリが生まれず祖先チェーン INSERT が到達不能になる — ステージ 2 as-built 差分 5)。
   `mkdir` をロックプリミティブに使うツールは **`write_back_metadata = on` の時点で** cross-client 排他を
-  失っている。これはこのノブの前からの性質であり、[Mount.md](../Mount.md) の可視性の行に既に書いてある。
+  失っている。これはこのノブの前からの性質であり、[Mount.ja.md](../Mount.ja.md) の可視性の行に既に書いてある。
 - `O_EXCL` 以外の create (`plain_create` / `O_TRUNC`) の扱いは変えない。
 
 ##### 実装時に一緒に更新する doc
 
 `settings-matrix.md` (全項目マトリクス) / `Mkfs.md` の既定値表 + TOML 例 / `pgfs.toml.example` /
-[Mount.md](../Mount.md) の「失うもの」表の**可視性の行** (`O_EXCL` は同期作成なので排他が維持される、と
-書いてあるので `defer` の場合の例外を足す) / [Pgfsctl.md](../Pgfsctl.md) (status に出る項目が増えるため)。
+[Mount.ja.md](../Mount.ja.md) の「失うもの」表の**可視性の行** (`O_EXCL` は同期作成なので排他が維持される、と
+書いてあるので `defer` の場合の例外を足す) / [Pgfsctl.ja.md](../Pgfsctl.ja.md) (status に出る項目が増えるため)。
 
 ##### as-built 差分 (実装して分かったこと)
 
@@ -206,7 +206,7 @@ fault injection** で決定的に作れる (既存の `test_meta_error_state_blo
    **占有者の行が消えていない**こと + 敗者がエラーステートに入ること + **unlink で回復できる**こと。
 
 性能の測り直し (`defer` で `rsync`) は実装後に別途。計測の作法は
-[performance.md §1e ステージ 2 の効果](performance.md) の「計測の前提」を踏襲する
+[performance.ja.md §1e ステージ 2 の効果](performance.ja.md) の「計測の前提」を踏襲する
 (**デーモンの消滅まで待つ** / **毎回 md5 で整合性を確認する**)。
 
 ### B-12 の as-built (**実装済**)
@@ -382,8 +382,8 @@ exit 4 も残らない) が、**Ctrl+C 2 回で起きていた**。
 
 | 対象 | 入れたもの |
 |---|---|
-| [Mount.md](../Mount.md) §write-back | 喪失レポートの**上限 32 件は pending / dirty それぞれ**であること (残りは内訳サマリ) / 「ファイル間の因果」に **`rm f; cp new f`** の具体例 / 停止シグナルの段階分け (B-12) と `TimeoutStopSec` の指針 |
-| [audit-log.md](audit-log.md) | **write-back 有効時の監査は耐久ではない** (pending inode の監査行は flush tx で初めて DB に入るので、`fsync` していない分はクラッシュで操作ごと消える。`op = writeback_loss` は「消えた」ことの記録であって操作そのものの記録ではない) |
+| [Mount.ja.md](../Mount.ja.md) §write-back | 喪失レポートの**上限 32 件は pending / dirty それぞれ**であること (残りは内訳サマリ) / 「ファイル間の因果」に **`rm f; cp new f`** の具体例 / 停止シグナルの段階分け (B-12) と `TimeoutStopSec` の指針 |
+| [audit-log.ja.md](audit-log.ja.md) | **write-back 有効時の監査は耐久ではない** (pending inode の監査行は flush tx で初めて DB に入るので、`fsync` していない分はクラッシュで操作ごと消える。`op = writeback_loss` は「消えた」ことの記録であって操作そのものの記録ではない) |
 | ~~`Mount.md` の「その fd の close は同期」~~ |  A-4〜A-7 の修正と同時に as-built へ更新済 |
 
 ### data write-back のライブ無効化を二相化 (**実装済**)

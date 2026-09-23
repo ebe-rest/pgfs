@@ -1,6 +1,6 @@
 # 実行時コントロールプレーン + キャッシュ高速化 設計プラン
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: 「運用フェーズ」5 テーマの**全体構成とフェーズ間の関係**。
 > **機能ごとの設計・as-built・変更記録は持たない** — 下の 6 本が正で、ここは索引である。
@@ -9,15 +9,15 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [cache.md](cache.md) | ① キャッシュ (1a inode LRU / 1b content read / 1c read-ahead) |
-> | [write-back.md](write-back.md) | 1d データ本体の遅延書き |
-> | [metadata-write-back.md](metadata-write-back.md) | 1e メタデータの遅延書き (確定設計 + 実装ステータス) |
-> | [metadata-write-back-reviews.md](metadata-write-back-reviews.md) | 1e のレビュー記録 (ラウンド A / B-1〜B-13) |
-> | [control-plane.md](control-plane.md) | ②③④ 登録表 / 制御 NOTIFY / `pgfsctl config`・`status` |
-> | [gui.md](gui.md) | ⑤ GUI 運用ダッシュボード |
-> | [performance.md](performance.md) | ① の土台になった実測と改善候補 |
-> | [settings-matrix.md](settings-matrix.md) | 設定項目の一覧と reload ポリシーの値 |
-> | [database.md](database.md) / [../ddl/](../ddl/README.md) | `{prefix}mounts` の DDL |
+> | [cache.ja.md](cache.ja.md) | ① キャッシュ (1a inode LRU / 1b content read / 1c read-ahead) |
+> | [write-back.ja.md](write-back.ja.md) | 1d データ本体の遅延書き |
+> | [metadata-write-back.ja.md](metadata-write-back.ja.md) | 1e メタデータの遅延書き (確定設計 + 実装ステータス) |
+> | [metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) | 1e のレビュー記録 (ラウンド A / B-1〜B-13) |
+> | [control-plane.ja.md](control-plane.ja.md) | ②③④ 登録表 / 制御 NOTIFY / `pgfsctl config`・`status` |
+> | [gui.ja.md](gui.ja.md) | ⑤ GUI 運用ダッシュボード |
+> | [performance.ja.md](performance.ja.md) | ① の土台になった実測と改善候補 |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | 設定項目の一覧と reload ポリシーの値 |
+> | [database.ja.md](database.ja.md) / [../ddl/](../ddl/README.ja.md) | `{prefix}mounts` の DDL |
 >
 
 > 「運用フェーズ」の 5 テーマ —
@@ -27,8 +27,8 @@
 > **現行状態（2026-09-21 実機再走）**: 1a/1b/1d、1e ステージ 1・1.5・2、Phase 2〜4、GUI 5a/5b は実装されている。1c read-ahead、GUI 5c/5d は未完了。
 > **1e の未修正指摘は全件クローズした** — ラウンド A / B の指摘も、レビューに挙がった 15 件も残っていない。
 > かつてここに書いていた「既存テスト 15/16 の FAIL」は **A-7 で解消済み**で、いま `wbmeta.sh` は **27 件すべて緑**である。
-> **Linux 9 スイートは全緑** (e2e off/on 49+1skip / crossclient 14 / writeback 9 / wbmeta 27 / negcache 7 / handles 11 / prune 6 / startup 5)、**docker と Citus の 3 本も再走済み**。件数の正は [tests.md](../tests.md)。
-> 現行 CLI 契約は [Mount.md](../Mount.md)、Windows の追加設計は [windows-parity.md](windows-parity.md) を参照する。以下の「確定設計」は当時の計画を残し、実装との差は as-built 節で示す。
+> **Linux 9 スイートは全緑** (e2e off/on 49+1skip / crossclient 14 / writeback 9 / wbmeta 27 / negcache 7 / handles 11 / prune 6 / startup 5)、**docker と Citus の 3 本も再走済み**。件数の正は [tests.ja.md](../tests.ja.md)。
+> 現行 CLI 契約は [Mount.ja.md](../Mount.ja.md)、Windows の追加設計は [windows-parity.ja.md](windows-parity.ja.md) を参照する。以下の「確定設計」は当時の計画を残し、実装との差は as-built 節で示す。
 
 ## この 5 テーマの構造 (なぜ 1 本にまとめるか)
 
@@ -101,7 +101,7 @@
 
 ## Phase 1 詳細: ① キャッシュ充足での高速化
 
-既存の [performance.md](performance.md) が土台 (#2 InodeCache の lock 競合、#8 writeback_cache)。本節はそれを「速度向上」観点で再編。
+既存の [performance.ja.md](performance.ja.md) が土台 (#2 InodeCache の lock 競合、#8 writeback_cache)。本節はそれを「速度向上」観点で再編。
 
 | 小項目 | 内容 | ROI / リスク | performance.md |
 |---|---|---|---|
@@ -115,33 +115,33 @@
 
 ### 1a / 1b (read 側のキャッシュ)
 
-**→ [cache.md](cache.md) に分離した**。`InodeCache` の上限と LRU、content read キャッシュ、
+**→ [cache.ja.md](cache.ja.md) に分離した**。`InodeCache` の上限と LRU、content read キャッシュ、
 data-write NOTIFY による cross-client invalidate、negative キャッシュ、1c read-ahead (未着手) はそちらが正。
 
 ### 1d (データ本体の write-back)
 
-**→ [write-back.md](write-back.md) に分離した**。dirty チャンクの表現 / flush の粒度 /
+**→ [write-back.ja.md](write-back.ja.md) に分離した**。dirty チャンクの表現 / flush の粒度 /
 `data_id` のブロック事前予約 / `mount.write_back` 系のノブ / 実測 (`dd bs=128k` で 6.1×) はそちらが正。
 
 ### 1e (メタデータの write-back)
 
-**→ [metadata-write-back.md](metadata-write-back.md) に分離した**。pending-born 主義 / pending inode 台帳 /
+**→ [metadata-write-back.ja.md](metadata-write-back.ja.md) に分離した**。pending-born 主義 / pending inode 台帳 /
 同期化ヒューリスティック 3 つ / flush tx の不変条件 / ステージ 1・1.5・2 の as-built はそちらが正。
 
 ### 1e のレビュー記録 (ラウンド A / B)
 
-**→ [metadata-write-back-reviews.md](metadata-write-back-reviews.md) に分離した**。
+**→ [metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) に分離した**。
 ラウンド A (A-1〜A-10) と ラウンド B (B-1〜B-13) の指摘と修正の as-built、**データ write-back の
 ライブ無効化の二相化**はそちらが正。分離時点で 711 行あり、repo 内 2 位の大きさだった。
 
 ## Phase 2〜4 詳細: 土台 / config / status
 
-**→ [control-plane.md](control-plane.md) に分離した**。`{prefix}mounts` 登録表 / 制御 NOTIFY /
+**→ [control-plane.ja.md](control-plane.ja.md) に分離した**。`{prefix}mounts` 登録表 / 制御 NOTIFY /
 Field の reload ポリシー / `pgfsctl config` / `status` (Layer 1〜3) の設計と as-built はそちらが正。
 
 ## Phase 5 詳細: ⑤ GUI
 
-**→ [gui.md](gui.md) に分離した**。`config` / `status` を読む薄い運用フロント (Avalonia)。
+**→ [gui.ja.md](gui.ja.md) に分離した**。`config` / `status` を読む薄い運用フロント (Avalonia)。
 技術選定 (P5-1〜P5-4) / 画面構成 / 5a・5b の as-built はそちらが正。
 
 ## 開いている設計判断 (次の議論ラウンド)
@@ -151,7 +151,7 @@ Field の reload ポリシー / `pgfsctl config` / `status` (Layer 1〜3) の設
 2. ~~**File 対象 (toml) 設定を `config set` でどう扱うか**~~ → ✅ **決定 (P3-2)**: File+Live は NOTIFY インライン同梱でエフェメラル live 反映 (DB 行を作らず remount 復活 footgun 無し)。File+NextMount は手元 toml 編集案内。Phase 3 詳細のマトリクス参照。
 3. ~~**`{prefix}mounts` を誰が作るか**~~ → ✅ **決定 (Phase 2)**: mkfs が作成。既存 FS は再 mkfs (no --clean) で冪等・非破壊に追加、それまで mount は warning skip。
 4. ~~**content キャッシュ (1b) の invalidation**~~ → ✅ **決定 (1b 実装済)**: data-write NOTIFY (`"d"`=data_id) で cross-client invalidate + **グローバル世代ガード**で stale read 競合を封じる。inode version/mtime 列は不採用。実機 e2e 緑。
-5. ~~**write-back (1d)** を入れるか~~ → ✅ **決定 (採用)**: 生 SQL のベンチで **単一 PG 6.5× / Citus rf=2 8.1×** の投影が出た (主因はチャンク行の read-modify-write 増幅・[performance.md](performance.md))。dirty 表現 / flush 粒度 / `data_id` 予約まで確定済 = [§1d 確定設計](write-back.md)。**実装完了・実機検証済 (§1d 実装ステータス)**。
+5. ~~**write-back (1d)** を入れるか~~ → ✅ **決定 (採用)**: 生 SQL のベンチで **単一 PG 6.5× / Citus rf=2 8.1×** の投影が出た (主因はチャンク行の read-modify-write 増幅・[performance.ja.md](performance.ja.md))。dirty 表現 / flush 粒度 / `data_id` 予約まで確定済 = [§1d 確定設計](write-back.ja.md)。**実装完了・実機検証済 (§1d 実装ステータス)**。
 6. **heartbeat 間隔 / stale 判定閾値**。
 7. ~~**GUI 技術選定** (Phase 5 で)~~ → ✅ **決定 (P5-1)**: Avalonia (cross-platform desktop)。MVP = 読み取りダッシュボード先行。Phase 5 詳細参照。
-8. ~~**メタデータ write-back (1e)** の可視性・監査整合をどう扱うか~~ → ✅ **決定**: pending-born 主義 + close 契約の緩和 + 同期化ヒューリスティック 3 つ + 1 ファイル 1 tx。敵対的レビュー 2 レンズ (並行性 / データ安全・POSIX 契約・監査) の指摘を織り込んで確定 = [§1e 確定設計](metadata-write-back.md)。**ステージ 2 まで実装済み・レビュー指摘未修正**。現状は §1e の as-built / 敵対的レビュー結果を参照。
+8. ~~**メタデータ write-back (1e)** の可視性・監査整合をどう扱うか~~ → ✅ **決定**: pending-born 主義 + close 契約の緩和 + 同期化ヒューリスティック 3 つ + 1 ファイル 1 tx。敵対的レビュー 2 レンズ (並行性 / データ安全・POSIX 契約・監査) の指摘を織り込んで確定 = [§1e 確定設計](metadata-write-back.ja.md)。**ステージ 2 まで実装済み・レビュー指摘未修正**。現状は §1e の as-built / 敵対的レビュー結果を参照。

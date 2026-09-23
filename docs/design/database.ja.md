@@ -1,6 +1,6 @@
 # データベーススキーマ設計
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **DB スキーマ設計** — 各テーブルの役割と列の意味、PK / インデックスの
 > 選び方 (Citus の制約込み)、**タイムスタンプ規約 (常に UTC)**、**実占有バイトと `st_blocks`**。
@@ -10,18 +10,18 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [../ddl/README.md](../ddl/README.md) | **DDL 本体** (テーブル 1 つ = 1 ファイル) |
-> | [../Mkfs.md](../Mkfs.md) | DDL を適用する CLI と既定値 |
-> | [support_for_citus.md](support_for_citus.md) | 分散キーの選択・shard 数・排他制御 |
-> | [data-id-lifecycle.md](data-id-lifecycle.md) | `data_id` の寿命 (create で確定し unlink まで不変) |
-> | [audit-log.md](audit-log.md) | `{prefix}audit` の月次パーティション |
-> | [xattr-bytea.md](xattr-bytea.md) | xattr 列のバイト列透過 |
+> | [../ddl/README.ja.md](../ddl/README.ja.md) | **DDL 本体** (テーブル 1 つ = 1 ファイル) |
+> | [../Mkfs.ja.md](../Mkfs.ja.md) | DDL を適用する CLI と既定値 |
+> | [support_for_citus.ja.md](support_for_citus.ja.md) | 分散キーの選択・shard 数・排他制御 |
+> | [data-id-lifecycle.ja.md](data-id-lifecycle.ja.md) | `data_id` の寿命 (create で確定し unlink まで不変) |
+> | [audit-log.ja.md](audit-log.ja.md) | `{prefix}audit` の月次パーティション |
+> | [xattr-bytea.ja.md](xattr-bytea.ja.md) | xattr 列のバイト列透過 |
 
 PostgreSQLファイルシステムドライバ（PGFS）のデータベーススキーマ設計です。
 
-> **DDL ファイル**: 各テーブルの CREATE 文は [docs/ddl/](../ddl/README.md) にテーブル単位で分割して置いてあります。手動でセットアップしたい場合や設計を確認したい場合の参照に使えます。
+> **DDL ファイル**: 各テーブルの CREATE 文は [docs/ddl/](../ddl/README.ja.md) にテーブル単位で分割して置いてあります。手動でセットアップしたい場合や設計を確認したい場合の参照に使えます。
 >
-> **Citus (水平分散) 対応**: 分散戦略、bytea 化、`pgfs_lock` テーブル等は [docs/support_for_citus.md](support_for_citus.md) を参照 (Phase 1+2+3 完了、`mkfs --citus` で opt-in)。
+> **Citus (水平分散) 対応**: 分散戦略、bytea 化、`pgfs_lock` テーブル等は [docs/support_for_citus.ja.md](support_for_citus.ja.md) を参照 (Phase 1+2+3 完了、`mkfs --citus` で opt-in)。
 
 -----
 
@@ -43,7 +43,7 @@ PostgreSQLファイルシステムドライバ（PGFS）のデータベースス
 
 `Kind=Utc` の `DateTime` をそのままパラメータにしてはいけません。Npgsql はそれを `timestamptz` として送るため、PG が `timestamp` 列へ代入する際に**セッション TimeZone でキャスト**し、ローカル壁時計が保存されます。同じ理由で、DB 経過時間を SQL で計算するときも `now() AT TIME ZONE 'UTC'` と比較します (`StatusAdmin.ListMounts` の uptime / heartbeat 経過)。
 
-* 列 DEFAULT も `DEFAULT (current_timestamp AT TIME ZONE 'UTC')` です ([docs/ddl/](../ddl/README.md))。
+* 列 DEFAULT も `DEFAULT (current_timestamp AT TIME ZONE 'UTC')` です ([docs/ddl/](../ddl/README.ja.md))。
 * 監査ログの月次パーティション境界も UTC 基準で決まります (`occurred_at` が UTC なので一致)。
 * **既存 FS の移行**: `mkfs` は既存テーブルの DEFAULT を書き換えないため、この規約より前に作った FS はローカル時刻の行と古い DEFAULT を持ちます。UTC 以外のタイムゾーンのホストで作成した FS を移行するなら、DEFAULT の付け替え (`ALTER TABLE … ALTER COLUMN … SET DEFAULT (current_timestamp AT TIME ZONE 'UTC')`) と既存行のシフト (`UPDATE … SET st_mtime = st_mtime - interval 'N hours'`、N = 作成時のホストの UTC オフセット) が必要です。UTC のホスト (docker コンテナ等) で作った FS はズレが 0 なので DEFAULT の付け替えだけで済みます。
 
@@ -68,8 +68,8 @@ DDL: [docs/ddl/pgfs_inode.sql](../ddl/pgfs_inode.sql)
 | `link_target` | `TEXT`      | `NULL`     |                     |         | シンボリックリンクやジャンクションの場合のリンク先パス。                          |
 | `is_junction` | `BOOLEAN`   | `NOT NULL` | `FALSE`             |         | Windowsジャンクションの場合 `TRUE`。                             |
 | `data_id`     | `BIGINT`    | `NULL`     |                     |         | ファイルデータ本体を参照するID（`pgfs_data` の ID）。ディレクトリの場合は `NULL`。 |
-| `xattr_names`  | `TEXT[]`  | `NOT NULL` | `{}`                |         | 拡張属性 (xattr) の名前配列。同じ index の `xattr_values` とペア。予約キー: `user.pgfs_acl` (正準 ACL ドキュメント JSON)、`user.win.attrs` (Windows 属性 JSON `{hidden,system,archive}`)。詳細は [permission-interop.md](permission-interop.md)。 |
-| `xattr_values` | `BYTEA[]` | `NOT NULL` | `{}`                |         | xattr の値配列 (bytea で忠実保持、NUL 含む任意バイト列可)。`xattr_names` と同じ index でペア。旧 `xattrs JSONB`+Base64 から移行。設計は [xattr-bytea.md](xattr-bytea.md)。 |
+| `xattr_names`  | `TEXT[]`  | `NOT NULL` | `{}`                |         | 拡張属性 (xattr) の名前配列。同じ index の `xattr_values` とペア。予約キー: `user.pgfs_acl` (正準 ACL ドキュメント JSON)、`user.win.attrs` (Windows 属性 JSON `{hidden,system,archive}`)。詳細は [permission-interop.ja.md](permission-interop.ja.md)。 |
+| `xattr_values` | `BYTEA[]` | `NOT NULL` | `{}`                |         | xattr の値配列 (bytea で忠実保持、NUL 含む任意バイト列可)。`xattr_names` と同じ index でペア。旧 `xattrs JSONB`+Base64 から移行。設計は [xattr-bytea.ja.md](xattr-bytea.ja.md)。 |
 | `created_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'` |         | 作成日時                                                  |
 | `created_by`  | `TEXT`      | `NOT NULL` |                     |         | 作成ユーザー名                                               |
 | `updated_at`  | `TIMESTAMP` | `NOT NULL` | `CURRENT_TIMESTAMP AT TIME ZONE 'UTC'` |         | 更新日時                                                  |
@@ -120,7 +120,7 @@ UPDATE {prefix}data d
 
 DDL: [docs/ddl/pgfs_data_chunk.sql](../ddl/pgfs_data_chunk.sql)
 
-データ本体を bytea チャンクで格納します。1 チャンク = 1 bytea (デフォルト 1MB)。旧設計では Large Object (`pg_largeobject`) を使っていましたが、Citus 分散ができないため Phase 1 で bytea に置き換えました (詳細は [docs/support_for_citus.md](support_for_citus.md))。
+データ本体を bytea チャンクで格納します。1 チャンク = 1 bytea (デフォルト 1MB)。旧設計では Large Object (`pg_largeobject`) を使っていましたが、Citus 分散ができないため Phase 1 で bytea に置き換えました (詳細は [docs/support_for_citus.ja.md](support_for_citus.ja.md))。
 
 | カラム名          | データ型        | NULL       | INDEX | 説明                                                    |
 |:--------------|:------------|:-----------|-------|:------------------------------------------------------|
@@ -164,19 +164,19 @@ DDL: [docs/ddl/pgfs_settings.sql](../ddl/pgfs_settings.sql)
 DDL: [docs/ddl/pgfs_lock.sql](../ddl/pgfs_lock.sql)
 
 
-> **Citus では分散しない**: `citus_add_local_table_to_metadata` で coordinator に 1 コピーだけ置く citus local table にする。分散テーブルは `citus.shard_replication_factor > 1` のとき行ロック (`SELECT … FOR UPDATE`) を拒否するため、ロック機構を複製数から独立させるために非分散にしている。metadata 登録することで worker を入口にしたクエリもこの 1 行へルーティングされ、入口ノードが違っても排他が成立する。**行ロックはこのテーブルだけ**に集約し、`pgfs_inode` 等には `FOR UPDATE` を打たない。詳細は [support_for_citus.md §排他制御と replication factor](support_for_citus.md)。
+> **Citus では分散しない**: `citus_add_local_table_to_metadata` で coordinator に 1 コピーだけ置く citus local table にする。分散テーブルは `citus.shard_replication_factor > 1` のとき行ロック (`SELECT … FOR UPDATE`) を拒否するため、ロック機構を複製数から独立させるために非分散にしている。metadata 登録することで worker を入口にしたクエリもこの 1 行へルーティングされ、入口ノードが違っても排他が成立する。**行ロックはこのテーブルだけ**に集約し、`pgfs_inode` 等には `FOR UPDATE` を打たない。詳細は [support_for_citus.ja.md §排他制御と replication factor](support_for_citus.ja.md)。
 
-cross-client 排他制御用のロックトークンテーブル。Citus Phase 2 で先行作成。Phase 3 で Api の `LockData` / `LockInode` / `LockInodes` へ組込み済みである。ただし全競合の解消を意味しない。**親削除と write-through create の競合は 修正済み**で、レビューに挙がった 15 件は全件クローズしている。**いま残っている制限は [CHANGELOG.md §既知の制限](../../CHANGELOG.md) が正。**
+cross-client 排他制御用のロックトークンテーブル。Citus Phase 2 で先行作成。Phase 3 で Api の `LockData` / `LockInode` / `LockInodes` へ組込み済みである。ただし全競合の解消を意味しない。**親削除と write-through create の競合は 修正済み**で、レビューに挙がった 15 件は全件クローズしている。**いま残っている制限は [CHANGELOG.ja.md §既知の制限](../../CHANGELOG.ja.md) が正。**
 
 | カラム名      | データ型   | NULL       | INDEX | 説明                                                            |
 |:----------|:-------|:-----------|-------|:--------------------------------------------------------------|
 | `target_id` | `BIGINT` | `NOT NULL` | PK    | ロック対象 ID。data lock は `data_id` (正)、inode lock は `-inode_id` (負) で namespace を分ける。 |
 
-監査列は無し (データではなくロック token なので)。`INSERT ... ON CONFLICT DO NOTHING` で行を作成し、`SELECT 1 FROM pgfs_lock WHERE target_id = @id FOR UPDATE` で行ロック → tx 終了で自動解放、という設計。行は累積する (DELETE しない) が 100 万件で ~100MB なので問題なし。詳細は [docs/support_for_citus.md](support_for_citus.md) Phase 3 を参照。
+監査列は無し (データではなくロック token なので)。`INSERT ... ON CONFLICT DO NOTHING` で行を作成し、`SELECT 1 FROM pgfs_lock WHERE target_id = @id FOR UPDATE` で行ロック → tx 終了で自動解放、という設計。行は累積する (DELETE しない) が 100 万件で ~100MB なので問題なし。詳細は [docs/support_for_citus.ja.md](support_for_citus.ja.md) Phase 3 を参照。
 
 ### 5\. 監査ログ (`pgfs_audit`)
 
-DDL: [docs/ddl/pgfs_audit.sql](../ddl/pgfs_audit.sql) / 設計の正: [docs/audit-log.md](audit-log.md)
+DDL: [docs/ddl/pgfs_audit.sql](../ddl/pgfs_audit.sql) / 設計の正: [docs/audit-log.ja.md](audit-log.ja.md)
 
 メタデータ変更操作 (create / delete / rename / chmod / chown / hardlink) を 1 操作 = 1 行で記録する。`occurred_at` をキーとする **月次 RANGE パーティション** テーブル (DEFAULT は作らず、INSERT 前にアプリが当月パーティションを `CREATE ... IF NOT EXISTS` で ensure)。`audit.enabled` (mkfs `--audit`) で opt-in。記録は操作と同一トランザクション (アトミック)。
 
@@ -199,7 +199,7 @@ INDEX は `id` 単独 / `op` / `target_id`。外部キー・トリガーは作�
 
 ### 6\. 実行中マウントのレジストリ (`pgfs_mounts`)
 
-DDL: [docs/ddl/pgfs_mounts.sql](../ddl/pgfs_mounts.sql) / 設計の正: [docs/design/runtime-control-plane.md](runtime-control-plane.md) の Phase 2
+DDL: [docs/ddl/pgfs_mounts.sql](../ddl/pgfs_mounts.sql) / 設計の正: [docs/design/runtime-control-plane.ja.md](runtime-control-plane.ja.md) の Phase 2
 
 各 mount.pgfs / assign.pgfs プロセスが起動時に 1 行 INSERT、定期 heartbeat で `heartbeat_at` を更新、正常終了で DELETE する **揮発レジストリ**。**例外: unmount の期限内に書き切れず未 flush を失った場合は DELETE せず残す** (B-2)。`stats` に `ended` / `endedAt` / `unflushedLoss` / `lost` を載せた**墓標**で、`pgfsctl status` と次回マウント時の警告がここを見る。自動では消えないので運用が削除する。**列は足していない** (DDL は mkfs 集約なので、列を増やすと既存 FS で再 mkfs が要るため `stats` JSONB に載せた)。status サブコマンド (運用) がクラスタ横断で稼働マウントを一覧するための土台。テーブルが無い既存 FS では mount が warning skip するだけで動作に影響しない (DDL は mkfs 集約)。Citus 時は `pgfs_settings` と同じく coordinator local + metadata 登録 (分散しない)。
 

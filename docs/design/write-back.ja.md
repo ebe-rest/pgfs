@@ -1,6 +1,6 @@
 # write-back — データ本体の遅延書き (Phase 1d)
 
-> **道順**: [docs/README.md](../README.md) › [runtime-control-plane.md](runtime-control-plane.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [runtime-control-plane.ja.md](runtime-control-plane.ja.md) › **本書**
 >
 > **この doc が正である範囲**: データ本体 (`{prefix}data_chunk`) の write-back キャッシュの設計・
 > 実装状況・変更記録。dirty チャンクの表現、flush の粒度、`data_id` のブロック事前予約、
@@ -10,25 +10,25 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [metadata-write-back.md](metadata-write-back.md) | **メタデータ**の遅延書き (1e)。pending inode 台帳と名前空間 |
-> | [cache.md](cache.md) | **読み取り側**のキャッシュ (1a / 1b / 1c) |
-> | [control-plane.md](control-plane.md) | `mount.write_back` を実行時に切り替える経路と、統計の出し方 |
-> | [performance.md](performance.md) | 実測の数字 (6.1× 等) と改善候補の全体 |
-> | [settings-matrix.md](settings-matrix.md) | `mount.write_back*` の既定値と reload ポリシー |
-> | [../Mount.md](../Mount.md) | 利用者向けの挙動と耐久性の契約 |
-> | [runtime-control-plane.md](runtime-control-plane.md) | 運用フェーズ全体の構成 (ハブ) |
+> | [metadata-write-back.ja.md](metadata-write-back.ja.md) | **メタデータ**の遅延書き (1e)。pending inode 台帳と名前空間 |
+> | [cache.ja.md](cache.ja.md) | **読み取り側**のキャッシュ (1a / 1b / 1c) |
+> | [control-plane.ja.md](control-plane.ja.md) | `mount.write_back` を実行時に切り替える経路と、統計の出し方 |
+> | [performance.ja.md](performance.ja.md) | 実測の数字 (6.1× 等) と改善候補の全体 |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | `mount.write_back*` の既定値と reload ポリシー |
+> | [../Mount.ja.md](../Mount.ja.md) | 利用者向けの挙動と耐久性の契約 |
+> | [runtime-control-plane.ja.md](runtime-control-plane.ja.md) | 運用フェーズ全体の構成 (ハブ) |
 
 ## 設計
 
 ### 確定設計 — write-back キャッシュ: **チャンクをメモリで組み立てて 1 回だけ書く**
 
 > 以下は **実装前の確定設計**である。現行との差分は後続の「1d 実装ステータス」を参照。2026-07-25 に生 SQL のベンチで**取り分の出どころを測り直し**、設計判断を確定した。
-> 実測値の正は [performance.md](performance.md)。
+> 実測値の正は [performance.ja.md](performance.ja.md)。
 
 #### 出発点の訂正 — 主因は「tx の本数」ではなく「同じ行を何度も育てること」
 
 このメモの初版は「Citus が遅いのは 1 FS 操作 = 1 分散トランザクションだから、**tx の本数を減らす**のが唯一の道」と
-書いていた。**追測で訂正**した (詳細は [performance.md §真の主因](performance.md)):
+書いていた。**追測で訂正**した (詳細は [performance.ja.md §真の主因](performance.ja.md)):
 
 | 1 MiB のファイルデータを書く形 | 単一 PG | Citus rf=2 |
 |---|---|---|
@@ -72,7 +72,7 @@ DirtySet (mount ごとに 1 つ)
 * **`written` extent を持つ理由**: 「フルチャンクを組み立てた」のか「一部だけ書いた」のかを区別して、
   flush で**今と同じ意味論**を再現するため。全域なら全置換、部分なら overlay 1 回。
   これがないと、スパース領域への部分書き込みが「穴 (行なし)」を「0 埋めチャンク」に変えてしまい、
-  `total_size` / `st_blocks` ([database.md §実占有バイトと st_blocks](database.md)) の意味が変わる。
+  `total_size` / `st_blocks` ([database.ja.md §実占有バイトと st_blocks](database.ja.md)) の意味が変わる。
 * **partial write でチャンクが手元に無い場合も DB を読まない**。extent があるので overlay で書けば足りる
   (read は 0.4 ms と安いが、**読まずに済むなら読まない**方が単純)。
 * **同一ファイルの dirty は必ず同一 tx で flush**。サイズと内容が食い違う中間状態を作らない。
@@ -114,7 +114,7 @@ DirtySet (mount ごとに 1 つ)
 | `create` / `unlink` / `rename` / `mkdir` / `link` / `symlink` | **write-through (現状維持)** → **1e で pending-born に限り遅延に拡張 (設計確定・下 §1e)** | 名前空間の可視性・監査ログ・`{prefix}lock` の意味論に直結。頻度も低い |
 | `chmod` / `chown` / `xattr` | **write-through (現状維持)** → **1e でも persisted inode へは write-through を維持** (pending inode へは coalesce) | 権限は遅延させたくない |
 
-**監査ログへの影響なし**: [audit-log.md](audit-log.md) が記録するのはメタデータ操作
+**監査ログへの影響なし**: [audit-log.ja.md](audit-log.ja.md) が記録するのはメタデータ操作
 (create/delete/rename/chmod/chown/hardlink) だけで、すべて write-through 側に残る。
 
 #### 一貫性・耐久性の担保 (実装の本体)
@@ -186,7 +186,7 @@ DirtySet (mount ごとに 1 つ)
 | `mount.write_back_interval_ms` | 時間窓 (0 = 時間トリガなし) | 1000 |
 | `mount.write_back_batch_files` | 1 tx にまとめるファイル数上限 (**1 = ファイル単位 = 既定**) | 1 |
 
-追加は [settings-matrix.md](settings-matrix.md) / [Mkfs.md](../Mkfs.md) 既定値表 / [pgfs.toml.example](../../pgfs.toml.example) にも反映する。
+追加は [settings-matrix.ja.md](settings-matrix.ja.md) / [Mkfs.ja.md](../Mkfs.ja.md) 既定値表 / [pgfs.toml.example](../../pgfs.toml.example) にも反映する。
 Layer 3 status (下記 §Phase 4) に **dirty バイト / dirty ファイル数 / flush 回数 / flush 失敗数**を出す
 (`{prefix}mounts.stats` のスナップショットに足す)。
 
@@ -287,7 +287,7 @@ Layer 3 status (下記 §Phase 4) に **dirty バイト / dirty ファイル数 
 2. **Windows (Dokan) 側の検証** — **off モードは 2026-09-19 に実機緑** (Windows e2e 30/30 ×3 + cross-client 6/6 ×2・pgsql_server の Citus rf=2)。
    `FlushFileBuffers` / `Cleanup` を実際に通す **on モードの受入も完了** — [writeback.ps1](../../tests/windows/writeback.ps1) が
    **negative control 付き**で通る (2026-09-21 再走: 6/6。バリア無しの書き込みが失われることも同じスイートで見ている)。
-   Windows 側の as-built は [windows-parity.md §実装ステータス](windows-parity.md)。
+   Windows 側の as-built は [windows-parity.ja.md §実装ステータス](windows-parity.ja.md)。
 3. **flush 失敗時に `-EIO` が返ることの自動テスト** — DB を落として書き込む形が要るので未整備 (経路は実装済)。
 4. **cross-client の last-flush-wins テスト** (A が未 flush のまま B が同じファイルを書く)。
 5. **メタデータ操作の write-back 化** (rsync 系をさらに速くする道) → **設計確定済み。下 §1e が正**。
@@ -297,7 +297,7 @@ Layer 3 status (下記 §Phase 4) に **dirty バイト / dirty ファイル数 
 
 時系列の記録はここに追記する (設計と as-built は上の 2 章が正)。
 
-- [runtime-control-plane.md](runtime-control-plane.md) が 1,802 行に肥大したため、
+- [runtime-control-plane.ja.md](runtime-control-plane.ja.md) が 1,802 行に肥大したため、
   機能ごとに分割してこの doc を切り出した。内容は分割前のまま。
   **ライブ無効化の二相化** の as-built は分割前は 1e のレビュー節にあったため、
-  [metadata-write-back-reviews.md](metadata-write-back-reviews.md) 側に残っている。
+  [metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) 側に残っている。

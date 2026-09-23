@@ -1,6 +1,6 @@
 # コーディング規約
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: pgfs の C# コードに適用する規約のうち、**`.editorconfig` から読み取れない意図と例**。
 > 命名と namespace の切り方、enum の置き場と振る舞い、`this.` の明示、修飾子の順序、ブレース、
@@ -12,7 +12,7 @@
 > | doc | そちらに書くもの |
 > |---|---|
 > | [../../.editorconfig](../../.editorconfig) | 機械的に強制できる設定値そのもの (インデント・改行・文字コード)。値が食い違ったらそちらが正 |
-> | [../architecture.md](../architecture.md) | プロジェクト構成・モジュール分割・namespace の割り当て・ビルド手順 |
+> | [../architecture.ja.md](../architecture.ja.md) | プロジェクト構成・モジュール分割・namespace の割り当て・ビルド手順 |
 >
 > 上流として参考にしたのは [.NET Runtime Coding Style](https://github.com/dotnet/runtime/blob/main/docs/coding-guidelines/coding-style.md)
 > であり、一部は意図的に外している (タブ vs スペース等)。

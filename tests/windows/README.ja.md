@@ -1,10 +1,12 @@
 # pgfs Windows e2e tests
 
-> 全テストの一覧 / 環境要件 / docker 統合の検討は [docs/tests.md](../../docs/tests.md) (ハブ) を参照。本 README はこのディレクトリのランナー (`e2e.ps1` / `flow.ps1` / `run.cmd`) の操作詳細を扱う。
+> **道順**: [docs/README.ja.md](../../docs/README.ja.md) › [docs/tests.ja.md](../../docs/tests.ja.md) (テストのハブ) › **本書**
+>
+> 全テストの一覧 / 環境要件 / docker 統合の検討は [docs/tests.ja.md](../../docs/tests.ja.md) (ハブ) を参照。本 README はこのディレクトリのランナー (`e2e.ps1` / `flow.ps1` / `run.cmd`) の操作詳細を扱う。
 
-assign.pgfs (Windows / Dokan) でマウント済みの PGFS に対して、実装済み機能 ([docs/Assign.md](../../docs/Assign.md)) を一括で動作確認する e2e テスト。
+assign.pgfs (Windows / Dokan) でマウント済みの PGFS に対して、実装済み機能 ([docs/Assign.ja.md](../../docs/Assign.ja.md)) を一括で動作確認する e2e テスト。
 
-Linux 版 ([tests/linux/](../linux/README.md)) と対になる Windows 版で、テストの構造はほぼ同じ。Windows 固有の操作 (ReadOnly / Hidden / System / Archive 属性 / ボリューム情報 / ワイルドカード検索) を追加し、pgfs の Dokan アダプタで公開していない native symlink / hardlink / 任意 xattr と POSIX chmod/chown は対象外。Windows 自体にリンク機能がないという意味ではない。
+Linux 版 ([tests/linux/](../linux/README.ja.md)) と対になる Windows 版で、テストの構造はほぼ同じ。Windows 固有の操作 (ReadOnly / Hidden / System / Archive 属性 / ボリューム情報 / ワイルドカード検索) を追加し、pgfs の Dokan アダプタで公開していない native symlink / hardlink / 任意 xattr と POSIX chmod/chown は対象外。Windows 自体にリンク機能がないという意味ではない。
 
 ## ファイル
 
@@ -63,7 +65,7 @@ pwsh -NoProfile -File tests\windows\crossclient.ps1 -NoNotify    # notify 無し
 `-Filter` のタイポや前提不足で**緑のまま通過**すると、**何も確かめていないのに通ったように見える**からである。
 **一部だけ skip は従来どおり成功扱い** (環境によって必ず skip になるものがあるため)。
 
-**Linux 側にも同じガードを入れた** ([tests/linux/README.md](../linux/README.md) §0 件で緑にしない)。
+**Linux 側にも同じガードを入れた** ([tests/linux/README.ja.md](../linux/README.ja.md) §0 件で緑にしない)。
 ただし **`psql` を引けないときの挙動はスイートごとに違う** (2026-09-21 に Linux 側で実測) —
 `negcache.sh` / `prune.sh` / `handles.sh` は**前提チェックで `exit 2`** (黙って緑にはならない)、
 `wbmeta.sh` は**走りはするが DB 側の検査が個別に `skip` へ落ちて緑に見える**。
@@ -100,7 +102,7 @@ if ($after -le $before) { Fail "書き込みが FS に届いていない (シナ
 ```
 
 **Linux 側にも同型の罠がある** — bash の `exec 8> file` は **`O_TRUNC` 付き**なので、開いた瞬間に
-ファイルが 0 になってシナリオが崩れる ([tests/linux/README.md](../linux/README.md))。
+ファイルが 0 になってシナリオが崩れる ([tests/linux/README.ja.md](../linux/README.ja.md))。
 **共通の教訓は「書いたつもりが FS に届いていない」で、どちらもテストが緑になる向きに転ぶ。**
 
 ### 観測側が壊れていても「0 件」になる — negative control を先に置く (2026-09-21 実測)
@@ -150,7 +152,7 @@ Linux 側も同じ理由で `crossclient.sh` の `mount_a_writeback()` に埋め
 
 ## カバー範囲
 
-[docs/Assign.md](../../docs/Assign.md) で ✅ / ⚠️ になっている Dokan オペレーションを exercise する。
+[docs/Assign.ja.md](../../docs/Assign.ja.md) で ✅ / ⚠️ になっている Dokan オペレーションを exercise する。
 
 | カテゴリ | テスト |
 |---|---|
@@ -213,12 +215,12 @@ pgfs 側の削除は DB で確認済みで、原因はクライアント側キ�
 
 | 問題 | 状態 | メモ |
 |---|---|---|
-| `Copy-Item` (CopyFileEx) で 2 MiB ファイルが `IOException` | ✅ 解消済 (確認) | **原因は `Api.EnsureChunk` の SELECT-then-INSERT race** (CopyFileEx の並行 WriteFile が同じ `(data_id, chunk_index)` を 2 回 INSERT して PK 制約で死ぬ)。`INSERT ... ON CONFLICT DO NOTHING` 化で修正済み ([history.md](../../docs/history.md))。**この表の行だけが残っていた**。2026-09-19 に 2 MiB / 8 MiB・双方向・上書き・`robocopy /COPYALL`・ツリーコピーで再現しないことを確認し、`test_copy_item_round_trip` として実経路をテストに戻した |
+| `Copy-Item` (CopyFileEx) で 2 MiB ファイルが `IOException` | ✅ 解消済 (確認) | **原因は `Api.EnsureChunk` の SELECT-then-INSERT race** (CopyFileEx の並行 WriteFile が同じ `(data_id, chunk_index)` を 2 回 INSERT して PK 制約で死ぬ)。`INSERT ... ON CONFLICT DO NOTHING` 化で修正済み ([history.ja.md](../../docs/history.ja.md))。**この表の行だけが残っていた**。2026-09-19 に 2 MiB / 8 MiB・双方向・上書き・`robocopy /COPYALL`・ツリーコピーで再現しないことを確認し、`test_copy_item_round_trip` として実経路をテストに戻した |
 | `dokanctl /u` が "Admin rights required" で失敗 | 〇 (回避) | Dokan の仕様で `dokanctl /u` は管理者権限必須。`flow.ps1` は `Process.Kill()` でフォールバック (強制終了であり、write-back の未 flush データは失われ得る。正常終了・耐久性の検証には使えない) |
 
 ## 記録上の結果と未検証範囲
 
-**件数と実機結果の正は [docs/tests.md](../../docs/tests.md)**。ここには書かない — スイートに 1 件足すたびに
+**件数と実機結果の正は [docs/tests.ja.md](../../docs/tests.ja.md)**。ここには書かない — スイートに 1 件足すたびに
 両方を直すことになり、**片方が必ず腐る**。実際 「e2e 34 件 / cross-client 6/6 / metadata
 write-back 3 passed」のまま取り残されているのが見つかった (実測は e2e 38 / cross-client 10 / wbmeta 5)。
 **この doc が持つのは実行方法とスイートごとの狙いだけ**にする (Linux 側 README と同じ形)。
@@ -228,16 +230,16 @@ write-back 3 passed」のまま取り残されているのが見つかった (�
 **B が同名を `CreateNew` で占有**してから `dokanctl /u` で**正常停止**すると **exit 4** が返る。
 **未 flush を残さずに止めれば exit 0** なので契約として確かめられている。
 `--write-back-interval-ms 0` が必須で、既定 1000 ms のままだと**背景 flush が先に pending を実体化して衝突が起きない**。
-詳細は [windows-parity.md](../../docs/design/windows-parity.md) の「正常停止と喪失報告」。)
+詳細は [windows-parity.ja.md](../../docs/design/windows-parity.ja.md) の「正常停止と喪失報告」。)
 (**Explorer / FileSystemWatcher のイベント種別も実測済** — **他マウント由来は 1 件もイベントにならない**。
-ローカル操作では `Created`/`Changed`/`Renamed`/`Deleted` が出る。詳細は [Assign.md](../../docs/Assign.md) の Notify 行。)
+ローカル操作では `Created`/`Changed`/`Renamed`/`Deleted` が出る。詳細は [Assign.ja.md](../../docs/Assign.ja.md) の Notify 行。)
 (`write_back` / `write_back_metadata` を on にした受入は **2026-09-21 に実機で完了** — [writeback.ps1](writeback.ps1) 6/6 と
 [wbmeta.ps1](wbmeta.ps1) 4 passed + 1 skip。skip は Windows が `DeleteFile` を遅延させるため回復を観測できないもの。)
-Linux で後から加わったキャッシュ・write-back・live 設定の Windows 受入条件は [Windows 展開設計](../../docs/design/windows-parity.md) を参照する。
+Linux で後から加わったキャッシュ・write-back・live 設定の Windows 受入条件は [Windows 展開設計](../../docs/design/windows-parity.ja.md) を参照する。
 
 ## カバーしていないもの
 
-[docs/Assign.md](../../docs/Assign.md) の TODO 表の ❌ 項目は未実装のため対象外:
+[docs/Assign.ja.md](../../docs/Assign.ja.md) の TODO 表の ❌ 項目は未実装のため対象外:
 
 - named ACL による厳密なアクセス拒否・default ACL 継承 (GetFileSecurity / SetFileSecurity の投影・逆投影は既存テスト対象)
 - Alternate Data Streams (`file.txt:stream`)
@@ -246,7 +248,7 @@ Linux で後から加わったキャッシュ・write-back・live 設定の Wind
 - POSIX 互換 range lock
 - Junction (再解析ポイント)
 
-未実装機能の残一覧は [docs/next.md](../../docs/next.md) を参照。
+未実装機能の残一覧は [docs/next.ja.md](../../docs/next.ja.md) を参照。
 
 ## 使い方
 
@@ -413,7 +415,7 @@ Results: 27 passed, 0 failed, 0 skipped (out of 27)
   - flow.ps1 は `dokanctl.exe` を `C:\Program Files\Dokan\Dokan Library-*\` 配下から自動検出する
   - 見つからない場合は `Stop-Process` でフォールバック (アンマウントが汚くなる可能性あり)
 - マウントポイント (`P:` 等) が既存ドライブと衝突していないこと
-- PostgreSQL に PGFS が初期化済み ([docs/Mkfs.md](../../docs/Mkfs.md))
+- PostgreSQL に PGFS が初期化済み ([docs/Mkfs.ja.md](../../docs/Mkfs.ja.md))
 - `pgfs.toml` に DB 接続情報があること
 
 ## write-back テスト (耐久性)
@@ -457,7 +459,7 @@ DELETE FROM <schema>.<prefix>mounts
    AND heartbeat_at < (now() AT TIME ZONE 'UTC') - INTERVAL '10 minutes';
 ```
 
-reaper の自動化は [docs/next.md](../../docs/next.md) 🟡 #27 の課題。
+reaper の自動化は [docs/next.ja.md](../../docs/next.ja.md) 🟡 #27 の課題。
 
 **プロセスの撃ち方について**: 本ディレクトリのスクリプトは `Start-Process -PassThru` で得た
 **自分が起動した PID だけ**を `Stop-Process -Id` / `Process.Kill()` で落とす。

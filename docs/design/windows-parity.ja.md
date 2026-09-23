@@ -1,6 +1,6 @@
 # Linux 機能の Windows 展開設計
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: Windows (Dokan) 実装の**設計と as-built**、および Linux 機能を
 > Windows へ展開する段取り。実測で分かった Windows 固有の挙動もここに書く。
@@ -9,13 +9,13 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [../Assign.md](../Assign.md) | **利用者向け仕様** (CLI・前提・既知の制限) |
-> | [handle-context.md](handle-context.md) | ハンドル文脈の共通化 (段階 A〜D)。§共通クラスと責務 の行き先 |
-> | [permission-interop.md](permission-interop.md) | ACL / 権限の Linux↔Windows 相互運用 |
-> | [../tests.md](../tests.md) | Windows スイートの件数・実行方法 |
+> | [../Assign.ja.md](../Assign.ja.md) | **利用者向け仕様** (CLI・前提・既知の制限) |
+> | [handle-context.ja.md](handle-context.ja.md) | ハンドル文脈の共通化 (段階 A〜D)。§共通クラスと責務 の行き先 |
+> | [permission-interop.ja.md](permission-interop.ja.md) | ACL / 権限の Linux↔Windows 相互運用 |
+> | [../tests.ja.md](../tests.ja.md) | Windows スイートの件数・実行方法 |
 
 設計案である。
-**本書のうち「Windows 基礎」段は 2026-09-19 に実装・実機検証済** (下 §実装ステータス)。**それ以外の提案 (共通クラスの抽出・所有者導出・native 拡張ほか) は未実装**で、性能も未測定である。現行仕様は [Assign.md](../Assign.md) を参照する。
+**本書のうち「Windows 基礎」段は 2026-09-19 に実装・実機検証済** (下 §実装ステータス)。**それ以外の提案 (共通クラスの抽出・所有者導出・native 拡張ほか) は未実装**で、性能も未測定である。現行仕様は [Assign.ja.md](../Assign.ja.md) を参照する。
 
 ## 実装ステータス (as-built)
 
@@ -23,7 +23,7 @@
 検証は Windows 実機 (Dokan 2.3.1 / PG は `pgsql_server` の `pgfs` スキーマ・Citus rf=2・audit on) で
 **e2e / cross-client / write-back (`mount.write_back` on) を 3 回連続で全緑**。
 
-> **件数はここに書かない。正は [tests.md](../tests.md)。** 当時は e2e 30 / cross-client 6 /
+> **件数はここに書かない。正は [tests.ja.md](../tests.ja.md)。** 当時は e2e 30 / cross-client 6 /
 > write-back 6 だったが、**その後スイートも件数も増えている** (ある時点で e2e 38 / cross-client 10)。
 > **ここに数字を残すと「Windows のテストは 30 件」と読まれる。**
 
@@ -47,7 +47,7 @@
 | 16 | **所有者の導出 (案 B)** — 新規 inode の `uname` は **要求元の User SID** を `UnameOf` で正規化した名前、`gname` は **親ディレクトリから継承**。取得できなければ `fallback_uname`/`gname` + Warning で、**実行プロセスの user には化かさない** | `FileSystem.CaptureCaller` / `DoCreate` / `WindowsUserResolver.FallbackUname` | e2e に `test_new_file_owner_is_requestor` / `test_new_file_inherits_parent_group` を追加 (27 → 30 → **32 件**)。`.Owner` ではなく `.User` を使う (昇格プロセスだと Administrators に化ける) |
 | 15 | **ローカル削除も `NotifyDelete`** — 自分のマウントで消した対象も Windows へ通知 | `FileSystem.Cleanup` / `.NotifyLocalDelete` | 別プロセスがハンドルを持っていた削除後のキャッシュ残留が **3 回中 2 回 → 1 回**に減った (完全解消はしない・下の実測参照) |
 | 12 | **リモート削除の通知** — 消えた対象は `NotifyUpdate` では invalidate されないので、再取得して消えていれば **`NotifyDelete`** を撃つ | `FileSystem.PropagateRemoteChange` / `.NotifyDeleted` | cross-client `test_x_delete_visible_from_peer` が **3 回連続緑** (この修正前は 3 回中 1 回 FAIL) |
-| 19 | **停止シグナルの段階化 (B-12 の Windows 配線)** — `Console.CancelKeyPress` の購読を `FileSystem.Run()` から **`assign.pgfs` 側へ引き上げ**、1 発目=アンマウント要求 / 2 発目=**`Api.AbandonFlush()`** / 3 発目以降=既定の即時終了。従来は 1 発目で `Run()` を抜けた瞬間に購読が外れ、**shutdown flush の最中が無防備** (2 発目 = 即死で喪失レポートも墓標も残らない) だった | `Assign.Program.RunDokanMountAsync` / `FileSystem.RequestStop` | 手動 (pending 1200 件・期限 600 秒 → Ctrl+Break 2 発目から **152 ms** で打ち切り、喪失レポート + `exit 4` + 墓標 `unflushedLoss: 1057`)。自動テストは書いていない (Linux B-12 と同じ判断)。**`AttachConsole` 経由の `CTRL_C_EVENT` は相手に届かない / `CTRL_BREAK_EVENT` は届く**。詳細は [metadata-write-back-reviews.md §B-12 の Windows 配線](metadata-write-back-reviews.md) |
+| 19 | **停止シグナルの段階化 (B-12 の Windows 配線)** — `Console.CancelKeyPress` の購読を `FileSystem.Run()` から **`assign.pgfs` 側へ引き上げ**、1 発目=アンマウント要求 / 2 発目=**`Api.AbandonFlush()`** / 3 発目以降=既定の即時終了。従来は 1 発目で `Run()` を抜けた瞬間に購読が外れ、**shutdown flush の最中が無防備** (2 発目 = 即死で喪失レポートも墓標も残らない) だった | `Assign.Program.RunDokanMountAsync` / `FileSystem.RequestStop` | 手動 (pending 1200 件・期限 600 秒 → Ctrl+Break 2 発目から **152 ms** で打ち切り、喪失レポート + `exit 4` + 墓標 `unflushedLoss: 1057`)。自動テストは書いていない (Linux B-12 と同じ判断)。**`AttachConsole` 経由の `CTRL_C_EVENT` は相手に届かない / `CTRL_BREAK_EVENT` は届く**。詳細は [metadata-write-back-reviews.ja.md §B-12 の Windows 配線](metadata-write-back-reviews.ja.md) |
 
 ### 削除の可視性 — 2026-09-20 の再測で「クロスクライアントの問題ではない」ことが分かった
 
@@ -118,7 +118,7 @@ Explorer / インデクサ / Defender 次第で、実測では **15 秒以上**�
   create / 上書き / delete / 置換 rename が**いつまでも見えない** (4 件とも古いまま。`InodeCache` と read キャッシュは
   マウントごとに独立で、invalidate は LISTEN/NOTIFY でしか来ない)。`--notify` を付けた 2 マウントでは 4 件とも
   数百 ms で追随した。→ **Windows で複数マウントを運用するなら notify は事実上必須**。この事実は
-  [Assign.md](../Assign.md) / [tests/windows/README.md](../../tests/windows/README.md) にも書いた。
+  [Assign.ja.md](../Assign.ja.md) / [tests/windows/README.ja.md](../../tests/windows/README.ja.md) にも書いた。
 - 副次: 既存の別ドライブ (この環境では `Q:`) を指定すると Dokan は
   `Something's wrong with the Dokan driver` という汎用例外で失敗する。→ **assign に事前チェックを入れた** (上記 11)。
   判定は `Directory.Exists` では**できない**点が落とし穴で、メディア無しの CD-ROM や未接続のリムーバブルは
@@ -146,7 +146,7 @@ A = `defer` + write-back、B = write-through の **実 2 マウント**で測っ
 
 | 項目 | 決定 | 理由 |
 |---|---|---|
-| `uname` | **要求元の User SID** (`WindowsIdentity.User`) を `WindowsUserResolver.UnameOf` で正規化 (`DOMAINAlice` → `alice`) | 保存形式は [permission-interop.md](permission-interop.md) の「名前のみ・SID/UID は持たない」規約どおり。`.Owner` は昇格プロセスだと `Administrators` になり得るので使わない |
+| `uname` | **要求元の User SID** (`WindowsIdentity.User`) を `WindowsUserResolver.UnameOf` で正規化 (`DOMAINAlice` → `alice`) | 保存形式は [permission-interop.ja.md](permission-interop.ja.md) の「名前のみ・SID/UID は持たない」規約どおり。`.Owner` は昇格プロセスだと `Administrators` になり得るので使わない |
 | `gname` | **親ディレクトリから継承** (案 B) | Windows の token primary group は実質 `Domain Users` / `None` で権限判定にも使われない。継承なら「同じツリーは同じグループ」になり mode の group ビットが意味を持つ。**Linux の既定 (作成者の primary group) とは意図的に違う** |
 | 取得失敗時 | `fallback_uname` / `fallback_gname` (既定 `nobody`/`nogroup`) + Warning | 現状 pgfs は access/share を強制していないので所有者は表示と監査にしか効かない。create を失敗させるほうが実害が大きい。**enforce を入れる段で「失敗させる」へ切り替える** |
 | ノブ | **作らなかった** | `mount.owner_from_requestor` を検討したが、Field 追加は `src/core/src/Config/Schema.cs` = Linux 側の担当範囲。既定 on 相当の挙動のみ実装し、退避路が要るなら Core 側に Field を足してもらう |
@@ -181,7 +181,7 @@ A = `defer` + write-back、B = write-through の **実 2 マウント**で測っ
 「タグの無い reparse point」として落とされているとみられる。
 **本書の「通常のリンクとして開けるとは保証しない」より悪く、実態は「列挙から消え、名指しすると空ファイルとして開ける」**。
 
-**結論**: 現バインディングでは **作成も読みも成立しない**。[next.md](../next.md) 🟢 #5 (Junction) は
+**結論**: 現バインディングでは **作成も読みも成立しない**。[next.ja.md](../next.ja.md) 🟢 #5 (Junction) は
 「Dokan 側に入口が無い」ことが確定したので、**DokanNet / Dokany への追加か WinFsp への差し替え**が前提になる。
 
 ### `du` 相当 (AllocationSize) の到達性 PoC — **返す経路が無い**
@@ -199,7 +199,7 @@ A = `defer` + write-back、B = write-through の **実 2 マウント**で測っ
 | 空ファイル | 0 | 0 | 0 |
 
 → **スパースファイルで実占有の 800 万倍を申告している**。pgfs 自身は正しい値 (1 バイト) を持っており、
-Linux では `st_blocks` 経由で `du` に出る ([database.md §実占有バイトと st_blocks](database.md))。**差は Windows 側の経路が無いことだけ**。
+Linux では `st_blocks` 経由で `du` に出る ([database.ja.md §実占有バイトと st_blocks](database.ja.md))。**差は Windows 側の経路が無いことだけ**。
 
 **選択肢**: ① DokanNet / Dokany に出力の枠を足せるか PoC (ドライバ側の改修が要る可能性) ② WinFsp は
 `GetFileInfo` に `AllocationSize` があるので backend 差し替えなら解決する ③ **現状を未達として明記し続ける**。
@@ -243,7 +243,7 @@ handle ベースの識別 (現状はパス優先) / `UserModeLock` の見直し 
 **`Api.CreateDirectory` は `exclusive: false` のまま**である。長らく「Core に入口が無い = 未修正」と
 書かれていたが、**これは裁定済みの仕様**であって、直すべき不具合ではない。
 
-**裁定の理由** ([metadata-write-back-reviews.md](metadata-write-back-reviews.md) / ステージ 2 as-built 差分 5):
+**裁定の理由** ([metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) / ステージ 2 as-built 差分 5):
 **同期化すると pending ディレクトリが原理的に生まれなくなり、祖先チェーン INSERT と dir/dir の
 既存 id 採択 (Rekey) が到達不能コードになる**。`wbmeta.sh` の
 `test_meta_exclusive_create_is_write_through` が **「mkdir も DB に行が無い」ことを assert していて、
@@ -254,7 +254,7 @@ handle ベースの識別 (現状はパス優先) / `UserModeLock` の見直し 
 | モード | 同名 `mkdir` の衝突 |
 |---|---|
 | **既定 (`write_back_metadata` = off)** | **DB の一意制約 `(parent_id, name)` が弾く**。cross-client でも**実体は必ず 1 つ** ([crossclient.ps1](../../tests/windows/crossclient.ps1) の `test_x_mkdir_race` / Linux 側も同様) |
-| **`write_back_metadata` = on** | **pending 採択で両方が成功に化ける余地が残る** (flush 時に衝突が解決される)。**`O_EXCL` の create は [B-1 のノブ](metadata-write-back.md) (`write_back_metadata_exclusive_create`) で write-through に倒せるが、`mkdir` はそのノブの対象外**である |
+| **`write_back_metadata` = on** | **pending 採択で両方が成功に化ける余地が残る** (flush 時に衝突が解決される)。**`O_EXCL` の create は [B-1 のノブ](metadata-write-back.ja.md) (`write_back_metadata_exclusive_create`) で write-through に倒せるが、`mkdir` はそのノブの対象外**である |
 
 **つまり「ロックプリミティブとして `mkdir` を使う」用途は、`write_back_metadata` を on にすると
 成立しない。** `O_EXCL` の create を使うこと (そちらは既定で write-through)。
@@ -325,7 +325,7 @@ POSIX 側に「元の write ビット」を覚える場所が無いため (記�
 - **誕生から不変**である。`data_id` は **create で確定**し (`Api.CreateFile` が採番だけ先に取る)、
   **`truncate -s 0` でも `{prefix}data` の行を消さない**ので、**最初の write を跨いでも値が変わらない**
   (実測: 空ファイル 9223372036854817081 → write 後も同じ)。詳細は
-  [data-id-lifecycle.md](data-id-lifecycle.md)。
+  [data-id-lifecycle.ja.md](data-id-lifecycle.ja.md)。
 - **実体を持たないもの (ディレクトリ / symlink) は `inode.Id` のまま**。
 
 **テスト**: [e2e.ps1](../../tests/windows/e2e.ps1) の `test_file_index_is_data_id_and_stable` (35 → **36 件**)。
@@ -390,7 +390,7 @@ GetFileInfo / SetFileSize / GetEa / SetEa / reparse 操作である。導入や�
 
 ## 共通クラスと責務（新規設計・未実装）
 
-> **追記**: この節の前提になる「ハンドル文脈」の設計を [handle-context.md](handle-context.md) に切り出した。
+> **追記**: この節の前提になる「ハンドル文脈」の設計を [handle-context.ja.md](handle-context.ja.md) に切り出した。
 > 段階 A〜D と未解決の論点 (ハンドル表の置き場 / 1e の同期 close 印との関係 / 削除後 I/O の契約 / ロック) はそちらが正。
 > 本節の `FileSystemOperationsBase` は **段階 D** にあたる。
 
@@ -503,7 +503,7 @@ FileSystemWatcher の正確なイベント種別まで提供する段階では�
 - **末尾ドットのファイルは Win32 経由では開けず、黙って別のファイルが開く** — `dot.` を指定したのに
   `dot` の中身が返る。**エラーにならない**ので、利用者は誤ったデータを読んだことに気づけない。
 
-**→ 決着済。正は [namespace-policy.md](namespace-policy.md)。**
+**→ 決着済。正は [namespace-policy.ja.md](namespace-policy.ja.md)。**
 **`.fuse_hidden*` の隠蔽とまとめて決めた** — どれも同じ形の trade-off だったため。方針は
 **「穴を開けている主体のところで塞ぐ」**:
 
@@ -512,7 +512,7 @@ FileSystemWatcher の正確なイベント種別まで提供する段階では�
   [FileSystemUtils.IsUnsafeWindowsName](../../src/dokan/src/FileSystemUtils.cs)。
 - **`.fuse_hidden*`** … **Dokan では列挙から外さない** (`Api.HideLibfuseLeftovers` = false)。
 - **長い名前 (255 超) は弾いていない。** **実害が観測されていない**ため
-  (作れるが扱えない、という報告が出たら [namespace-policy.md](namespace-policy.md) に足して決め直す)。
+  (作れるが扱えない、という報告が出たら [namespace-policy.ja.md](namespace-policy.ja.md) に足して決め直す)。
 
 **残る非対称**: **Linux から作った予約名・末尾ドットのファイルは、Windows から消せない場合がある**。
 **弾いても問題が移動するだけ**なので、**意図的に残している**。
@@ -565,4 +565,4 @@ WinFsp 等の代替 backend の到達性・保守費用を比較してから採�
 - **ランナー**: Windows flow の Process.Kill fallback を正常 unmount 成功と数えない。mount 消滅だけでなく assign プロセス終了と exit code を待つ。実行版・OS・ドライバ版・DB 構成・ケース別 pass/fail/skip を記録する。
 
 新規テストの置き場候補は `tests/windows/writeback.ps1`、`tests/windows/wbmeta.ps1`、`tests/windows/control_plane.ps1` である。
-これらのファイルは今回作成していない。ケース確定後に [tests.md](../tests.md) と [Windows ランナー README](../../tests/windows/README.md) を更新する。
+これらのファイルは今回作成していない。ケース確定後に [tests.ja.md](../tests.ja.md) と [Windows ランナー README](../../tests/windows/README.ja.md) を更新する。

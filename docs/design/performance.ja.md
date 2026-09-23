@@ -1,6 +1,6 @@
 # 性能改善候補
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: 性能の**実測値と改善候補**の正。測った数字・測定条件・そこから言えること
 > (と、後で訂正された結論) と、**計測の作法** (デーモンの消滅まで待つ / 毎回 md5 で整合性を確認する /
@@ -10,14 +10,14 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [write-back.md](write-back.md) | データ write-back (1d) の**設計と実装ステータス**。ここは数字、あちらは機構 |
-> | [metadata-write-back.md](metadata-write-back.md) | メタデータ write-back (1e) の確定設計・ステージ・不変条件 |
-> | [metadata-write-back-reviews.md](metadata-write-back-reviews.md) | 1e のレビュー指摘 (ラウンド A / B-1〜) と修正の記録。A-10 / B-1 の**根拠**はそちら |
-> | [cache.md](cache.md) | 読み取り側キャッシュ (inode LRU / content / negative) の設計 |
-> | [support_for_citus.md](support_for_citus.md) | Citus 分散の設計と分散デッドロックの扱い |
-> | [control-plane.md](control-plane.md) | 計測に使うノブの切り替え経路と統計の出し方 (`pgfsctl config` / `status`) |
-> | [settings-matrix.md](settings-matrix.md) | 本書で振ったノブ (`mount.*`) の既定値と reload ポリシー |
-> | [../tests.md](../tests.md) | テストスイートの一覧・件数・実行環境の要件 (本書の計測は同じマウント手順を前提にする) |
+> | [write-back.ja.md](write-back.ja.md) | データ write-back (1d) の**設計と実装ステータス**。ここは数字、あちらは機構 |
+> | [metadata-write-back.ja.md](metadata-write-back.ja.md) | メタデータ write-back (1e) の確定設計・ステージ・不変条件 |
+> | [metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) | 1e のレビュー指摘 (ラウンド A / B-1〜) と修正の記録。A-10 / B-1 の**根拠**はそちら |
+> | [cache.ja.md](cache.ja.md) | 読み取り側キャッシュ (inode LRU / content / negative) の設計 |
+> | [support_for_citus.ja.md](support_for_citus.ja.md) | Citus 分散の設計と分散デッドロックの扱い |
+> | [control-plane.ja.md](control-plane.ja.md) | 計測に使うノブの切り替え経路と統計の出し方 (`pgfsctl config` / `status`) |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | 本書で振ったノブ (`mount.*`) の既定値と reload ポリシー |
+> | [../tests.ja.md](../tests.ja.md) | テストスイートの一覧・件数・実行環境の要件 (本書の計測は同じマウント手順を前提にする) |
 
 FUSE / DokanNet コールバックは秒間 100〜10000 回呼ばれるホットパス。以下は調査済みで効果が見込める改善案。優先度順:
 
@@ -41,7 +41,7 @@ FUSE / DokanNet コールバックは秒間 100〜10000 回呼ばれるホット
 | 単一 PG | **13.46 MB/s** | 44 秒 | timestamp UTC + 実占有バイト + ロック集約を入れた後。入れる前は 14.08 MB/s = **今回の機能追加のコストは測定ノイズ域** |
 | Citus rf=1 | **3.11 MB/s** | 3m12s | coordinator の commit 数 = **34,517** (≒ 49 tx/ファイル) |
 | Citus rf=2 | **2.27 MB/s** | 4m23s | rf=1 との差は 2PC 参加ノードが倍になる分 |
-| Citus rf=2 (UPDATE router 化前) | 2.08 MB/s | 4m48s | + **分散デッドロック 2 件** ([support_for_citus.md](support_for_citus.md) 参照) |
+| Citus rf=2 (UPDATE router 化前) | 2.08 MB/s | 4m48s | + **分散デッドロック 2 件** ([support_for_citus.ja.md](support_for_citus.ja.md) 参照) |
 
 読み出し側 (cold): 83MB のファイルを単一 PG から `md5sum` で **231 MB/s**、Citus rf=2 のツリー全体 (598MB) で **≈35 MB/s**。
 
@@ -140,7 +140,7 @@ FUSE / DokanNet コールバックは秒間 100〜10000 回呼ばれるホット
 * **書き込み粒度を上げる案は空振りだった** (下記「`max_write`」参照。libfuse3 が既に 1 MiB までネゴシエートしていた)。
   ただし**空振りの理由も上と整合する**: `dd` は元から 1 MiB で来ていた = 増幅が起きていなかったので速かった。
   rsync が遅いのは 128 KiB で来て増幅していたから。
-* 次に効くのは **Phase 1d の write-back キャッシュ** ([write-back.md](write-back.md))。
+* 次に効くのは **Phase 1d の write-back キャッシュ** ([write-back.ja.md](write-back.ja.md))。
   投影値は上表の通り **単一 PG 6.5× / Citus rf=2 8.1×**。上記 8 の `writeback_cache` (カーネル側) は
   「小さい write を結合する」別の軸で、pgfs 側 write-back と併用できる。
 * rsync のような**メタデータ主体のワークロードは実行ごとのばらつきが大きい** (同一構成で 2.27 / 1.62 MB/s)。比較するなら `dd` の 1 MiB 書き込みのような単一操作のレイテンシで見るほうが再現性が高い。
@@ -149,7 +149,7 @@ FUSE / DokanNet コールバックは秒間 100〜10000 回呼ばれるホット
 
 ## 実測: メタデータ write-back (1e) の投影ベンチ (2026-08-10, dev サーバ)
 
-設計 ([metadata-write-back.md §1e](metadata-write-back.md)) の**実装前ゲート**。pgbench (-c 1 = rsync 相当の単一クライアント・各 120〜200 ファイル × 2 周) で 2 つの形を生 SQL で再現した:
+設計 ([metadata-write-back.ja.md §1e](metadata-write-back.ja.md)) の**実装前ゲート**。pgbench (-c 1 = rsync 相当の単一クライアント・各 120〜200 ファイル × 2 周) で 2 つの形を生 SQL で再現した:
 
 * **今の形** = write_back(1d)=on・メタデータ write-through。1 ファイル = **5 tx** (create / close-flush / chmod / utimens / rename 同一親)。`{prefix}lock` の INSERT + `SELECT FOR UPDATE` も実装どおり再現。
 * **1e の形** = coalesce 済みの最終状態を **1 tx** (lock ×3 + ancestor 生存確認 + inode INSERT (最終名・最終属性) + data INSERT + chunk INSERT)。
@@ -259,7 +259,7 @@ TTL 内の再 lookup は DB に行かない。無効化は 3 系統: **自クラ
   (本当に存在しないことを 1 度は DB に聞くしかない)。
 * 伸びが小さいのは lookup が軽い read (router SELECT ≈1.3 ms) だから。**worker への RTT が大きい構成ほど効く**。
 * テストは [tests/linux/negcache.sh](../../tests/linux/negcache.sh) 7/7 PASS (可視性契約 + live reload)。
-  e2e (既定 off) は 43/44 — FAIL 1 は既知の 40P01 フレーク ([tests.md §既知のフレーク](../tests.md)) で
+  e2e (既定 off) は 43/44 — FAIL 1 は既知の 40P01 フレーク ([tests.ja.md §既知のフレーク](../tests.ja.md)) で
   3 周中 1 回の再現率も既知の 15〜20%/周と整合、本変更とは無関係 (既定 off なので経路同一)。
 
 ### 改めて「次に効く順」
@@ -345,7 +345,7 @@ openat(AT_FDCWD, "/home/user/mnt/pgfs/dst/f1", O_WRONLY|O_CREAT|O_EXCL, 0644) = 
 * **前景だけ見ると 14.9× だが、この数字を使ってはいけない**。仕事が drain に移るだけで、
   総計で見ないと嘘になる (ステージ 2 の計測で同じ罠を踏んでいる)。
 * この 3.28× は **cross-client の `O_EXCL` 排他を失うことの対価**である。既定を変えない理由は
-  [metadata-write-back-reviews.md §B-1 の確定設計](metadata-write-back-reviews.md) の「位置づけ」を参照。
+  [metadata-write-back-reviews.ja.md §B-1 の確定設計](metadata-write-back-reviews.ja.md) の「位置づけ」を参照。
 
 ### この計測から言えること
 
@@ -355,12 +355,12 @@ openat(AT_FDCWD, "/home/user/mnt/pgfs/dst/f1", O_WRONLY|O_CREAT|O_EXCL, 0644) = 
    (現状 39 ms/file ≒ 同期 5 tx)。`O_EXCL` を deferrable にできれば **39 → ≈12 ms/file = 約 3×** が
    見込める (投影) → **2026-09-19 に実測し 3.28× を確認した** (下 §B-1 `defer` の実測)。
 3. **既定 off を維持する根拠はむしろ強まった**: 既定構成では rsync/cp に 0% / その他の create に 1.3% で、
-   失う耐久性契約 ([Mount.md §write-back](../Mount.md)) に見合わない。
+   失う耐久性契約 ([Mount.ja.md §write-back](../Mount.ja.md)) に見合わない。
 
 ## 実測: A-10 (persisted inode への上書きを同期 close に戻したこと) の影響 (2026-09-19, dev サーバ)
 
 ラウンド A の **A-10** は「既に DB にある実体 (persisted) への write が始まったら同期 close 印を付ける」=
-close-no-flush を **pending-born 限定**にした修正である ([metadata-write-back-reviews.md §ラウンド A の修正](metadata-write-back-reviews.md))。
+close-no-flush を **pending-born 限定**にした修正である ([metadata-write-back-reviews.ja.md §ラウンド A の修正](metadata-write-back-reviews.ja.md))。
 狙いは「既存ファイルの上書きが interval ごとに別 tx で部分 commit され、クラッシュすると
 **前半が新・後半が旧のキメラ**が残る」窓を塞ぐこと。**性能影響が未実測のまま残っていた**ので測った。
 
@@ -422,7 +422,7 @@ A-10 の**最悪ケース**。close のたびに同期 flush が走るので、c
 
 ## 実測: handle-context 段階 B の基線 (2026-09-20, dev サーバ・**単一 PG**)
 
-[handle-context.md §段階 B の受入条件と API 面 ④](handle-context.md) のゲート用。段階 B は
+[handle-context.ja.md §段階 B の受入条件と API 面 ④](handle-context.ja.md) のゲート用。段階 B は
 `Read` / `Write` の識別を**パス起点から `InodeId` 起点へ反転**させるので、**回帰が無いことを示す**
 ために段階 A の状態で基線を取った。**段階 B 実装後に同じスクリプトで取り直して比較する。**
 

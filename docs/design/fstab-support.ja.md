@@ -1,6 +1,6 @@
 # fstab 対応 (Linux)
 
-> **道順**: [docs/README.md](../README.md) › [../Mount.md](../Mount.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [../Mount.ja.md](../Mount.ja.md) › **本書**
 >
 > **この doc が正である範囲**: `/etc/fstab` と `mount(8)` 経由で `mount.pgfs` を起動するための仕様の正。
 > helper 呼び出し規約 (位置引数・helper context 判定)、`-o` の受け口、子プロセス分離 (`MOUNTED`
@@ -10,10 +10,10 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [../Mount.md](../Mount.md) | **現行の CLI 契約と `-o` オプションの分類・既定値**。個々のオプションの意味はそちらが正 |
-> | [fuse-binding.md](fuse-binding.md) | libfuse バインディング本体の設計 (dlopen / `fuse_config.use_ino` / op 配線) |
-> | [settings-matrix.md](settings-matrix.md) | 設定項目の網羅 (本書の抜粋表の出どころ) と既定値 |
-> | [../architecture.md](../architecture.md) | Config モデル全体の構成 (§Config) とビルド・配置 |
+> | [../Mount.ja.md](../Mount.ja.md) | **現行の CLI 契約と `-o` オプションの分類・既定値**。個々のオプションの意味はそちらが正 |
+> | [fuse-binding.ja.md](fuse-binding.ja.md) | libfuse バインディング本体の設計 (dlopen / `fuse_config.use_ino` / op 配線) |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | 設定項目の網羅 (本書の抜粋表の出どころ) と既定値 |
+> | [../architecture.ja.md](../architecture.ja.md) | Config モデル全体の構成 (§Config) とビルド・配置 |
 >
 > 設定モデルの実装の所在: [src/core/src/Config/](../../src/core/src/Config/) — 本書が参照する
 > `ConfigLoader.cs` の各メソッドは本文中でリンクし、項目定義は [Schema.cs](../../src/core/src/Config/Schema.cs) にある。
@@ -24,7 +24,7 @@
 
 ---
 
-> **2026-09-19 静的照合**: 本書は当初設計と過去の実機記録を含む。現在は daemon 分離を実装済み。現行オプション処理は [Mount.md](../Mount.md) が正。**`-o max_write` の転送残存と安全・同期系オプションの無視は、どちらも対応済み** (後者は警告で明示する形)。**起動時マウントと OS フラグ適用は未検証のまま**である。
+> **2026-09-19 静的照合**: 本書は当初設計と過去の実機記録を含む。現在は daemon 分離を実装済み。現行オプション処理は [Mount.ja.md](../Mount.ja.md) が正。**`-o max_write` の転送残存と安全・同期系オプションの無視は、どちらも対応済み** (後者は警告で明示する形)。**起動時マウントと OS フラグ適用は未検証のまま**である。
 
 ## 動機（設計着手時点）
 
@@ -127,7 +127,7 @@ postgresql://pgfs@pgsql_server/pgfs   /mnt/pgfs   pgfs   _netdev,allow_other,def
 
 ### `mount.pgfs` 固有のフラグ (= `mount(8)` 経由では渡って来ない)
 
-[settings-matrix.md](settings-matrix.md) に網羅があるが、主要なものだけ抜粋:
+[settings-matrix.ja.md](settings-matrix.ja.md) に網羅があるが、主要なものだけ抜粋:
 
 | `mount.pgfs` フラグ | マップ先 | 備考 |
 |---|---|---|
@@ -444,7 +444,7 @@ sudo umount /mnt/pgfs      # → アンマウント
 
 ## libfuse バインディング (内製・旧 Tmds.Fuse フォーク由来)
 
-v0.2.0 で libfuse の P/Invoke バインディングを **`Pgfs.Fuse` ([src/fuse/](../../src/fuse/)) に内製化**した。以前は本家 `tmds/Tmds.Fuse 0.1.0-190711-50` (2019 年で更新停止・`MountOptions` が `SingleThread` のみ) ではなく活発フォーク [`securefolderfs-community/Tmds.Fuse`](https://github.com/securefolderfs-community/Tmds.Fuse) をさらに `ebe-rest/Tmds.Fuse` にフォークして `vendor/Tmds.Fuse` submodule で参照していたが、**submodule は廃止**し、バインディング一式 (`LibFuse.cs` / `FuseMount.cs` / `IFuseFileSystem.cs` 等) を `src/fuse/src/` に挙動保存で移植した。クレジットは [src/fuse/NOTICES.md](../../src/fuse/NOTICES.md)、op/シンボルの全体像と既知ハックは [fuse-binding.md](fuse-binding.md) を正とする。
+v0.2.0 で libfuse の P/Invoke バインディングを **`Pgfs.Fuse` ([src/fuse/](../../src/fuse/)) に内製化**した。以前は本家 `tmds/Tmds.Fuse 0.1.0-190711-50` (2019 年で更新停止・`MountOptions` が `SingleThread` のみ) ではなく活発フォーク [`securefolderfs-community/Tmds.Fuse`](https://github.com/securefolderfs-community/Tmds.Fuse) をさらに `ebe-rest/Tmds.Fuse` にフォークして `vendor/Tmds.Fuse` submodule で参照していたが、**submodule は廃止**し、バインディング一式 (`LibFuse.cs` / `FuseMount.cs` / `IFuseFileSystem.cs` 等) を `src/fuse/src/` に挙動保存で移植した。クレジットは [src/fuse/NOTICES.md](../../src/fuse/NOTICES.md)、op/シンボルの全体像と既知ハックは [fuse-binding.ja.md](fuse-binding.ja.md) を正とする。
 
 これで以下が一気に解消:
 
@@ -458,7 +458,7 @@ v0.2.0 で libfuse の P/Invoke バインディングを **`Pgfs.Fuse` ([src/fus
 
 ### バインディングの保守
 
-`src/fuse/src/` のバインディングは通常の C# ソースとして編集・ビルドする (submodule ではない)。libfuse のレイアウト変更時は `FuseMount.cs` の `Init` (`fuse_config.use_ino`) と `FuseOperations` の op テーブルを見直す。詳細は [fuse-binding.md](fuse-binding.md)。
+`src/fuse/src/` のバインディングは通常の C# ソースとして編集・ビルドする (submodule ではない)。libfuse のレイアウト変更時は `FuseMount.cs` の `Init` (`fuse_config.use_ino`) と `FuseOperations` の op テーブルを見直す。詳細は [fuse-binding.ja.md](fuse-binding.ja.md)。
 
 > **submodule は不要** (v0.2.0〜): `git submodule` 操作も `--recurse-submodules` clone も要らない。libfuse バインディングはリポ内 `src/fuse/` にある。`libfuse3.so.3` 本体は同梱せず、実行時に `dlopen` する (利用者が `fuse3` 等で用意)。
 

@@ -1,6 +1,8 @@
 # pgfs
 
-> **道順**: **本書が公開リポジトリの入口** › [docs/README.md](docs/README.md) (ドキュメント索引) › 各 doc
+[English README here](README.md)
+
+> **道順**: **本書が公開リポジトリの入口** › [docs/README.ja.md](docs/README.ja.md) (ドキュメント索引) › 各 doc
 >
 > **この doc が正である範囲**: pgfs が何であるか、動かすまでの最短手順、リリース対象 doc の一覧。
 >
@@ -8,9 +10,9 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [docs/README.md](docs/README.md) | **全 doc の索引** |
-> | [CHANGELOG.md](CHANGELOG.md) | リリースごとの差分・移行手順・既知の制限 |
-> | [docs/Mkfs.md](docs/Mkfs.md) / [docs/Mount.md](docs/Mount.md) / [docs/Assign.md](docs/Assign.md) | 各 CLI の利用者向け仕様 |
+> | [docs/README.ja.md](docs/README.ja.md) | **全 doc の索引** |
+> | [CHANGELOG.ja.md](CHANGELOG.ja.md) | リリースごとの差分・移行手順・既知の制限 |
+> | [docs/Mkfs.ja.md](docs/Mkfs.ja.md) / [docs/Mount.ja.md](docs/Mount.ja.md) / [docs/Assign.ja.md](docs/Assign.ja.md) | 各 CLI の利用者向け仕様 |
 
 **PostgreSQL をバックエンドストレージとして使う FUSE ファイルシステム** を C# (.NET 10) で実装するプロジェクトです。Linux / macOS / Windows で同じ動作を提供することを目標としています。
 
@@ -19,14 +21,14 @@
 - ファイルシステム全体（ディレクトリエントリ、inode 属性、ファイルデータ、設定値）を **PostgreSQL のテーブル** (`bytea` チャンク) に保存します。
 - Linux では **FUSE (内製 libfuse バインディング)** (macOS の実行互換性は未検証) で、Windows では **Dokan (`DokanNet`)** でマウントします。
 - 設定値は **TOML** (`pgfs.toml`) と DB の `pgfs_settings` テーブルから読み込み、CLI 引数で上書きできます。
-- DB スキーマは [docs/database.md](docs/design/database.md) を参照してください。
+- DB スキーマは [docs/database.ja.md](docs/design/database.ja.md) を参照してください。
 
 > **現状**: Mkfs / Mount / Assign に加え、キャッシュ、write-back、`pgfsctl config` / `status` / `prune`、読み取り GUI を実装している。
 > **Linux / 共通 Core のレビュー指摘は全件クローズ済み**で、**write-back (data / metadata) を有効にした Windows 受入も完了**している。
 > **いま残っているのは「直っていない不具合」ではなく、意図して選んだ制限**である — 一覧は
-> [CHANGELOG.md §既知の制限](CHANGELOG.md) を参照。**テストの件数と検証記録の正は [docs/tests.md](docs/tests.md)**。
+> [CHANGELOG.ja.md §既知の制限](CHANGELOG.ja.md) を参照。**テストの件数と検証記録の正は [docs/tests.ja.md](docs/tests.ja.md)**。
 
-> **過去の基盤整備**: 3 本柱 (Mkfs / Mount / Assign) すべて実装完了。Linux / Windows の e2e、多ノード Citus 上の race 検証、監査ログ専用スイートまで通過している (**件数は増えるので本書には書かない。正は [docs/tests.md](docs/tests.md)**)。Citus (水平分散) は Phase 1+2+3 完了、監査ログ完了、ACL/権限の Linux↔Windows 相互運用も実装済 ([docs/permission-interop.md](docs/design/permission-interop.md))。**v0.2.0 で `Lib` を OS 機構層 (`Core` / `Fuse` / `Dokan`) に分割 + libfuse バインディングを内製化** (両 OS e2e 緑で再検証済 — [docs/v0.2.0-plan.md](docs/design/v0.2.0-plan.md))。次にやることの一覧は [docs/next.md](docs/next.md) を参照してください。
+> **過去の基盤整備**: 3 本柱 (Mkfs / Mount / Assign) すべて実装完了。Linux / Windows の e2e、多ノード Citus 上の race 検証、監査ログ専用スイートまで通過している (**件数は増えるので本書には書かない。正は [docs/tests.ja.md](docs/tests.ja.md)**)。Citus (水平分散) は Phase 1+2+3 完了、監査ログ完了、ACL/権限の Linux↔Windows 相互運用も実装済 ([docs/permission-interop.ja.md](docs/design/permission-interop.ja.md))。**v0.2.0 で `Lib` を OS 機構層 (`Core` / `Fuse` / `Dokan`) に分割 + libfuse バインディングを内製化** (両 OS e2e 緑で再検証済 — [docs/v0.2.0-plan.ja.md](docs/design/v0.2.0-plan.ja.md))。次にやることの一覧は [docs/next.ja.md](docs/next.ja.md) を参照してください。
 
 ## ソリューション構成
 
@@ -80,7 +82,7 @@ dotnet build src/assign/Assign.csproj # Windows 実行向け (Linux/macOS でも
 dotnet build src/mount/Mount.csproj
 ```
 
-ビルドは Windows でも通ります（クロスコンパイル目的）。実行は Linux/macOS のみ。詳細は [docs/Mount.md](docs/Mount.md) を参照。データ I/O・xattr・リンク等の入口は実装されています。`Access` は**意図して実装していません** — アクセス可否の判定はマウント時の `default_permissions` でカーネルに委ねる設計です。`FAllocate` は未実装です (`-ENOSYS` を返します)。**意図して選んだ制限の一覧は [CHANGELOG.md §既知の制限](CHANGELOG.md)** を参照してください。
+ビルドは Windows でも通ります（クロスコンパイル目的）。実行は Linux/macOS のみ。詳細は [docs/Mount.ja.md](docs/Mount.ja.md) を参照。データ I/O・xattr・リンク等の入口は実装されています。`Access` は**意図して実装していません** — アクセス可否の判定はマウント時の `default_permissions` でカーネルに委ねる設計です。`FAllocate` は未実装です (`-ENOSYS` を返します)。**意図して選んだ制限の一覧は [CHANGELOG.ja.md §既知の制限](CHANGELOG.ja.md)** を参照してください。
 
 ### Assign（Windows）
 
@@ -88,7 +90,7 @@ dotnet build src/mount/Mount.csproj
 dotnet build src/assign/Assign.csproj
 ```
 
-ビルドは Linux/macOS でも通ります（クロスコンパイル目的）。実行は Windows のみ。Dokan2 のカーネルドライバが事前にインストールされている必要があります。詳細は [docs/Assign.md](docs/Assign.md) を参照。
+ビルドは Linux/macOS でも通ります（クロスコンパイル目的）。実行は Windows のみ。Dokan2 のカーネルドライバが事前にインストールされている必要があります。詳細は [docs/Assign.ja.md](docs/Assign.ja.md) を参照。
 
 ### 自己完結型実行ファイルの発行
 
@@ -137,7 +139,7 @@ dotnet run --project src/mkfs -- -s myschema -x myfs_
 dotnet run --project src/mkfs -- --help
 ```
 
-完了すると `pgfs.toml`（設定ファイル）がカレントディレクトリに書き出されます。詳細は [docs/Mkfs.md](docs/Mkfs.md) を参照してください。
+完了すると `pgfs.toml`（設定ファイル）がカレントディレクトリに書き出されます。詳細は [docs/Mkfs.ja.md](docs/Mkfs.ja.md) を参照してください。
 
 ### 3. マウント
 
@@ -158,7 +160,7 @@ ls -la /mnt/pgfs
 fusermount3 -u /mnt/pgfs
 ```
 
-データ I/O・拡張属性・シンボリックリンク・ハードリンクすべてに対応しています。詳細は [docs/Mount.md](docs/Mount.md) を参照。
+データ I/O・拡張属性・シンボリックリンク・ハードリンクすべてに対応しています。詳細は [docs/Mount.ja.md](docs/Mount.ja.md) を参照。
 
 Windows なら `assign.pgfs` でドライブにマウントできます (Dokan2 ドライバが必要):
 
@@ -168,26 +170,26 @@ dotnet run --project src\assign -- -m P:
 Get-ChildItem P:\
 ```
 
-詳細は [docs/Assign.md](docs/Assign.md) を参照。
+詳細は [docs/Assign.ja.md](docs/Assign.ja.md) を参照。
 
 ## ドキュメント
 
-- [docs/README.md](docs/README.md) - ドキュメント索引と読み順
-- [docs/design/windows-parity.md](docs/design/windows-parity.md) - Linux 機能の Windows 展開設計（候補・推奨・受入条件）
-- [docs/next.md](docs/next.md) - **次にやること** (優先度順、作業ごとに更新)
-- [docs/architecture.md](docs/architecture.md) - プロジェクト構成 / 依存パッケージ / Lib 内部 / ビルド・実行
-- [docs/Mkfs.md](docs/Mkfs.md) - `mkfs.pgfs` の仕様
-- [docs/Mount.md](docs/Mount.md) - `mount.pgfs` の仕様 (Linux/macOS)
-- [docs/Assign.md](docs/Assign.md) - `assign.pgfs` の仕様 (Windows)
-- [docs/Pgfsctl.md](docs/Pgfsctl.md) - `pgfsctl` の仕様 (実行時コントロールプレーン CLI — `config` / `status` / `prune`)
-- [docs/database.md](docs/design/database.md) - PostgreSQL スキーマ設計
-- [docs/ddl/](docs/ddl/README.md) - テーブル単位の DDL
-- [docs/coding-style.md](docs/design/coding-style.md) - C# コーディング規約
-- [docs/performance.md](docs/design/performance.md) - 性能改善の実装・測定記録と残候補
-- [docs/support_for_citus.md](docs/design/support_for_citus.md) - Citus (水平分散) 対応の設計メモ (Phase 1+2+3 完了)
-- [docs/history.md](docs/history.md) - 現行設計に至る経緯 (モデル整理 / Tmds.Fuse fork / fstab / Retry / race 修正 / Citus 等)
-- [docs/fstab-support.md](docs/design/fstab-support.md) - `/etc/fstab` 対応 (過去の起動時マウント確認記録と現行の制約)
-- [docs/tests.md](docs/tests.md) - **テストのハブ** (全テスト一覧 / 実行方法 / 環境要件 / docker 統合の検討)。各ランナー詳細は [tests/linux/](tests/linux/README.md) / [tests/windows/](tests/windows/README.md) / [tests/citus/](tests/citus/README.md)
+- [docs/README.ja.md](docs/README.ja.md) - ドキュメント索引と読み順
+- [docs/design/windows-parity.ja.md](docs/design/windows-parity.ja.md) - Linux 機能の Windows 展開設計（候補・推奨・受入条件）
+- [docs/next.ja.md](docs/next.ja.md) - **次にやること** (優先度順、作業ごとに更新)
+- [docs/architecture.ja.md](docs/architecture.ja.md) - プロジェクト構成 / 依存パッケージ / Lib 内部 / ビルド・実行
+- [docs/Mkfs.ja.md](docs/Mkfs.ja.md) - `mkfs.pgfs` の仕様
+- [docs/Mount.ja.md](docs/Mount.ja.md) - `mount.pgfs` の仕様 (Linux/macOS)
+- [docs/Assign.ja.md](docs/Assign.ja.md) - `assign.pgfs` の仕様 (Windows)
+- [docs/Pgfsctl.ja.md](docs/Pgfsctl.ja.md) - `pgfsctl` の仕様 (実行時コントロールプレーン CLI — `config` / `status` / `prune`)
+- [docs/database.ja.md](docs/design/database.ja.md) - PostgreSQL スキーマ設計
+- [docs/ddl/](docs/ddl/README.ja.md) - テーブル単位の DDL
+- [docs/coding-style.ja.md](docs/design/coding-style.ja.md) - C# コーディング規約
+- [docs/performance.ja.md](docs/design/performance.ja.md) - 性能改善の実装・測定記録と残候補
+- [docs/support_for_citus.ja.md](docs/design/support_for_citus.ja.md) - Citus (水平分散) 対応の設計メモ (Phase 1+2+3 完了)
+- [docs/history.ja.md](docs/history.ja.md) - 現行設計に至る経緯 (モデル整理 / Tmds.Fuse fork / fstab / Retry / race 修正 / Citus 等)
+- [docs/fstab-support.ja.md](docs/design/fstab-support.ja.md) - `/etc/fstab` 対応 (過去の起動時マウント確認記録と現行の制約)
+- [docs/tests.ja.md](docs/tests.ja.md) - **テストのハブ** (全テスト一覧 / 実行方法 / 環境要件 / docker 統合の検討)。各ランナー詳細は [tests/linux/](tests/linux/README.ja.md) / [tests/windows/](tests/windows/README.ja.md) / [tests/citus/](tests/citus/README.ja.md)
 
 ## ライセンス
 

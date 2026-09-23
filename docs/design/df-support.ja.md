@@ -1,6 +1,6 @@
 # df 対応 (statfs の実空き容量レポート)
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: `df` / `statfs` が**バックエンドの実ディスク空き容量**を返す仕組みの正。
 > plperlu で作る `pgfs_statfs()` / `fs_free()`、3 段フォールバック、`app.statfs` の 3 モードと公称
@@ -10,13 +10,13 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [../Mkfs.md](../Mkfs.md) | `--statfs` / `--statfs-mode` の**CLI としての指定方法と既定値** |
-> | [../Mount.md](../Mount.md) | StatFS が属する FUSE オペレーションの**利用者向け挙動** |
-> | [settings-and-plperlu.md](settings-and-plperlu.md) | `app.plperlu` 上位ゲートと plperlu×statfs の挙動マトリクス (本書の関数が満たすべき前提条件) |
-> | [settings-matrix.md](settings-matrix.md) | `app.statfs` の既定値と reload ポリシー (§9 app.*) |
-> | [database.md](database.md) | `{prefix}settings` (`app.statfs` の保存先) と `pg_database_size` 由来の現行 used |
-> | [support_for_citus.md](support_for_citus.md) | `run_command_on_all_nodes` を使う分散セットアップ全般 |
-> | [../tests.md](../tests.md) | テストの一覧と実行環境の要件 (本書の `statfs.sh` を含む) |
+> | [../Mkfs.ja.md](../Mkfs.ja.md) | `--statfs` / `--statfs-mode` の**CLI としての指定方法と既定値** |
+> | [../Mount.ja.md](../Mount.ja.md) | StatFS が属する FUSE オペレーションの**利用者向け挙動** |
+> | [settings-and-plperlu.ja.md](settings-and-plperlu.ja.md) | `app.plperlu` 上位ゲートと plperlu×statfs の挙動マトリクス (本書の関数が満たすべき前提条件) |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | `app.statfs` の既定値と reload ポリシー (§9 app.*) |
+> | [database.ja.md](database.ja.md) | `{prefix}settings` (`app.statfs` の保存先) と `pg_database_size` 由来の現行 used |
+> | [support_for_citus.ja.md](support_for_citus.ja.md) | `run_command_on_all_nodes` を使う分散セットアップ全般 |
+> | [../tests.ja.md](../tests.ja.md) | テストの一覧と実行環境の要件 (本書の `statfs.sh` を含む) |
 
 `df /mnt/pgfs` (FUSE statvfs / Windows のボリューム空き容量) が、バックエンド PostgreSQL の
 **テーブルスペースの実ディスク空き容量**を返すようにするための設計メモ。Citus 多ノード時は

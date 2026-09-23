@@ -1,5 +1,7 @@
 # Linux e2e (full docker)
 
+> **Route**: [docs/README.md](../../docs/README.md) › [docs/tests.md](../../docs/tests.md) (the test hub) › **this document**
+
 A setup that removes host dependencies (ssh linux_client / the host's dotnet / the symlink-race
 workaround) and runs **the Linux e2e entirely in docker**. The goal is to make it reproducible in CI too.
 

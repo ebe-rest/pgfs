@@ -1,11 +1,11 @@
 # mkfs.pgfs 仕様
 
-> **道順**: [docs/README.md](README.md) › **本書**
+> **道順**: [docs/README.ja.md](README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **`mkfs.pgfs` の仕様** — CLI オプション、**mkfs から指定できる設定項目の既定値表**、
 > TOML の書式、DDL の適用フロー。**mkfs から指定できるものの既定値はここが正**で、Mount / Assign 側の抜粋表は本書へ委譲する。
 >
-> **全 44 項目の網羅表は [design/settings-matrix.md](design/settings-matrix.md) が正**である。本書は
+> **全 44 項目の網羅表は [design/settings-matrix.ja.md](design/settings-matrix.ja.md) が正**である。本書は
 > **mkfs の CLI から意味のあるものだけ**を載せており、**マウント時にしか効かないもの**
 > (`mount.max_write` / `mount.fallback_uname` / `mount.fallback_gname` / `mount.foreground` /
 > `database.retry_*` / `database.notify_enabled` など) は**意図して載せていない**。
@@ -16,11 +16,11 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [design/database.md](design/database.md) | DB スキーマ設計 (テーブルの意味) |
-> | [ddl/README.md](ddl/README.md) | テーブル単位の DDL 本体 |
-> | [design/settings-matrix.md](design/settings-matrix.md) | 全設定項目の**マトリクス** (保存先・reload ポリシー) |
-> | [Mount.md](Mount.md) / [Assign.md](Assign.md) | マウント側の仕様。既定値は本書へ委譲 |
-> | [design/support_for_citus.md](design/support_for_citus.md) | `--citus` / `--shard-count` / `--rf` の設計 |
+> | [design/database.ja.md](design/database.ja.md) | DB スキーマ設計 (テーブルの意味) |
+> | [ddl/README.ja.md](ddl/README.ja.md) | テーブル単位の DDL 本体 |
+> | [design/settings-matrix.ja.md](design/settings-matrix.ja.md) | 全設定項目の**マトリクス** (保存先・reload ポリシー) |
+> | [Mount.ja.md](Mount.ja.md) / [Assign.ja.md](Assign.ja.md) | マウント側の仕様。既定値は本書へ委譲 |
+> | [design/support_for_citus.ja.md](design/support_for_citus.ja.md) | `--citus` / `--shard-count` / `--rf` の設計 |
 
 PGFS ファイルシステムを PostgreSQL データベース上に初期化するツール `mkfs.pgfs` の仕様です。
 
@@ -44,7 +44,7 @@ PostgreSQL データベースに対し、PGFS が必要とする以下を冪等�
 `app.plperlu` / `app.statfs` / `database.citus` / tablespace / `file_system.*` / `fallback_*`) を
 **その実行の CLI 指定か既定値で上書きし**、`pgfs.toml` も書き換えます (既存 DB の設定を読まないため)。
 既存の FS に対して再実行するときは、**作成時と同じオプションを全部付ける**か、必要な DDL だけを
-直接流してください ([CHANGELOG.md](../CHANGELOG.md) §既知の制限)。
+直接流してください ([CHANGELOG.ja.md](../CHANGELOG.ja.md) §既知の制限)。
 
 ## 実行方式
 
@@ -96,7 +96,7 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 | `-x`, `--prefix`, `--table-prefix`, `--table-name-prefix` | テーブル名プレフィックス。末尾 `_` がなければ自動付与 | `pgfs_` |
 | `--tablespace`, `--tablespace-name` | テーブルスペース名 (Citus でもカスタム可。`CREATE DATABASE WITH TABLESPACE` 継承方式) | `pg_default` |
 | `--tablespace-path` | 新規テーブルスペース作成時のディレクトリパス。`--allow-plperlu` (既定) なら mkfs が plperlu で dir を postgres 所有 0700 で自動作成 | （空） |
-| `--citus` | テーブルを Citus 分散テーブルとして登録する。詳細は [docs/support_for_citus.md](design/support_for_citus.md) | `false` |
+| `--citus` | テーブルを Citus 分散テーブルとして登録する。詳細は [docs/support_for_citus.ja.md](design/support_for_citus.ja.md) | `false` |
 | `-w`, `--worker`, `--workers` | Citus worker ノードのカンマ区切り `host[:port]` (例: `--worker "w1:5432,w2:5432"`)。空なら 1 ノード構成 (coordinator のみ)。`--citus` と併用。 | （空） |
 | `--shard-count` | Citus の `citus.shard_count` (分散テーブルの shard 数)。`0` はクラスタ既定に従う | `0` |
 | `--shard-replication-factor`, `--rf` | shard 1 つを何ノードに置くか (= ストレージ冗長。`1` なら複製なし)。`0` はクラスタ既定に従う。排他制御は非分散の `{prefix}lock` に集約してあるので、この値はロック機構に影響しない | `0` |
@@ -106,7 +106,7 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 
 これらは fs 識別情報なので **`pgfs_settings` に保存** (SaveTo=Db) され、**生成 `pgfs.toml` には書き出しません**。
 特に `cluster_size` / `default_chunk_size` はクライアント間で値がズレるとデータ破損しうるため DB 一元が正です
-(File→Db 化。詳細 [settings-and-plperlu.md](design/settings-and-plperlu.md))。
+(File→Db 化。詳細 [settings-and-plperlu.ja.md](design/settings-and-plperlu.ja.md))。
 
 | オプション | 内容 | 既定 |
 |---|---|---|
@@ -122,9 +122,9 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 
 | オプション | 内容 | 既定 |
 |---|---|---|
-| `--audit` | メタデータ変更の監査ログを `{prefix}audit` に記録する。詳細は [docs/audit-log.md](design/audit-log.md) | `false` |
-| `--statfs`, `--statfs-mode` | `df` (statfs) の実空き容量レポートのモード。`auto` (plperlu あれば実測 / 無ければ公称) / `require` (plperlu 必須、無ければ mkfs 失敗) / `nominal` (常に公称容量、関数を作らない)。保存キーは `app.statfs`。詳細は [docs/df-support.md](design/df-support.md) | `auto` |
-| `--plperlu` `[true\|false]` / `--allow-plperlu` / `--deny-plperlu` | untrusted plperlu の使用許可 (上位ゲート、`app.plperlu`)。`require`+deny は矛盾でエラー、auto+deny は nominal 相当。tablespace auto-mkdir もこのゲート下。詳細 [settings-and-plperlu.md](design/settings-and-plperlu.md) | `true` (allow) |
+| `--audit` | メタデータ変更の監査ログを `{prefix}audit` に記録する。詳細は [docs/audit-log.ja.md](design/audit-log.ja.md) | `false` |
+| `--statfs`, `--statfs-mode` | `df` (statfs) の実空き容量レポートのモード。`auto` (plperlu あれば実測 / 無ければ公称) / `require` (plperlu 必須、無ければ mkfs 失敗) / `nominal` (常に公称容量、関数を作らない)。保存キーは `app.statfs`。詳細は [docs/df-support.ja.md](design/df-support.ja.md) | `auto` |
+| `--plperlu` `[true\|false]` / `--allow-plperlu` / `--deny-plperlu` | untrusted plperlu の使用許可 (上位ゲート、`app.plperlu`)。`require`+deny は矛盾でエラー、auto+deny は nominal 相当。tablespace auto-mkdir もこのゲート下。詳細 [settings-and-plperlu.ja.md](design/settings-and-plperlu.ja.md) | `true` (allow) |
 
 ### マウント設定
 
@@ -193,7 +193,7 @@ logging.level = "information"
 
 ## DB スキーマ詳細
 
-[docs/database.md](design/database.md) を正として、mkfs が実際に作成するテーブルは以下のとおりです。
+[docs/database.ja.md](design/database.ja.md) を正として、mkfs が実際に作成するテーブルは以下のとおりです。
 
 ### `{prefix}inode`
 
@@ -243,7 +243,7 @@ PK を `(parent_id, id)` の複合にしているのは Citus 制約への対応
 | `payload` | `BYTEA` | NOT NULL | |
 | 監査用 4 列 | | NOT NULL | |
 
-PK = `(data_id, chunk_index)`。旧設計では Large Object (`lo_oid OID` + `pg_largeobject`) を使っていたが、Citus 分散の前提として **Phase 1 で bytea に置換** (詳細は [docs/support_for_citus.md](design/support_for_citus.md))。
+PK = `(data_id, chunk_index)`。旧設計では Large Object (`lo_oid OID` + `pg_largeobject`) を使っていたが、Citus 分散の前提として **Phase 1 で bytea に置換** (詳細は [docs/support_for_citus.ja.md](design/support_for_citus.ja.md))。
 
 ### `{prefix}lock`
 
@@ -305,13 +305,13 @@ mkfs.pgfs --clean --citus \
 
 ### 制約
 
-- `--citus` × カスタム `--tablespace` は **両立可能** (〜)。`CREATE DATABASE WITH TABLESPACE` 継承方式で、tablespace は coordinator + 全 worker に作成される。LOCATION dir は `--allow-plperlu` (既定 allow) なら plperlu が postgres 所有 0700 で自動作成 (`--tablespace-path` 指定時)。詳細 [settings-and-plperlu.md](design/settings-and-plperlu.md)。
+- `--citus` × カスタム `--tablespace` は **両立可能** (〜)。`CREATE DATABASE WITH TABLESPACE` 継承方式で、tablespace は coordinator + 全 worker に作成される。LOCATION dir は `--allow-plperlu` (既定 allow) なら plperlu が postgres 所有 0700 で自動作成 (`--tablespace-path` 指定時)。詳細 [settings-and-plperlu.ja.md](design/settings-and-plperlu.ja.md)。
 - `--clean --citus` で worker DB を DROP するのは **`--worker` で指定された worker のみ**。worker を構成から外す場合はその worker 上の pgfs DB を手動で DROP する必要あり。
 - 多ノード構成では worker 側の PG にも `shared_preload_libraries = 'citus'` が設定済みである必要あり。
 
 ### 動作詳細 / 検証
 
-EnsureDatabaseAsync の Phase 構造 (worker bootstrap → coordinator DB → Citus topology) や「DB 既存時はすべての Citus 関連 mutate をスキップ」等の冪等性ルール、各種つまずきポイントは **[docs/support_for_citus.md](design/support_for_citus.md) を正とする**。検証スクリプトは [tests/citus/README.md](../tests/citus/README.md) (`multinode_probe.sh` / `test_matrix.sh` / `race_multinode.sh` / `verify.sql`)。
+EnsureDatabaseAsync の Phase 構造 (worker bootstrap → coordinator DB → Citus topology) や「DB 既存時はすべての Citus 関連 mutate をスキップ」等の冪等性ルール、各種つまずきポイントは **[docs/support_for_citus.ja.md](design/support_for_citus.ja.md) を正とする**。検証スクリプトは [tests/citus/README.ja.md](../tests/citus/README.ja.md) (`multinode_probe.sh` / `test_matrix.sh` / `race_multinode.sh` / `verify.sql`)。
 
 ## 冪等性
 
@@ -348,7 +348,7 @@ mkfs は基本的にクロスプラットフォームですが、以下の点は
   ```
   この処理はマシン側の OS / 配置によって異なるため mkfs では自動化していません。macOS では `postgres` ユーザーの uid/gid が異なります。Windows では NTFS ACL を設定する必要があり、現在の mkfs は未対応です。
 - **既定マウントポイント** は `/mnt/pgfs`（[`Schema.Mount.MountPoint`](../src/core/src/Config/Schema.cs) の Linux/macOS 既定）。Windows では `P:`。
-- **ルート inode の `st_mode = 16877 (0o40755)`** は POSIX のディレクトリ + `rwxr-xr-x` を表しています。Windows のジャンクションは `is_junction` 列で区別する設計 ([docs/database.md](design/database.md))。
+- **ルート inode の `st_mode = 16877 (0o40755)`** は POSIX のディレクトリ + `rwxr-xr-x` を表しています。Windows のジャンクションは `is_junction` 列で区別する設計 ([docs/database.ja.md](design/database.ja.md))。
 
 これら以外（接続文字列、SQL クエリ、テーブル定義など）はクロスプラットフォームです。
 

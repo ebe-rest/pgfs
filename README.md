@@ -1,5 +1,7 @@
 # pgfs
 
+[日本語版 README はこちら](README.ja.md)
+
 > **Route**: **this document is the entrance to the public repository** › [docs/README.md](docs/README.md)
 > (the documentation index) › each document
 >

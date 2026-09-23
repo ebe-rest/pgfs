@@ -1,6 +1,6 @@
 # xattr の bytea 透過化 (並行配列 KVS)
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: xattr ストアを JSONB + Base64 から並行配列
 > (`xattr_names TEXT[]` + `xattr_values BYTEA[]`) に置き換えた設計と実装。採用案・不採用案の理由、
@@ -11,18 +11,18 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [database.md](database.md) | `{prefix}inode` を含む DB スキーマの要約 (xattr 列の現行定義もそちらが正) |
-> | [../ddl/README.md](../ddl/README.md) | テーブル単位の DDL 本体 ([pgfs_inode.sql](../ddl/pgfs_inode.sql)) |
-> | [permission-interop.md](permission-interop.md) | POSIX ACL を `system.posix_acl_access` として運ぶ側の設計 (3-3) |
-> | [../Mount.md](../Mount.md) | 利用者から見た xattr の挙動と制限 |
-> | [../tests.md](../tests.md) | テストのハブ。`test_xattr_binary` を含む件数と実行方法 |
-> | [support_for_citus.md](support_for_citus.md) | Citus 分散の方針 (新しい型を作らない判断の背景) |
+> | [database.ja.md](database.ja.md) | `{prefix}inode` を含む DB スキーマの要約 (xattr 列の現行定義もそちらが正) |
+> | [../ddl/README.ja.md](../ddl/README.ja.md) | テーブル単位の DDL 本体 ([pgfs_inode.sql](../ddl/pgfs_inode.sql)) |
+> | [permission-interop.ja.md](permission-interop.ja.md) | POSIX ACL を `system.posix_acl_access` として運ぶ側の設計 (3-3) |
+> | [../Mount.ja.md](../Mount.ja.md) | 利用者から見た xattr の挙動と制限 |
+> | [../tests.ja.md](../tests.ja.md) | テストのハブ。`test_xattr_binary` を含む件数と実行方法 |
+> | [support_for_citus.ja.md](support_for_citus.ja.md) | Citus 分散の方針 (新しい型を作らない判断の背景) |
 
 `pgfs_inode` の拡張属性 (xattr) ストアを **JSONB + Base64** から **2 本の並行配列
 (`xattr_names TEXT[]` + `xattr_values BYTEA[]`)** に置き換える設計メモ。本書が実装の正
 (next.md #3)。
 
-ステータス: **実装完了**。linux_client 実機 e2e 36/36 PASS (`test_xattr_binary` = NUL/高位バイト忠実往復を追加)。検証で CreateHardLink の列取りこぼし回帰も捕捉・修正。詳細は [next.md](../next.md) #3。
+ステータス: **実装完了**。linux_client 実機 e2e 36/36 PASS (`test_xattr_binary` = NUL/高位バイト忠実往復を追加)。検証で CreateHardLink の列取りこぼし回帰も捕捉・修正。詳細は [next.ja.md](../next.ja.md) #3。
 
 ## 動機
 

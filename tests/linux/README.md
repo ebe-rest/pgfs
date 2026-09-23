@@ -1,5 +1,7 @@
 # pgfs Linux e2e tests
 
+> **Route**: [docs/README.md](../../docs/README.md) › [docs/tests.md](../../docs/tests.md) (the test hub) › **this document**
+>
 > For the full list of tests, environment requirements, and the docker-integration analysis, see [docs/tests.md](../../docs/tests.md) (the hub). This README covers the operational details of the runners in this directory (`e2e.sh` / `flow.ps1` / `run.cmd`).
 
 End-to-end tests that exercise the implemented features ([docs/Mount.md](../../docs/Mount.md)) against a PGFS mounted with mount.pgfs (Linux).

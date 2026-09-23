@@ -1,6 +1,6 @@
 # mount.pgfs 仕様
 
-> **道順**: [docs/README.md](README.md) › **本書**
+> **道順**: [docs/README.ja.md](README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **`mount.pgfs` (Linux/macOS) の仕様** — CLI とマウントオプション
 > (`-o` の分類)、実装している FUSE 操作の一覧、**write-back を有効にしたときの耐久性契約**
@@ -10,12 +10,12 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [Mkfs.md](Mkfs.md) | 設定項目の**既定値**。本書の表は抜粋 |
-> | [design/write-back.md](design/write-back.md) / [design/metadata-write-back.md](design/metadata-write-back.md) | write-back の**設計と実装ステータス**。本書は契約だけ |
-> | [design/fuse-binding.md](design/fuse-binding.md) | FUSE バインディングの内部 |
-> | [design/fstab-support.md](design/fstab-support.md) | `/etc/fstab` / `mount(8)` 経由の起動 |
-> | [design/handle-context.md](design/handle-context.md) | ハンドル文脈の共通化 (`fh` の意味づけ) |
-> | [Assign.md](Assign.md) | Windows (Dokan) 側の同じ層 |
+> | [Mkfs.ja.md](Mkfs.ja.md) | 設定項目の**既定値**。本書の表は抜粋 |
+> | [design/write-back.ja.md](design/write-back.ja.md) / [design/metadata-write-back.ja.md](design/metadata-write-back.ja.md) | write-back の**設計と実装ステータス**。本書は契約だけ |
+> | [design/fuse-binding.ja.md](design/fuse-binding.ja.md) | FUSE バインディングの内部 |
+> | [design/fstab-support.ja.md](design/fstab-support.ja.md) | `/etc/fstab` / `mount(8)` 経由の起動 |
+> | [design/handle-context.ja.md](design/handle-context.ja.md) | ハンドル文脈の共通化 (`fh` の意味づけ) |
+> | [Assign.ja.md](Assign.ja.md) | Windows (Dokan) 側の同じ層 |
 
 PGFS ファイルシステムを **FUSE 経由でマウント** する Linux / macOS 用ツール `mount.pgfs` の仕様です。
 
@@ -23,7 +23,7 @@ PGFS ファイルシステムを **FUSE 経由でマウント** する Linux / m
 
 ## 役割
 
-PGFS が初期化された PostgreSQL データベース ([docs/Mkfs.md](Mkfs.md) で構築) を、Linux/macOS のディレクトリツリーとしてユーザー空間に見せます。
+PGFS が初期化された PostgreSQL データベース ([docs/Mkfs.ja.md](Mkfs.ja.md) で構築) を、Linux/macOS のディレクトリツリーとしてユーザー空間に見せます。
 
 ```
 PostgreSQL (pgfs_inode / pgfs_data / pgfs_data_chunk / pgfs_settings)
@@ -96,7 +96,7 @@ sudo umount -l /mnt/pgfs     # lazy
   - 起動時に `Fuse.CheckDependencies()` で確認し、不足していれば終了する
 - マウントポイントが事前に作成されていること
   - `sudo mkdir -p /mnt/pgfs && sudo chown $USER /mnt/pgfs`
-- [docs/Mkfs.md](Mkfs.md) で DB 側の初期化が済んでいること
+- [docs/Mkfs.ja.md](Mkfs.ja.md) で DB 側の初期化が済んでいること
 
 ### Windows 上での挙動
 
@@ -104,7 +104,7 @@ sudo umount -l /mnt/pgfs     # lazy
 
 ## 設定
 
-設定モデルは [`Pgfs.Core.Config.RootConfig`](../src/core/src/Config/RootConfig.cs) を共有しています。Mkfs と同じ TOML 設定ファイル ([pgfs.toml.example](../pgfs.toml.example)) と同じコマンドラインオプションが使えます。詳細は [docs/Mkfs.md](Mkfs.md) を参照。
+設定モデルは [`Pgfs.Core.Config.RootConfig`](../src/core/src/Config/RootConfig.cs) を共有しています。Mkfs と同じ TOML 設定ファイル ([pgfs.toml.example](../pgfs.toml.example)) と同じコマンドラインオプションが使えます。詳細は [docs/Mkfs.ja.md](Mkfs.ja.md) を参照。
 
 mount.pgfs が特に使うのは:
 
@@ -121,12 +121,12 @@ mount.pgfs が特に使うのは:
 
 ## write-back (`mount.write_back` / `mount.write_back_metadata`)
 
-> 現行コードとの照合: 2026-09-19 (ラウンド A 修正後)。かつてここに挙げていた 4 点 (ハードリンク経由の dirty 喪失 / 同期 close 印 / 失敗検出 / 待機期限) は **ラウンド A で修正済**で、dev サーバ実機で検証した ([§ラウンド A の修正](design/metadata-write-back-reviews.md))。**ラウンド B (B-1〜B-13) も対応済**である。以下は実装の動作と意図を説明するものであり、全シナリオの耐久性を保証しない。残っている制限は [CHANGELOG.md §既知の制限](../CHANGELOG.md) を参照。
+> 現行コードとの照合: 2026-09-19 (ラウンド A 修正後)。かつてここに挙げていた 4 点 (ハードリンク経由の dirty 喪失 / 同期 close 印 / 失敗検出 / 待機期限) は **ラウンド A で修正済**で、dev サーバ実機で検証した ([§ラウンド A の修正](design/metadata-write-back-reviews.ja.md))。**ラウンド B (B-1〜B-13) も対応済**である。以下は実装の動作と意図を説明するものであり、全シナリオの耐久性を保証しない。残っている制限は [CHANGELOG.ja.md §既知の制限](../CHANGELOG.ja.md) を参照。
 
 書き込みをメモリに溜めて「1 ファイル = 1 トランザクション」で書く高速化オプション。**どちらも既定 off** で、
 off のままなら従来どおりの write-through (各 write のトランザクションを同期 commit) です。設計の正は
-[write-back.md](design/write-back.md) / [metadata-write-back.md](design/metadata-write-back.md)、全項目は
-[settings-matrix.md](design/settings-matrix.md)。
+[write-back.ja.md](design/write-back.ja.md) / [metadata-write-back.ja.md](design/metadata-write-back.ja.md)、全項目は
+[settings-matrix.ja.md](design/settings-matrix.ja.md)。
 
 | 設定 | 引数オプション | 既定 | 意味 |
 |---|---|---|---|
@@ -155,7 +155,7 @@ flush がその像を丸ごと書き戻すためです。
 
 **同じファイルを複数マウントから書く構成では `write_back` を off (既定) にしてください。**
 単一マウントからの読み書き、および**マウントごとに書くファイルが分かれている**構成は影響を受けません。
-仕組みと実測は [design/write-back.md §cross-client の契約](design/write-back.md) が正です。
+仕組みと実測は [design/write-back.ja.md §cross-client の契約](design/write-back.ja.md) が正です。
 
 ### `mount.write_back_metadata` を on にすると何を失うか (契約)
 
@@ -165,7 +165,7 @@ flush がその像を丸ごと書き戻すためです。
 具体的に失うものは次の 5 点で、**これを許容できないなら off のまま**にしてください
 (既定 off の理由もこれです)。過去の ≈2.1× は投影値であり、ステージ 2 の実測記録は
 `rsync` 1.00× / 非 `O_EXCL` create の総合 1.30× です (**いずれも 2026-08-12・A-10 の修正より前の値**。
-persisted への上書きを同期 close に戻した後は未実測)。詳細は [performance.md](design/performance.md)。
+persisted への上書きを同期 close に戻した後は未実測)。詳細は [performance.ja.md](design/performance.ja.md)。
 
 | 項目 | 失うもの |
 |---|---|
@@ -203,7 +203,7 @@ persisted への上書きを同期 close に戻した後は未実測)。詳細�
 | 値 | 速度 | 排他 |
 |---|---|---|
 | **`write_through` (既定)** | `rsync` / `cp` に 1e の効果は出ない (実測 1.00×) | cross-client の `O_EXCL` 排他が**効く** |
-| `defer` | `rsync` が **3.28×** (37.1 → 11.3 ms/file。[performance.md](design/performance.md)) | cross-client の排他を**失う**。同一マウント内の排他だけが残る |
+| `defer` | `rsync` が **3.28×** (37.1 → 11.3 ms/file。[performance.ja.md](design/performance.ja.md)) | cross-client の排他を**失う**。同一マウント内の排他だけが残る |
 
 `rsync` も `cp` も新規宛先を `O_CREAT|O_EXCL` で開くため、既定のままでは代表的な bulk copy に
 1e の畳み込みが 1 回も効きません。`defer` はそれを効かせる代わりに、**2 クライアントの排他作成が
@@ -288,15 +288,15 @@ unmount 時の flush は既定で最大 `mount.write_back_flush_timeout_ms` (300
 | `Release` | ✅ | `CloseInode` による best-effort 処理。エラーをアプリへ返す経路ではない |
 | `Read` | ✅ | `Api.ReadData`（bytea チャンク経由、穴は 0 埋め） |
 | `Write` | ✅ | `Api.WriteData`（bytea チャンク経由、初回時は data 行を自動作成） |
-| `StatFS` | ✅ | `Api.GetStatFs` 経由。mkfs `--statfs` で `{prefix}statfs()` (plperlu) を作っていればテーブルスペースの**実ディスク空き**、無ければ公称容量 (`max_file_size` − `pg_database_size`)。詳細 [docs/df-support.md](design/df-support.md) |
+| `StatFS` | ✅ | `Api.GetStatFs` 経由。mkfs `--statfs` で `{prefix}statfs()` (plperlu) を作っていればテーブルスペースの**実ディスク空き**、無ければ公称容量 (`max_file_size` − `pg_database_size`)。詳細 [docs/df-support.ja.md](design/df-support.ja.md) |
 | `GetXAttr` | ✅ | `xattr_names`/`xattr_values` 並行配列から取得 (キャッシュは in-memory 探索、DB は `xattr_values[array_position(xattr_names,@name)]`)。値は bytea 透過。`system.posix_acl_access` は特別扱い (下記 ACL) |
 | `SetXAttr` | ✅ | 単一 UPDATE で既存 index 差し替え or 末尾追記 (`array_position`+スライス、原子)、`XATTR_CREATE` / `XATTR_REPLACE` フラグ尊重。`system.posix_acl_access` は特別扱い |
 | `ListXAttr` | ✅ | `xattr_names` をそのまま列挙、NUL 終端形式で返す |
 | `RemoveXAttr` | ✅ | 単一 UPDATE で name の index を両配列から除去 (スライス連結、原子)。`system.posix_acl_access` は named を空に (setfacl -b 相当) |
-| POSIX ACL (`system.posix_acl_access`) | ✅ | setfacl/getfacl と往復。`st_mode` 基本3クラス + 正準 ACL (`user.pgfs_acl` の named) ⇄ ACL バイナリ。mask 自動算出、named 無しは ENODATA。Windows DACL と同じ正準ストアを共有 (下記 ACL / [permission-interop.md](design/permission-interop.md)) |
+| POSIX ACL (`system.posix_acl_access`) | ✅ | setfacl/getfacl と往復。`st_mode` 基本3クラス + 正準 ACL (`user.pgfs_acl` の named) ⇄ ACL バイナリ。mask 自動算出、named 無しは ENODATA。Windows DACL と同じ正準ストアを共有 (下記 ACL / [permission-interop.ja.md](design/permission-interop.ja.md)) |
 | `SymLink` | ✅ | `Api.CreateSymlink`（`S_IFLNK | 0777`, `link_target` 列に格納） |
 | `ReadLink` | ✅ | `inode.LinkTarget` を NUL 終端で返す |
-| `Link` | ⚠️ | `Api.CreateHardLink`。既存 data_id の共有は実装されている。**空ファイルの null data_id・dirty 喪失・`truncate` / `O_TRUNC` による共有の分裂は 修正済** ([data-id-lifecycle.md](design/data-id-lifecycle.md))。**残るのは属性 (mode / 所有者) を兄弟間で共有しないこと**だけで、`Api.UpdateMode` は自分の inode 行 1 つしか更新しない ([CHANGELOG.md](../CHANGELOG.md) §既知の制限) |
+| `Link` | ⚠️ | `Api.CreateHardLink`。既存 data_id の共有は実装されている。**空ファイルの null data_id・dirty 喪失・`truncate` / `O_TRUNC` による共有の分裂は 修正済** ([data-id-lifecycle.ja.md](design/data-id-lifecycle.ja.md))。**残るのは属性 (mode / 所有者) を兄弟間で共有しないこと**だけで、`Api.UpdateMode` は自分の inode 行 1 つしか更新しない ([CHANGELOG.ja.md](../CHANGELOG.ja.md) §既知の制限) |
 
 凡例: ✅ 対応処理あり、⚠️ 制限・不具合あり、❌ 未実装 (`-ENOSYS`)。実機検証済みを意味する分類ではない。
 
@@ -329,11 +329,11 @@ unmount 時の flush は既定で最大 `mount.write_back_flush_timeout_ms` (300
   **なお Windows (Assign) でも、渡せたとしても画面は直りません** — **他マウント由来の変更は
   FileSystemWatcher / エクスプローラのイベントになりません** (2026-09-21 に実機で測定。ローカル操作では
   イベントが出るのに、リモート由来は 1 件も出ない)。**「通知で画面が直る」経路がそもそも無い**ので、
-  全破棄に限らず**開いたままのウィンドウは古い表示のまま**です。正は [Assign.md](Assign.md)。
+  全破棄に限らず**開いたままのウィンドウは古い表示のまま**です。正は [Assign.ja.md](Assign.ja.md)。
 - リモート変更を inotify へ通知する処理はありません。ローカル VFS 操作による通知まで「FUSE では発火しない」と一括りにはできません。キャッシュ無効化 API の追加だけでリモート inotify が保証されるわけでもありません。参照: [libfuse の fsnotify 設計メモ](https://github.com/libfuse/libfuse/wiki/Fsnotify-and-FUSE)。pgfs 実機での通知種別ごとの動作は未検証です。
 - 制御用 LISTEN (`set` / `reload` / `ping`) は `notify_enabled` に関係なく起動します。データ変更通知の opt-in とは別です。
 
-詳細仕様 / ペイロード / 受信処理は [history.md](history.md) 「他クライアント変更通知 (Notify)」を参照。
+詳細仕様 / ペイロード / 受信処理は [history.ja.md](history.ja.md) 「他クライアント変更通知 (Notify)」を参照。
 
 ## アーキテクチャ
 
@@ -395,7 +395,7 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 - `Truncate` (および `Open(O_TRUNC)`) は `Api.TruncateData` が末尾チャンクの payload を `substring` で切り詰め (or 0 パディングで拡張)、不要チャンクは DELETE。
 - `Create` は空ファイルの inode を作成。最初の `Write` 時にチャンク行が作られる。
 
-> bytea 化の経緯は [docs/support_for_citus.md](design/support_for_citus.md) (Citus Phase 1, 完了)。旧設計の Large Object (`pg_largeobject`) は Citus で分散できないため移行した。
+> bytea 化の経緯は [docs/support_for_citus.ja.md](design/support_for_citus.ja.md) (Citus Phase 1, 完了)。旧設計の Large Object (`pg_largeobject`) は Citus で分散できないため移行した。
 
 #### `.fuse_hidden*` (開いているファイルを消したとき) の見え方
 
@@ -408,13 +408,13 @@ PGFS のデータ本体は `pgfs_data` + `pgfs_data_chunk` (1 行 = 1 bytea) に
 - **パスで直接指せば見えます** (`stat .fuse_hiddenXXXX` は通る)。**その fd を生かしている当のマウントが
   自分の隠しファイルを引く**ために必要なためです。
 - **デーモンを `kill -9` すると中身ごと残ります** (後始末は死んだプロセスのメモリの中にあるため)。
-  掃除は **[`pgfsctl prune`](Pgfsctl.md)**。
+  掃除は **[`pgfsctl prune`](Pgfsctl.ja.md)**。
 - **列挙に出ないのに `rmdir` が `ENOTEMPTY` になる**ことがあります (隠しファイルが残っている親)。
   **見た目は空なのに消せない**ときは `prune` を撃ってください。
 
 > **`hard_remove = 1` (= pgfs 自身で POSIX 意味論を実現する) は採らない**と決めています。理由と、
 > どこまで試してどう詰んだかは
-> [handle-context.md §なぜ `hard_remove` を立てないか](design/handle-context.md) に実測つきで残してあります。
+> [handle-context.ja.md §なぜ `hard_remove` を立てないか](design/handle-context.ja.md) に実測つきで残してあります。
 
 #### append (`O_APPEND`) の契約
 
@@ -454,7 +454,7 @@ pgfs は **OS が決めたオフセットを使いません**。使うと**相�
 > 同じ。`NoCache=False, PagingIo=False` = キャッシュ経由でもページング I/O でもない同期の降り方)。
 > **つまり「1 回の書き込みが不可分になる上限」は OS で違います** — 上の `max_write` の話を Windows に、
 > Windows の 64MB を Linux に、それぞれ持ち込まないこと。Dokan 側の as-built は
-> [Assign.md](Assign.md) の append 行が正です。
+> [Assign.ja.md](Assign.ja.md) の append 行が正です。
 
 **実測** (2 マウントから同時に追記。A が 4 MiB を 1 回で、B が 10 バイト × 12 を割り込ませる):
 
@@ -478,7 +478,7 @@ pgfs は **OS が決めたオフセットを使いません**。使うと**相�
 
 すべて実装済み:
 
-- 拡張属性は `pgfs_inode.xattr_names TEXT[]` + `xattr_values BYTEA[]` の並行配列に格納 (`Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`、値は bytea 忠実保持)。`GetXAttr` / `ListXAttr` はキャッシュにある `Inode.xattr_names`/`xattr_values` を in-memory 探索する (SELinux の `security.selinux` 頻繁プローブ対策)。設計は [xattr-bytea.md](design/xattr-bytea.md)。
+- 拡張属性は `pgfs_inode.xattr_names TEXT[]` + `xattr_values BYTEA[]` の並行配列に格納 (`Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr`、値は bytea 忠実保持)。`GetXAttr` / `ListXAttr` はキャッシュにある `Inode.xattr_names`/`xattr_values` を in-memory 探索する (SELinux の `security.selinux` 頻繁プローブ対策)。設計は [xattr-bytea.ja.md](design/xattr-bytea.ja.md)。
 - シンボリックリンクは `link_target` 列に格納 (`Api.CreateSymlink`)。`ReadLink` は NUL 終端で返す。
 - ハードリンクは同じ `data_id` を共有する複数 inode を作成 (`Api.CreateHardLink`)。`st_nlink` は全リンクで同期更新。
 
@@ -492,7 +492,7 @@ pgfs は **OS が決めたオフセットを使いません**。使うと**相�
 - entry 順は USER_OBJ → USER* → GROUP_OBJ → GROUP* → MASK → OTHER。mask は group_obj ∪ 全 named を都度再計算。
 - named エントリが無い「最小 ACL」は ENODATA を返し、getfacl が mode から導出する慣習に合わせる。
 - この正準ストアは Windows の DACL (`Get/SetFileSecurity`) と共有される。POSIX 正準・Windows 投影ビューの設計は
-  [permission-interop.md](design/permission-interop.md)。`system.posix_acl_default` は現状パススルー (Linux 内 round-trip のみ)。
+  [permission-interop.ja.md](design/permission-interop.ja.md)。`system.posix_acl_default` は現状パススルー (Linux 内 round-trip のみ)。
 
 ### `st_atime`
 
@@ -503,7 +503,7 @@ pgfs は **OS が決めたオフセットを使いません**。使うと**相�
 `mount -t pgfs` / fstab / 直接起動のいずれでも `-o` を受け付けます。パースは
 [ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs) が担い、各キーを次の**クラス**の
 いずれか 1 つに分類します (互換マップの正はこのメソッド)。`mount(8)` helper 呼び出し規約・fstab エントリ書式・
-起動時自動マウントの詳細は [fstab-support.md](design/fstab-support.md) を参照。
+起動時自動マウントの詳細は [fstab-support.ja.md](design/fstab-support.ja.md) を参照。
 
 | クラス | 例 | 扱い |
 |---|---|---|
@@ -535,18 +535,18 @@ pgfs は **OS が決めたオフセットを使いません**。使うと**相�
 | データ I/O (Read/Write) | ✅ | `Api.ReadData` / `Api.WriteData` を `pgfs_data_chunk` の `bytea` チャンクで実装 (Phase 1 で Large Object から移行) |
 | `uid/gid` ↔ `uname/gname` の双方向解決 | ✅ | [src/fuse/src/UserResolver.cs](../src/fuse/src/UserResolver.cs) で libc P/Invoke |
 | `Chown` の uname/gname 反映 | ✅ | `Api.UpdateOwner` を呼ぶ。`uid == -1` は変更しない慣習も尊重 |
-| 拡張属性 (xattr) | ✅ | `Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr` 実装。値は **`xattr_names TEXT[]` + `xattr_values BYTEA[]` の並行配列**で bytea 忠実保持 (NUL 含む任意バイト列も無加工で往復)。設計は [xattr-bytea.md](design/xattr-bytea.md) |
+| 拡張属性 (xattr) | ✅ | `Api.GetXAttr` / `SetXAttr` / `ListXAttr` / `RemoveXAttr` 実装。値は **`xattr_names TEXT[]` + `xattr_values BYTEA[]` の並行配列**で bytea 忠実保持 (NUL 含む任意バイト列も無加工で往復)。設計は [xattr-bytea.ja.md](design/xattr-bytea.ja.md) |
 | シンボリックリンク | ✅ | `Api.CreateSymlink` / `ReadLink` 実装 |
 | ハードリンク | ✅ | `Api.CreateHardLink` 実装。`Unlink` で残り inode の `st_nlink` を更新 |
 | Truncate のチャンク削減 | ✅ | `Api.TruncateData` が新サイズを超える `bytea` チャンク行を削除し、末端チャンクを `substring`/`overlay` で詰める (Phase 1 で Large Object から移行) |
-| POSIX ACL (setfacl/getfacl) | ✅ | `system.posix_acl_access` ⇄ `st_mode` + 正準 ACL (`user.pgfs_acl`)。Windows DACL と同じ正準ストアを共有。詳細は上記「POSIX ACL」/ [permission-interop.md](design/permission-interop.md)。named ACL の厳密 enforce は要件待ち |
+| POSIX ACL (setfacl/getfacl) | ✅ | `system.posix_acl_access` ⇄ `st_mode` + 正準 ACL (`user.pgfs_acl`)。Windows DACL と同じ正準ストアを共有。詳細は上記「POSIX ACL」/ [permission-interop.ja.md](design/permission-interop.ja.md)。named ACL の厳密 enforce は要件待ち |
 | macOS 動作確認 | ❌ | libfuse の macOS 対応次第。macFUSE が必要 |
 | アクセスチェック (`Access`) | ❌ | 当面マウント時に `default_permissions` を渡せばカーネル側で判断される想定 |
 | Mount オプション `-o` | ✅ | `-o key=val,flag,...` を分類 (FUSE passthrough / 受理して無視 + `x-` 接頭辞 / pgfs 設定 / 未知=Warning / 非対応マウント操作=明示 Warning)。詳細は上記「マウントオプション」。実装は [ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs) |
-| 接続失敗時の再接続 | ✅ | [Retry](../src/core/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。任意のクエリを再試行するものではない。別途、create / write / flush に `40P01`・`40001` の bounded tx retry がある ([support_for_citus.md](design/support_for_citus.md)) |
+| 接続失敗時の再接続 | ✅ | [Retry](../src/core/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。任意のクエリを再試行するものではない。別途、create / write / flush に `40P01`・`40001` の bounded tx retry がある ([support_for_citus.ja.md](design/support_for_citus.ja.md)) |
 | OS に存在しない uname / gname のフォールバック | ✅ | `getpwnam` / `getgrnam` 失敗時、`mount.fallback_uname` / `mount.fallback_gname` (DB 保存、既定 `nobody` / `nogroup`) に解決した uid/gid を返す。fallback 名自体が解決できなければ uid=65534 (NFS の nobody 慣習値) を hardcode し warning ログ。実装は [src/fuse/src/UserResolver.cs](../src/fuse/src/UserResolver.cs)、Linux e2e の `test_fallback_uname_gname` で検証 |
 | Read/Write のキャッシュ・バッチ | ⚠️ | bytea チャンク方式。read cache / ファイル単位 write-back は実装済み。read-ahead とファイル横断 flush バッチは未実装 |
-| xattr 値のバイナリ表現 | ✅ | `xattr_values BYTEA[]` に**生バイト列を忠実保持** (旧 Base64+JSONB から移行)。NUL 含む任意バイト列が無加工で往復し、SQL でも bytea として直接見える。設計・検証は [xattr-bytea.md](design/xattr-bytea.md) |
+| xattr 値のバイナリ表現 | ✅ | `xattr_values BYTEA[]` に**生バイト列を忠実保持** (旧 Base64+JSONB から移行)。NUL 含む任意バイト列が無加工で往復し、SQL でも bytea として直接見える。設計・検証は [xattr-bytea.ja.md](design/xattr-bytea.ja.md) |
 
 ## 動作確認シナリオ（Linux 想定）
 

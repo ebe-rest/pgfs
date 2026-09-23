@@ -1,26 +1,26 @@
 # 設定項目マトリックス
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: 全設定項目を「キー / CLI / TOML / DB 保存先 / 既定 / 型 / 参照タイミング」で
 > 横串に見る**一覧**と、解決の優先順位、reload ポリシー (Live / NextMount / Format) の分類、
 > ライフサイクル別の集約、短縮形の衝突といった既知の問題。項目そのものの宣言は
-> [Schema.cs](../../src/core/src/Config/Schema.cs) が正で、**利用者向けの既定値表は [../Mkfs.md](../Mkfs.md) が正**である。
+> [Schema.cs](../../src/core/src/Config/Schema.cs) が正で、**利用者向けの既定値表は [../Mkfs.ja.md](../Mkfs.ja.md) が正**である。
 >
 > **隣接する doc とその担当範囲**:
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [../Mkfs.md](../Mkfs.md) | `mkfs.pgfs` の CLI 一覧と**既定値表** (+ TOML 例)。既定値を変えたらそちらも直す |
-> | [../Mount.md](../Mount.md) / [../Assign.md](../Assign.md) | 各ツールの CLI 仕様と利用者から見た挙動 |
-> | [../Pgfsctl.md](../Pgfsctl.md) | `pgfsctl config get / set / list` の使い方 |
-> | [fstab-support.md](fstab-support.md) | `-o key=val,...` 経由のオプションと、短縮形衝突の判定ロジック・処理順 |
-> | [control-plane.md](control-plane.md) | reload ポリシーの仕組みと Live 反映の設計 (設定を動かす側) |
-> | [settings-and-plperlu.md](settings-and-plperlu.md) | 設定スコープ再編 (`app.*` / DB 権威化) の設計経緯と決定 |
+> | [../Mkfs.ja.md](../Mkfs.ja.md) | `mkfs.pgfs` の CLI 一覧と**既定値表** (+ TOML 例)。既定値を変えたらそちらも直す |
+> | [../Mount.ja.md](../Mount.ja.md) / [../Assign.ja.md](../Assign.ja.md) | 各ツールの CLI 仕様と利用者から見た挙動 |
+> | [../Pgfsctl.ja.md](../Pgfsctl.ja.md) | `pgfsctl config get / set / list` の使い方 |
+> | [fstab-support.ja.md](fstab-support.ja.md) | `-o key=val,...` 経由のオプションと、短縮形衝突の判定ロジック・処理順 |
+> | [control-plane.ja.md](control-plane.ja.md) | reload ポリシーの仕組みと Live 反映の設計 (設定を動かす側) |
+> | [settings-and-plperlu.ja.md](settings-and-plperlu.ja.md) | 設定スコープ再編 (`app.*` / DB 権威化) の設計経緯と決定 |
 
 > **🗒 旧 `Pgfs.Core.Models.*Settings` ツリーは削除済み**。各設定項目の真の宣言は [src/core/src/Config/Schema.cs](../../src/core/src/Config/Schema.cs) に集約 (`Schema.<Scope>.<Key>` の static `Field<T>` 記述子)。本ドキュメントは「CLI フラグ / TOML キー / DB 保存先 / 既定値 / 参照タイミング」を一覧で横串に見るためのもの。**コードと食い違ったら Schema が正**。将来は Schema 由来の自動生成に置き換える案あり。
 
-> 2026-09-19 に現行コードと静的照合した。既定値の変更はない。Live は反映経路の分類である。**write-back の live 切替えは二相 flip で drain を待つ** (修正済) ので、**切替えでデータを失わないことは実機で確かめてある** — 回帰は `control_plane` スイートの `test_cp_write_back_live_flip` / `test_cp_metadata_flip_completes` (件数の正は [tests.md](../tests.md))。
+> 2026-09-19 に現行コードと静的照合した。既定値の変更はない。Live は反映経路の分類である。**write-back の live 切替えは二相 flip で drain を待つ** (修正済) ので、**切替えでデータを失わないことは実機で確かめてある** — 回帰は `control_plane` スイートの `test_cp_write_back_live_flip` / `test_cp_metadata_flip_completes` (件数の正は [tests.ja.md](../tests.ja.md))。
 
 ---
 
@@ -52,7 +52,7 @@
 
 | キー | CLI | TOML | DB | 既定 | 型 | 参照タイミング | 備考 |
 |---|---|---|---|---|---|---|---|
-| `setting.file` | **`-f`** `--setting` `--setting-file` + **positional[0] (postgresql: 以外)** | ❌ | ❌ | `pgfs.toml` | string | `LoadFromFile` 開始時 |  positional[0] が `postgresql:` で始まらないときも流れ込む。短縮形 `-f` は **直接実行時のみ有効** (helper context では `mount(8)` 由来の `--fake` として silent 飲み込み — [docs/fstab-support.md §短縮形の衝突](fstab-support.md#the-short-form-collisions)) |
+| `setting.file` | **`-f`** `--setting` `--setting-file` + **positional[0] (postgresql: 以外)** | ❌ | ❌ | `pgfs.toml` | string | `LoadFromFile` 開始時 |  positional[0] が `postgresql:` で始まらないときも流れ込む。短縮形 `-f` は **直接実行時のみ有効** (helper context では `mount(8)` 由来の `--fake` として silent 飲み込み — [docs/fstab-support.ja.md §短縮形の衝突](fstab-support.ja.md#短縮形の衝突)) |
 | `setting.search_path` | `--setting-path` `--setting-search-path` `--setting-file-path` `--setting-file-search-path` | ❌ | ❌ | `.` / `$HOME/.config/pgfs` / `$HOME/.config` / `$HOME` / `$LOCALAPPDATA/pgfs` / `$APPDATA/pgfs` | List&lt;string&gt; | `LoadFromFile` で `setting.file` が絶対パスでない場合の探索 | OS 標準ディレクトリ群 |
 
 ## 3. `logging.*`
@@ -67,14 +67,14 @@
 | キー | CLI | TOML | DB | 既定 | 型 | 参照タイミング | 備考 |
 |---|---|---|---|---|---|---|---|
 | `mount.mount_point` | **`-m`** `--mount-point` + **positional[1]** | ✅ | ❌ | `/mnt/pgfs` (Linux/macOS) / `P:` (Windows) | string | `mount.pgfs Program.Main` の FUSE ループ突入直前、`assign.pgfs` の DokanNet 起動時 | |
-| `mount.max_write` | `--max-write` | ✅ | ❌ | `0` | int | FUSE の 1 WRITE 要求の最大バイト数 (`fuse_conn_info.max_write`)。`0` = libfuse のネゴシエーション任せ | mount (FUSE) のみ。**実測では libfuse3 が既定でカーネル上限 1 MiB までネゴシエートする**ので、下げたい / 版差で固定したいとき用のノブ。`-o max_write` は libfuse3 が拒否するので init で設定する。[performance.md](performance.md) |
-| `mount.cache_max_entries` | `--cache-max-entries` | ✅ | ❌ | 1024 | int | `InodeCache` のメタデータ上限 (byId 権威・超過で LRU 退避 → byPath/childrenByParent をカスケード掃除) | inode メタの件数上限。詳細 [cache.md §1a](cache.md) |
-| `mount.cache_data_max_bytes` | `--cache-data-max-bytes` | ✅ | ❌ | 67108864 (64MiB) | long | `ContentCache` の本体 read キャッシュのバイト予算 (超過で LRU 退避)。`0` で無効 | ファイル本体 (`data_chunk`) のインメモリ read キャッシュ。詳細 [cache.md §1b](cache.md) |
-| `mount.negative_cache_ttl_ms` | `--negative-cache-ttl-ms` | ✅ | ❌ | 0 (無効) | int | negative lookup (ENOENT) を TTL の間キャッシュして DB 往復を省く。`0` で無効 | 自クライアントの create/rename は即時無効化 (単一クライアント安全)。**他クライアントの新規ファイルは最大 TTL 不可視** (`notify_enabled` なら通知で即時無効化)。実測は [performance.md §negative lookup キャッシュ](performance.md) |
-| `mount.write_back` | `--write-back` | ✅ | ❌ | false | bool | 書き込みをメモリに溜め、**ファイル 1 つ = 1 トランザクション**で flush する (`fsync` / `close` / 時間 / dirty 上限 / unmount が契機) | 実測 **`dd bs=128k` で 6.1× / rsync で 1.4×** (Citus rf=2)。増幅除去が本体。**未 flush 分はクラッシュで失われる**ので既定 off。詳細 [write-back.md](write-back.md) |
+| `mount.max_write` | `--max-write` | ✅ | ❌ | `0` | int | FUSE の 1 WRITE 要求の最大バイト数 (`fuse_conn_info.max_write`)。`0` = libfuse のネゴシエーション任せ | mount (FUSE) のみ。**実測では libfuse3 が既定でカーネル上限 1 MiB までネゴシエートする**ので、下げたい / 版差で固定したいとき用のノブ。`-o max_write` は libfuse3 が拒否するので init で設定する。[performance.ja.md](performance.ja.md) |
+| `mount.cache_max_entries` | `--cache-max-entries` | ✅ | ❌ | 1024 | int | `InodeCache` のメタデータ上限 (byId 権威・超過で LRU 退避 → byPath/childrenByParent をカスケード掃除) | inode メタの件数上限。詳細 [cache.ja.md §1a](cache.ja.md) |
+| `mount.cache_data_max_bytes` | `--cache-data-max-bytes` | ✅ | ❌ | 67108864 (64MiB) | long | `ContentCache` の本体 read キャッシュのバイト予算 (超過で LRU 退避)。`0` で無効 | ファイル本体 (`data_chunk`) のインメモリ read キャッシュ。詳細 [cache.ja.md §1b](cache.ja.md) |
+| `mount.negative_cache_ttl_ms` | `--negative-cache-ttl-ms` | ✅ | ❌ | 0 (無効) | int | negative lookup (ENOENT) を TTL の間キャッシュして DB 往復を省く。`0` で無効 | 自クライアントの create/rename は即時無効化 (単一クライアント安全)。**他クライアントの新規ファイルは最大 TTL 不可視** (`notify_enabled` なら通知で即時無効化)。実測は [performance.ja.md §negative lookup キャッシュ](performance.ja.md) |
+| `mount.write_back` | `--write-back` | ✅ | ❌ | false | bool | 書き込みをメモリに溜め、**ファイル 1 つ = 1 トランザクション**で flush する (`fsync` / `close` / 時間 / dirty 上限 / unmount が契機) | 実測 **`dd bs=128k` で 6.1× / rsync で 1.4×** (Citus rf=2)。増幅除去が本体。**未 flush 分はクラッシュで失われる**ので既定 off。詳細 [write-back.ja.md](write-back.ja.md) |
 | `mount.write_back_max_bytes` | `--write-back-max-bytes` | ✅ | ❌ | 67108864 (64MiB) | long | dirty バイトの flush 開始閾値。超過すると書き込み側で flush を試行する (失敗時にも上限以下を保証するものではない) | `cache_data_max_bytes` とは**別勘定** (dirty は LRU 退避の対象外)。`write_back` 有効時のみ意味を持つ |
 | `mount.write_back_interval_ms` | `--write-back-interval-ms` | ✅ | ❌ | 1000 | int | この時間より長く dirty のままのファイルを背景 flush する。`0` で時間トリガ無効 | 背景 flush の試行間隔であり、DB 障害・競合時の喪失窓の上限ではない。`write_back` 有効時のみ意味を持つ |
-| `mount.write_back_metadata` | `--write-back-metadata` | ✅ | ❌ | false | bool | メタデータ (`create`/`mkdir`/`symlink` + **それらへの**属性変更/rename) も pending に溜め、**1 ファイル = 1 tx** で flush する | **`mount.write_back = true` が前提** (単独 on は warning + 無効)。persisted inode へのメタデータ操作は write-through のまま (本体は data write-back の対象)。実測は rsync 1.00× / 非 O_EXCL create の総合 1.30× (**A-10 の修正より前の値**)。レビュー指摘 (A-1〜A-10 / B-1〜B-13) は全件対応済・既定 off。詳細 [metadata-write-back.md §1e](metadata-write-back.md) |
+| `mount.write_back_metadata` | `--write-back-metadata` | ✅ | ❌ | false | bool | メタデータ (`create`/`mkdir`/`symlink` + **それらへの**属性変更/rename) も pending に溜め、**1 ファイル = 1 tx** で flush する | **`mount.write_back = true` が前提** (単独 on は warning + 無効)。persisted inode へのメタデータ操作は write-through のまま (本体は data write-back の対象)。実測は rsync 1.00× / 非 O_EXCL create の総合 1.30× (**A-10 の修正より前の値**)。レビュー指摘 (A-1〜A-10 / B-1〜B-13) は全件対応済・既定 off。詳細 [metadata-write-back.ja.md §1e](metadata-write-back.ja.md) |
 | `mount.write_back_metadata_exclusive_create` | `--write-back-metadata-exclusive-create` | ✅ | ❌ | `write_through` | enum (`write_through` / `defer`) | `O_EXCL` / `CREATE_NEW` 付き create を pending にするか。`defer` で 1e の畳み込みが `rsync` にも効く (実測 **3.28×**) | **`defer` は cross-client の排他を失う** (別マウントは pending を見られないので 2 クライアントの排他作成が両方成功する)。同一マウント内の排他は台帳が維持する。衝突した敗者は flush で error latch し、占有者を消さない。単一クライアント運用と分かっている bulk copy 向け。`write_back_metadata` 有効時のみ意味を持つ |
 | `mount.write_back_max_inodes` | `--write-back-max-inodes` | ✅ | ❌ | 4096 | int | pending inode 数の flush 開始閾値。超過すると作成側で flush を試行する (失敗時には閾値を超え得る) | 小ファイル多数ではバイトより件数が先に膨らむため、`write_back_max_bytes` とは別に件数で bound する。`write_back_metadata` 有効時のみ意味を持つ |
 | `mount.write_back_flush_timeout_ms` | `--write-back-flush-timeout-ms` | ✅ | ❌ | 30000 | int | back-pressure / unmount の再試行期限。**期限は sweep の 1 巡の中でも見る**が、実行中の DB 呼出しは打ち切れないので厳密な時間上限ではない | `0` = 待たない (1 巡だけ試して続行 = 1d までの挙動)。期限切れの back-pressure は警告して続行する。unmount 時の残留は種類ごと最大 32 件を Error ログに出し `mount.pgfs` の実マウントプロセスが **exit 4** で終了する (daemon 起動親の終了コードではない) (`fusermount3 -u` はカーネル側で完了するので FS からは EBUSY で拒否できない)。`write_back` 有効時のみ意味を持つ |
@@ -98,17 +98,17 @@
 |---|---|---|---|---|---|---|---|
 | `database.connection` | **`-c`** `--connection` `--connection-string` + **positional[0] (postgresql: で始まる)** | ✅ | ❌ | `Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs;SslMode=Prefer` | `NpgsqlConnectionStringBuilder` (`ConnectionField` が parse/format) | 全プロセスの DB アクセス | mkfs / mount / assign すべてで必須 |
 | `database.super_connection` | `-su` `--su` `--super` `--super-connection` `--super-connection-string` `--super-user` `--super-user-connection` `--super-user-connection-string` | ❌ | ❌ | `Host=localhost;...Username=postgres;Password=postgres;Database=template1;...` | 同上 | mkfs `Initializer` の DB / ROLE / EXTENSION 作成 | `SaveTo=None` でファイルにも DB にも書かない (資格情報の安全)。**`--super` を明示しないときは `database.connection` の Host/Port/SslMode を継承**し、super と user が同じサーバを向くようにする (user をリモートに向けたのに super が localhost の別 DB を DROP/CREATE する事故を防ぐ)。super 資格情報・maintenance DB は既定のまま (postgres / template1)。明示時はその値を完全に尊重 |
-| `database.schema` | **`-s`** `--schema` `--schema-name` | ✅ | ❌ | `public` | string | `Api` の全 SQL 修飾 | 短縮形 `-s` は **直接実行時のみ有効** (helper context では `mount(8)` 由来の `--sloppy` として silent 飲み込み — [docs/fstab-support.md §短縮形の衝突](fstab-support.md#the-short-form-collisions)) |
+| `database.schema` | **`-s`** `--schema` `--schema-name` | ✅ | ❌ | `public` | string | `Api` の全 SQL 修飾 | 短縮形 `-s` は **直接実行時のみ有効** (helper context では `mount(8)` 由来の `--sloppy` として silent 飲み込み — [docs/fstab-support.ja.md §短縮形の衝突](fstab-support.ja.md#短縮形の衝突)) |
 | `database.prefix` | **`-x`** `--prefix` `--table-prefix` `--table-name-prefix` | ✅ | ❌ | `pgfs_` | string | テーブル名生成 (`pgfs_inode` 等) | `Database.GetPrefix()` 経由で末尾 `_` を正規化 |
 | `database.tablespace` | `--tablespace` `--tablespace-name` | ❌ | ✅ | `pg_default` | string | mkfs `Initializer.EnsureTablespaceAsync` (coordinator + 全 worker) | **Citus でもカスタム可** (〜)。per-table 句を廃し `CREATE DATABASE WITH TABLESPACE` 継承。** DB 権威化** (設定ファイルで書き換えさせない fs 識別情報。生成 toml 非出力) |
 | `database.tablespace_path` | `--tablespace-path` | ❌ | ✅ | `""` | string | mkfs `Initializer.EnsureTablespaceAsync` | 空文字なら新規作成しない。指定時、`app.plperlu` 許可なら plperlu auto-mkdir (postgres 所有 0700)。** DB 権威化** |
 | `database.retry_max_attempts` | `--retry-max-attempts` | ✅ | ❌ | 5 | int | 起動時と Live set の `Retry.Configure` | この設定は接続オープンの再試行用。create/write/flush には別途 40P01/40001 の限定的な tx 再試行がある |
 | `database.retry_initial_delay_ms` | `--retry-initial-delay-ms` | ✅ | ❌ | 200 | int | 同上 | 指数バックオフの初期値 |
 | `database.retry_max_delay_ms` | `--retry-max-delay-ms` | ✅ | ❌ | 2000 | int | 同上 | バックオフ上限 |
-| `database.notify_enabled` | `--notify` `--notify-enabled` | ✅ | ❌ | `false` | bool | 起動時にデータ変更通知の送受信を選択 (制御 LISTEN は常時起動) | 他クライアント変更通知 (LISTEN/NOTIFY)。1 クライアント運用では OFF 推奨。詳細 [docs/Mount.md](../Mount.md) / [docs/Assign.md](../Assign.md) |
-| `database.citus` | **`--citus`** | ❌ | ✅ | `false` | bool | mkfs `Initializer` が PGFS テーブルを Citus 分散登録するか | **DB 権威化** (SaveTo=File→Db)。「この FS は Citus 化済み」を後追い確認する bool。mount/assign は条件分岐に使わない。詳細 [docs/support_for_citus.md](support_for_citus.md) |
+| `database.notify_enabled` | `--notify` `--notify-enabled` | ✅ | ❌ | `false` | bool | 起動時にデータ変更通知の送受信を選択 (制御 LISTEN は常時起動) | 他クライアント変更通知 (LISTEN/NOTIFY)。1 クライアント運用では OFF 推奨。詳細 [docs/Mount.ja.md](../Mount.ja.md) / [docs/Assign.ja.md](../Assign.ja.md) |
+| `database.citus` | **`--citus`** | ❌ | ✅ | `false` | bool | mkfs `Initializer` が PGFS テーブルを Citus 分散登録するか | **DB 権威化** (SaveTo=File→Db)。「この FS は Citus 化済み」を後追い確認する bool。mount/assign は条件分岐に使わない。詳細 [docs/support_for_citus.ja.md](support_for_citus.ja.md) |
 | `database.workers` | `-w` `--worker` `--workers` | ✅ | ❌ | 空リスト | List&lt;string&gt; (Field) | mkfs の Citus worker bootstrap | `host[:port],...`。mount/assign の live 変更対象ではない |
-| `database.shard_count` | `--shard-count` | ❌ | ✅ | `0` | int | mkfs が `create_distributed_table` 前に `citus.shard_count` をこの値に設定 (`0` = クラスタ既定に従う) | mkfs 専用。セッション GUC なので同じ DB を共有する他アプリに影響しない。詳細 [support_for_citus.md](support_for_citus.md) |
+| `database.shard_count` | `--shard-count` | ❌ | ✅ | `0` | int | mkfs が `create_distributed_table` 前に `citus.shard_count` をこの値に設定 (`0` = クラスタ既定に従う) | mkfs 専用。セッション GUC なので同じ DB を共有する他アプリに影響しない。詳細 [support_for_citus.ja.md](support_for_citus.ja.md) |
 | `database.shard_replication_factor` | `--shard-replication-factor`, `--rf` | ❌ | ✅ | `0` | int | shard 1 つを何ノードに置くか (`0` = クラスタ既定に従う) | mkfs 専用。**ストレージ冗長の選択**で、排他制御 (`{prefix}lock` = 非分散) には影響しない |
 | `database.distribute_existing` | `--distribute-existing` | ❌ | ❌ | `false` | bool | `--citus` 併用時に既存テーブルも Citus 化する | mkfs 専用のアクションフラグ (SaveTo=None)。既定は新規作成したテーブルだけ Citus 化 |
 
@@ -116,20 +116,20 @@
 
 | キー | CLI | TOML | DB | 既定 | 型 | 参照タイミング | 備考 |
 |---|---|---|---|---|---|---|---|
-| `audit.enabled` | **`--audit`** | ❌ | ✅ | `false` | bool | mkfs で初期化、起動時読込み + Live set/reload | メタデータ変更を `{prefix}audit` に記録。Db + Live であり `pgfsctl config set audit.enabled true/false` で変更できる。詳細 [docs/audit-log.md](audit-log.md) |
+| `audit.enabled` | **`--audit`** | ❌ | ✅ | `false` | bool | mkfs で初期化、起動時読込み + Live set/reload | メタデータ変更を `{prefix}audit` に記録。Db + Live であり `pgfsctl config set audit.enabled true/false` で変更できる。詳細 [docs/audit-log.ja.md](audit-log.ja.md) |
 
 ## 8. `app.*` — アプリ挙動 (df モード / plperlu ゲート)
 
 | キー | CLI | TOML | DB | 既定 | 型 | 参照タイミング | 備考 |
 |---|---|---|---|---|---|---|---|
-| `app.statfs` | **`--statfs`** `--statfs-mode` | ❌ | ✅ | `auto` | string (`auto`/`require`/`nominal`) | mkfs が `{prefix}statfs()` (plperlu) を作る/消す分岐に使用 + `pgfs_settings` に保存。`Api.GetStatFs` は `nominal` のときサーバ問い合わせをスキップ | **scope/key を `statfs.mode` → `pgfs.statfs` → `app.statfs` と移動** (C# は `Schema.Statfs.Mode` のまま)。`df` が実ディスク空きを返すモード。`auto`=plperlu あれば実測/無ければ公称、`require`=plperlu 必須(無ければ mkfs 失敗)、`nominal`=常に公称容量。plperlu 使用可否は `app.plperlu` が上位ゲート。詳細 [docs/df-support.md](df-support.md) / [docs/settings-and-plperlu.md](settings-and-plperlu.md) |
-| `app.plperlu` | **`--plperlu [true\|false]`** `--allow-plperlu` (bare) / `--deny-plperlu` (bare, 否定) | ❌ | ✅ | `true` | bool | mkfs が statfs 実測関数 / tablespace auto-mkdir に plperlu を使ってよいかの上位ゲート | untrusted plperlu の許可。`require`+`deny` は矛盾で mkfs エラー。auto+deny は nominal 相当。matrix は [docs/settings-and-plperlu.md](settings-and-plperlu.md) |
+| `app.statfs` | **`--statfs`** `--statfs-mode` | ❌ | ✅ | `auto` | string (`auto`/`require`/`nominal`) | mkfs が `{prefix}statfs()` (plperlu) を作る/消す分岐に使用 + `pgfs_settings` に保存。`Api.GetStatFs` は `nominal` のときサーバ問い合わせをスキップ | **scope/key を `statfs.mode` → `pgfs.statfs` → `app.statfs` と移動** (C# は `Schema.Statfs.Mode` のまま)。`df` が実ディスク空きを返すモード。`auto`=plperlu あれば実測/無ければ公称、`require`=plperlu 必須(無ければ mkfs 失敗)、`nominal`=常に公称容量。plperlu 使用可否は `app.plperlu` が上位ゲート。詳細 [docs/df-support.ja.md](df-support.ja.md) / [docs/settings-and-plperlu.ja.md](settings-and-plperlu.ja.md) |
+| `app.plperlu` | **`--plperlu [true\|false]`** `--allow-plperlu` (bare) / `--deny-plperlu` (bare, 否定) | ❌ | ✅ | `true` | bool | mkfs が statfs 実測関数 / tablespace auto-mkdir に plperlu を使ってよいかの上位ゲート | untrusted plperlu の許可。`require`+`deny` は矛盾で mkfs エラー。auto+deny は nominal 相当。matrix は [docs/settings-and-plperlu.ja.md](settings-and-plperlu.ja.md) |
 
 ---
 
 ## reload ポリシー (Live / NextMount / Format)
 
-各 `Field` は `Field.Reload` (`enum ReloadPolicy`) を持ち、**走行中の `pgfsctl config set` でどう反映されるか**を決める (設計の正は [runtime-control-plane.md §Phase 3 確定設計](runtime-control-plane.md))。これが「マウント中に変えられるか」の唯一の真。
+各 `Field` は `Field.Reload` (`enum ReloadPolicy`) を持ち、**走行中の `pgfsctl config set` でどう反映されるか**を決める (設計の正は [runtime-control-plane.ja.md §Phase 3 確定設計](runtime-control-plane.ja.md))。これが「マウント中に変えられるか」の唯一の真。
 
 | 種別 | 意味 | 該当フィールド |
 |---|---|---|
@@ -196,7 +196,7 @@
 
 `mount(8)` helper の内部フラグ (`-i` `-f` `-n` `-s` `-v` `-N <ns>` `-t <type>`) は **helper context で起動された場合のみ** `ParseArguments` の最初で silent に読み飛ばされる ( context 依存に変更)。判定は「親プロセス comm が `mount` かつ positional 引数あり」の AND 条件。直接実行時はこの飲み込みが効かず、`-f` は `setting.file` の、`-s` は `database.schema` の短縮形として有効。
 
-詳細 (全短縮形の一覧・判定ロジック・処理順) は [docs/fstab-support.md §短縮形の衝突](fstab-support.md#the-short-form-collisions) と [§`ConfigLoader.ParseCli` の処理順](fstab-support.md#the-processing-order-of-configloaderparsecli) を参照。
+詳細 (全短縮形の一覧・判定ロジック・処理順) は [docs/fstab-support.ja.md §短縮形の衝突](fstab-support.ja.md#短縮形の衝突) と [§`ConfigLoader.ParseCli` の処理順](fstab-support.ja.md#configloaderparsecli-の処理順) を参照。
 
 `mount.foreground` は  `-f` を Options から外したので衝突対象外 (`--foreground` のみ)。`-f` は **setting.file 専用**の短縮形。
 

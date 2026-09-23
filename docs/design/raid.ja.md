@@ -1,6 +1,6 @@
 # 複数 PostgreSQL RAID (マルチ DB ミラーリング) — 設計メモ
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **複数の PostgreSQL を 1 つの pgfs に束ねる構想** (アイデア段階・未実装) —
 > パス単位の配置と複製数、名前空間のマージ、OS へ返す空き容量、バッキングストア非依存への一般化。
@@ -10,12 +10,12 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [support_for_citus.md](support_for_citus.md) | **単一 DB 内**の水平分散 (本書とはレイヤが直交) |
-> | [df-support.md](df-support.md) | 空き容量 (`pgfs_statfs`) の取得 — 配置判断の基礎 |
-> | [v0.2.0-plan.md](v0.2.0-plan.md) | Core / 機構層の分割 (`RaidApi` の収まり先) |
-> | [../Mount.md](../Mount.md) | Linux 側の**上位層**の現行仕様 (無改造で乗る前提) |
-> | [../Assign.md](../Assign.md) | Windows 側の**上位層**の現行仕様 (無改造で乗る前提) |
-> | [../next.md](../next.md) | 着手するかどうかの**優先順位** (punch-list) |
+> | [support_for_citus.ja.md](support_for_citus.ja.md) | **単一 DB 内**の水平分散 (本書とはレイヤが直交) |
+> | [df-support.ja.md](df-support.ja.md) | 空き容量 (`pgfs_statfs`) の取得 — 配置判断の基礎 |
+> | [v0.2.0-plan.ja.md](v0.2.0-plan.ja.md) | Core / 機構層の分割 (`RaidApi` の収まり先) |
+> | [../Mount.ja.md](../Mount.ja.md) | Linux 側の**上位層**の現行仕様 (無改造で乗る前提) |
+> | [../Assign.ja.md](../Assign.ja.md) | Windows 側の**上位層**の現行仕様 (無改造で乗る前提) |
+> | [../next.ja.md](../next.ja.md) | 着手するかどうかの**優先順位** (punch-list) |
 
 > **ステータス: アイデア段階 (着想)**。未実装・未合意。実現可能性の評価と詰めはこれから。本書は着想を失わないための一次スケッチで、決定事項ではない。
 > 「バッキングストア非依存の union+複製レイヤ」への一般化メモを追記 (下節「## 一般化」)。**こちらも妄想段階**。
@@ -45,11 +45,11 @@
 
 - **`RaidApi` (仮称)** を [Api](../../src/core/src/Api/Api.cs) と同じ表面で実装し、子 `Api[]` を束ねる。FUSE/Dokan 層は単一 `Api` を見ているつもりのまま動く (依存方向不変)。
 - 各子 Api は独立した pgfs DB。**スキーマ / prefix / DDL は無変更**なので、RAID を解除すれば各 DB はそのまま単体 pgfs として使える。
-- 設定は `database.connection` を **複数**受ける + RAID パラメータ (下記)。Citus ([support_for_citus.md](support_for_citus.md)) とはレイヤが直交し、各子 DB が単体でも Citus でも構わない。
+- 設定は `database.connection` を **複数**受ける + RAID パラメータ (下記)。Citus ([support_for_citus.ja.md](support_for_citus.ja.md)) とはレイヤが直交し、各子 DB が単体でも Citus でも構わない。
 
 ## 配置と複製数 (新規作成・書き込み時)
 
-RAID モードの追加パラメータ **複製数** (仮 `raid.replicas`)。**未指定時の既定は 1**。配置の基準は各 DB の [`pgfs_statfs()`](df-support.md) の実空き容量。
+RAID モードの追加パラメータ **複製数** (仮 `raid.replicas`)。**未指定時の既定は 1**。配置の基準は各 DB の [`pgfs_statfs()`](df-support.ja.md) の実空き容量。
 
 | 値 | 相当 | 新規ファイルの配置 |
 |---|---|---|
@@ -81,7 +81,7 @@ N 個の DB のツリーを 1 つにマージして見せる。あるパスに�
 
 ## OS へ通知する空き容量 (statfs / df)
 
-- 全 DB の中で **最も空き容量の多いもの**を返す (楽観的 = 「まだ最低これだけは書ける」)。各 DB の空きは [df-support.md](df-support.md) の `pgfs_statfs()` をそのまま流用。
+- 全 DB の中で **最も空き容量の多いもの**を返す (楽観的 = 「まだ最低これだけは書ける」)。各 DB の空きは [df-support.ja.md](df-support.ja.md) の `pgfs_statfs()` をそのまま流用。
 
 ## 進める上で気にする点 (要検討 / Open Questions)
 
@@ -90,17 +90,17 @@ N 個の DB のツリーを 1 つにマージして見せる。あるパスに�
 1. **`0` と `1` の差**: 現記述では「0 (RAID0)」も「既定 1」も *空き最小の 1 台に 1 コピー* で配置が同じ。`0` を別意味 (例: 純粋ラベルとしての「冗長ゼロ」/ あるいは将来のストライプ余地) にするか、`1` のエイリアスとして畳むか。
 2. **複製の原子性 / 部分失敗**: N 台中 k 台だけ書けて落ちた時。複製間で mtime/size がズレ → 次回 read で「競合 = `~N`」に化ける。これを **許容 (競合として顕在化)** するか、ベストエフォート再同期を入れるか。
 3. **`mtime+size 一致 = 内容同一` の仮定**: 偶然一致による誤マージのリスク。`pgfs_data` の指紋 (ハッシュ列) を併用するか、仕様どおり mtime+size で割り切るか。
-4. **クロス DB の一貫性 / ロック**: 既存の [`pgfs_lock`](support_for_citus.md) は単一 DB 内。N DB にまたがる rename / 書き込みの直列化は別建てが要る (または ②の競合顕在化で吸収)。
+4. **クロス DB の一貫性 / ロック**: 既存の [`pgfs_lock`](support_for_citus.ja.md) は単一 DB 内。N DB にまたがる rename / 書き込みの直列化は別建てが要る (または ②の競合顕在化で吸収)。
 5. **読み取りコスト**: `lookup` / `readdir` ごとに N 台へファンアウト + マージ。集約層の InodeCache、readdir の N-way マージコスト、片肺 (一部 DB 不達) 時の挙動。
 6. **競合サフィックスの安定性**: `~N` は「どの DB が今生きているか」で read のたびに揺れうる。write で実体リネームして固定する設計だが、**read のみのアクセス中の見え方の揺れ**をどう扱うか。
 7. **`st_ino` / ハードリンク**: パス単位配置だと DB 跨ぎの inode 共有は不可。マージ後の `st_ino` を **DB 跨ぎで一意**にする採番が要る (`id` に DB インデックスを混ぜる等)。
 8. **削除 / rename のファンアウト**: 全複製への伝播。競合 (`~N`) を持つパスの削除・移動のセマンティクス。
-9. **設定表現**: 複数 connection + 複製数を CLI / TOML でどう書くか ([settings-matrix.md](settings-matrix.md))。各子 DB で schema / prefix 差異を許すか。
+9. **設定表現**: 複数 connection + 複製数を CLI / TOML でどう書くか ([settings-matrix.ja.md](settings-matrix.ja.md))。各子 DB で schema / prefix 差異を許すか。
 
 ## 現行設計との足場 (流用できるもの)
 
-- **空き容量**: [df-support.md](df-support.md) の `pgfs_statfs()` を配置判断と statfs 報告の両方に流用。
-- **無改造で済む層**: 集約層が `Api` 表面を保てば [Mount.md](../Mount.md) / [Assign.md](../Assign.md) (FUSE/Dokan) は手を入れない。v0.2.0 の機構層分割 ([v0.2.0-plan.md](v0.2.0-plan.md)) で Core が OS 非依存に整理済なので、`RaidApi` は Core 内に素直に収まる。
+- **空き容量**: [df-support.ja.md](df-support.ja.md) の `pgfs_statfs()` を配置判断と statfs 報告の両方に流用。
+- **無改造で済む層**: 集約層が `Api` 表面を保てば [Mount.ja.md](../Mount.ja.md) / [Assign.ja.md](../Assign.ja.md) (FUSE/Dokan) は手を入れない。v0.2.0 の機構層分割 ([v0.2.0-plan.ja.md](v0.2.0-plan.ja.md)) で Core が OS 非依存に整理済なので、`RaidApi` は Core 内に素直に収まる。
 - **各 DB 無変更**: Citus との直交。子 DB を単体 / Citus どちらの構成にもできる。
 
 ## 一般化: バッキングストア非依存の union+複製レイヤ (着想続き)

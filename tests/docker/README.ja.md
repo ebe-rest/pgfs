@@ -1,10 +1,12 @@
 # Linux e2e (full docker)
 
+> **道順**: [docs/README.ja.md](../../docs/README.ja.md) › [docs/tests.ja.md](../../docs/tests.ja.md) (テストのハブ) › **本書**
+
 ホスト依存 (ssh linux_client / ホストの dotnet / symlink-race 回避策) を排除し、**Linux e2e を docker だけで完結**させる構成。CI でも再現可能にするのが目的。
 
-スコープは現状 **単一 PG (非 Citus)**。多ノード Citus + race + audit のフル docker 化は次段階 ([docs/next.md](../../docs/next.md) #9)、雛形は [tests/citus/race_multinode.sh](../citus/race_multinode.sh)。
+スコープは現状 **単一 PG (非 Citus)**。多ノード Citus + race + audit のフル docker 化は次段階 ([docs/next.ja.md](../../docs/next.ja.md) #9)、雛形は [tests/citus/race_multinode.sh](../citus/race_multinode.sh)。
 
-> Windows e2e は Dokan (Windows カーネルドライバ) のため docker 化対象外。[docs/tests.md](../../docs/tests.md) 参照。
+> Windows e2e は Dokan (Windows カーネルドライバ) のため docker 化対象外。[docs/tests.ja.md](../../docs/tests.ja.md) 参照。
 
 ---
 
@@ -15,9 +17,9 @@
 | [Dockerfile.mount](Dockerfile.mount) | 多段ビルド。SDK で `mount.pgfs`/`mkfs.pgfs`/`pgfsctl` を self-contained publish → debian-slim + fuse3 + xattr/acl/psql ツールに COPY |
 | [compose.yml](compose.yml) | `coord` (PostgreSQL) + `mount` (FUSE コンテナ)。mount は `SYS_ADMIN` / `/dev/fuse` / `apparmor:unconfined` 付き |
 | [run.sh](run.sh) | up → mkfs → FUSE マウント → [tests/linux/e2e.sh](../linux/e2e.sh) をコンテナ内実行 → down。mount 後に `{prefix}mounts` 登録/解除もアサート (Phase 2 / 2b) |
-| [control_plane.sh](control_plane.sh) | Phase 2 コントロールプレーン (live reload) の機能テスト。notify ON で mount → psql から reload NOTIFY → `audit.enabled` が走行中に切り替わるのを観測 ([docs/design/runtime-control-plane.md](../../docs/design/runtime-control-plane.md))。 |
-| [control_plane_ctl.sh](control_plane_ctl.sh) | Phase 3 / 3c の機能テスト。**notify OFF** で mount → `pgfsctl config set audit.enabled true` (Db+Live) で監査 0→1、`pgfsctl config set logging.level trace` (File+Live) のインライン set 適用を観測。制御 LISTEN が notify OFF でも常時 ON (P3-0) であることを直接確認 ([docs/design/runtime-control-plane.md §Phase 3](../../docs/design/runtime-control-plane.md))。 |
-| [status.sh](status.sh) | Phase 4 / 4c+4d の機能テスト。mount 中に `pgfsctl status` が Layer 1 (稼働行 live/fuse・unmount で deregister) + Layer 2 (inode/used_bytes/chunk 集計) + Layer 3 (read で content キャッシュ温め → ping NOTIFY で snapshot 即更新 → content chunks / inode hits / 実効 config / notify) を返すのを観測 ([docs/design/runtime-control-plane.md §Phase 4](../../docs/design/runtime-control-plane.md))。 |
+| [control_plane.sh](control_plane.sh) | Phase 2 コントロールプレーン (live reload) の機能テスト。notify ON で mount → psql から reload NOTIFY → `audit.enabled` が走行中に切り替わるのを観測 ([docs/design/runtime-control-plane.ja.md](../../docs/design/runtime-control-plane.ja.md))。 |
+| [control_plane_ctl.sh](control_plane_ctl.sh) | Phase 3 / 3c の機能テスト。**notify OFF** で mount → `pgfsctl config set audit.enabled true` (Db+Live) で監査 0→1、`pgfsctl config set logging.level trace` (File+Live) のインライン set 適用を観測。制御 LISTEN が notify OFF でも常時 ON (P3-0) であることを直接確認 ([docs/design/runtime-control-plane.ja.md §Phase 3](../../docs/design/runtime-control-plane.ja.md))。 |
+| [status.sh](status.sh) | Phase 4 / 4c+4d の機能テスト。mount 中に `pgfsctl status` が Layer 1 (稼働行 live/fuse・unmount で deregister) + Layer 2 (inode/used_bytes/chunk 集計) + Layer 3 (read で content キャッシュ温め → ping NOTIFY で snapshot 即更新 → content chunks / inode hits / 実効 config / notify) を返すのを観測 ([docs/design/runtime-control-plane.ja.md §Phase 4](../../docs/design/runtime-control-plane.ja.md))。 |
 
 `tests/linux/` は **read-only bind mount** でコンテナに持ち込むので、テスト編集時にイメージ再ビルドは不要。`mount.pgfs`/`mkfs.pgfs` 本体を変えたときだけ再ビルド (`run.sh` は既定で `--build`)。
 

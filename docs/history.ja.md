@@ -1,6 +1,6 @@
 # プロジェクト履歴
 
-> **道順**: [docs/README.md](README.md) › **本書**
+> **道順**: [docs/README.ja.md](README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **専用 doc を持たない**完了項目の経緯アーカイブ。
 > 「なぜそう決めたか」が残っていないと困るが、機能 doc を 1 本立てるほどではないものを置く。
@@ -9,8 +9,8 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [README.md](README.md) | **全 doc の索引**。入口はここ |
-> | [next.md](next.md) | **次に何を着手するか**。完了したらここへ移すか、feature doc へ移す |
+> | [README.ja.md](README.ja.md) | **全 doc の索引**。入口はここ |
+> | [next.ja.md](next.ja.md) | **次に何を着手するか**。完了したらここへ移すか、feature doc へ移す |
 > | 各 `design/*.md` | **専用 doc がある**機能の設計・as-built・変更記録。そちらが正 |
 >
 > **書き足すとき**: 専用 doc がある機能なら**そちらの §変更記録**へ。無い場合だけここへ追記する。
@@ -25,13 +25,13 @@
 
 `{prefix}inode` の UPDATE が `WHERE id = @id` だけだったため、分散キー (`parent_id`) を含まず **Citus が全 shard に配っていた** (`EXPLAIN` の Task Count = shard 数)。実害は (a) 1 メタデータ更新が「shard 数 × placement 数」のリモート文になる (b) shard ロックの取得順が非決定的で並行時に `40P01 distributed deadlock` が起きる、の 2 つ。**700 ファイルの `rsync -a` (毎ファイル chmod + utime) で実際に 2 件落ちた** (rsync exit 23)。Linux e2e 38 件は並行度が低く露見しなかった。
 
-対策は inode を更新する 9 経路すべてで WHERE に `parent_id` を含めること。分散キーは `Api.ResolveParentId` が InodeCache → 無ければ DB 1 読みで解決するので、FUSE / Dokan 側のシグネチャは不変。詳細は [support_for_citus.md §UPDATE は必ず分散キーを WHERE に含める](design/support_for_citus.md)。
+対策は inode を更新する 9 経路すべてで WHERE に `parent_id` を含めること。分散キーは `Api.ResolveParentId` が InodeCache → 無ければ DB 1 読みで解決するので、FUSE / Dokan 側のシグネチャは不変。詳細は [support_for_citus.ja.md §UPDATE は必ず分散キーを WHERE に含める](design/support_for_citus.ja.md)。
 
-**効果**: デッドロックは消えた (rsync の Error 0 件) が、**スループットは +9% にとどまった** (Citus rf=2 で 2.08 → 2.27 MB/s。単一 PG は 13.46 MB/s)。ベンチと原因分析 (1 FS 操作 = 1 分散トランザクション × 2PC が主因 / `max_write` 128 KiB が最大のレバー) は [performance.md](design/performance.md) に記録した。
+**効果**: デッドロックは消えた (rsync の Error 0 件) が、**スループットは +9% にとどまった** (Citus rf=2 で 2.08 → 2.27 MB/s。単一 PG は 13.46 MB/s)。ベンチと原因分析 (1 FS 操作 = 1 分散トランザクション × 2PC が主因 / `max_write` 128 KiB が最大のレバー) は [performance.ja.md](design/performance.ja.md) に記録した。
 
 ## 排他制御を `{prefix}lock` に集約 + replication factor から独立させた (完了)
 
-Citus の shard 複製数 (`citus.shard_replication_factor`) が 1 以外だと **行ロックが使えない**問題への対応。設計の正は [support_for_citus.md §排他制御と replication factor](design/support_for_citus.md)。
+Citus の shard 複製数 (`citus.shard_replication_factor`) が 1 以外だと **行ロックが使えない**問題への対応。設計の正は [support_for_citus.ja.md §排他制御と replication factor](design/support_for_citus.ja.md)。
 
 **発端**: 共有 Citus クラスタ (dev サーバ) の既定が `shard_replication_factor = 3` で、そこに pgfs を分散すると `SELECT … FOR UPDATE` が `0A000 could not run distributed query with FOR UPDATE/SHARE commands` で落ちる。分散キー等値フィルタを付けても回避できない (rf > 1 は statement-based replication で placement 間の結果がズレ得るため Citus が拒否する)。同一テーブルを rf=1 で作り直すと通ることを A/B で確認した。
 
@@ -62,7 +62,7 @@ advisory lock はノードローカルな PG の状態なので他ノードか�
 
 ## 実占有バイトと `st_blocks` — スパースファイル対応 (完了)
 
-`du` が**スパースファイルで実体の何百倍も**報告していた問題の修正。規約の正は [database.md §実占有バイトと st_blocks](design/database.md)。
+`du` が**スパースファイルで実体の何百倍も**報告していた問題の修正。規約の正は [database.ja.md §実占有バイトと st_blocks](design/database.ja.md)。
 
 **症状**: `truncate -s 1G` したファイルはチャンク行 0 = 実占有 0 なのに、`du` が 1.0G と答える。[src/fuse/src/FileSystem.cs](../src/fuse/src/FileSystem.cs) が `st_blocks` を `st_size` から機械的に出していたため。`df` (statfs) は plperlu の実測なので正しく、ズレていたのは `du` / `tar --sparse` 等が見る `st_blocks` だけ。
 
@@ -80,7 +80,7 @@ advisory lock はノードローカルな PG の状態なので他ノードか�
 
 ## タイムスタンプの UTC 統一 (完了)
 
-`TIMESTAMP` 列 (`st_mtime` / `st_ctime` / `created_at` / `updated_at` / `occurred_at` / `started_at` / `heartbeat_at`) に**ローカル時刻が保存されていた**バグの修正。規約の正は [database.md §タイムスタンプ規約](design/database.md)。
+`TIMESTAMP` 列 (`st_mtime` / `st_ctime` / `created_at` / `updated_at` / `occurred_at` / `started_at` / `heartbeat_at`) に**ローカル時刻が保存されていた**バグの修正。規約の正は [database.ja.md §タイムスタンプ規約](design/database.ja.md)。
 
 **症状**: FUSE が返す mtime/ctime が、ホストの UTC オフセット分ずれる (JST なら +9h)。読み側 ([src/fuse/src/FileSystem.cs](../src/fuse/src/FileSystem.cs) の `DateTime.SpecifyKind(..., DateTimeKind.Utc)`) は最初から「DB の値は UTC」前提だったのに対し、書き側が 2 経路ともローカル時刻を入れていた。
 
@@ -111,7 +111,7 @@ mount/assign の `BuildRootConfig` は ConfigStore (DB 由来設定) の接続�
 
 ## Citus Phase 3: pgfs_lock + SELECT FOR UPDATE 排他制御 (完了)
 
-Phase 2 で先行作成した `pgfs_lock(target_id BIGINT PK)` 上の行ロックを使った cross-client 排他制御を [src/lib/src/Api/Api.cs](../src/core/src/Api/Api.cs) に組み込み。**設計の詳細・組み込み箇所・lock 取得 SQL の実装メモは [support_for_citus.md §Phase 3](design/support_for_citus.md) を正とする**。ここでは決定の経緯のみ:
+Phase 2 で先行作成した `pgfs_lock(target_id BIGINT PK)` 上の行ロックを使った cross-client 排他制御を [src/lib/src/Api/Api.cs](../src/core/src/Api/Api.cs) に組み込み。**設計の詳細・組み込み箇所・lock 取得 SQL の実装メモは [support_for_citus.ja.md §Phase 3](design/support_for_citus.ja.md) を正とする**。ここでは決定の経緯のみ:
 
 - **「自作 TTL テーブル + heartbeat」「`pg_advisory_xact_lock`」を採用しなかった理由**: TTL race / coordinator-local 制約 / Citus 分散できないため (詳細は support_for_citus.md Phase 3 案比較表)。
 - **namespace 分離を「別テーブル」ではなく「target_id の符号」で実装**: Citus の単一カラム分散制約があるため `pgfs_lock(target_id BIGINT PK)` の 1 列構成にせざるを得ず、namespace は値の符号 (`+data_id` / `-inode_id`) で分離。「pgfs_inode_lock を別テーブルに切り出して parent_id 分散 + co-located にする」案は inode lock が支配的 workload で非対称コストが見えてきたら再編する余地として残す。
@@ -139,7 +139,7 @@ Phase 1 (bytea 化) で `pg_largeobject` 依存を外した上で、`create_dist
 - ユーザー指摘で「テーブルスペース指定不可 + DB 既存時の read-only / `EnsureDatabaseAsync` への統合 / per-table の create_distributed_table」に再設計
 - ユーザー追加指摘で「`CREATE SCHEMA` は伝搬で十分 / 各 worker への `citus_set_coordinator_host` も必要かも」に修正 → 最終的に [multinode_probe.sh](../tests/citus/multinode_probe.sh) で「`citus_add_node` の auto-sync で worker 側 pg_dist_node に coordinator が自動同期される」ことを実機確認 → **Phase 4 (per-worker citus_set_coordinator_host) は不要** と確定して削除
 
-**分散戦略・Citus 制約の対応・mkfs フラグ・冪等性保証の詳細は [support_for_citus.md §Phase 2](design/support_for_citus.md) を正とする** (PK 複合化 / FOR UPDATE に分散キー必須 / DO UPDATE 句の IMMUTABLE 制限 / cross-shard rename DELETE+INSERT / coordinator 登録 + shouldhaveshards の独立判定など)。ここでは「方針の決定」レベルの 2 点のみ:
+**分散戦略・Citus 制約の対応・mkfs フラグ・冪等性保証の詳細は [support_for_citus.ja.md §Phase 2](design/support_for_citus.ja.md) を正とする** (PK 複合化 / FOR UPDATE に分散キー必須 / DO UPDATE 句の IMMUTABLE 制限 / cross-shard rename DELETE+INSERT / coordinator 登録 + shouldhaveshards の独立判定など)。ここでは「方針の決定」レベルの 2 点のみ:
 
 - **「単 PG モードだけ id 単独 UK を張る」分岐は採用しない**: 単 PG / Citus でスキーマがズレる、in-place 移行が UK で詰まる、application 起動時バリデーションは遅くなるだけで体感的な利益が無い、という理由で両モード共通で UK なし。BIGSERIAL の sequence + tx 規律で一意性を保つ。「将来念のため id 一意性を担保しよう」と再提案する前にこの判断を確認すること (詳細は support_for_citus.md Phase 2 つまずきポイント 1)。
 - **`SetupCitusDistributionAsync` を解体し責務を分散**: クラスタトポロジ設定は `EnsureDatabaseAsync` 内側へ、per-table の `create_distributed_table` / `citus_add_local_table_to_metadata` は各 `CreateXxxTableAsync` の内側へ。`CreateTableAsync` を `Task<bool>` に変更してテーブル新規作成時のみ distribute が走るようにした (DB 既存時の Citus mutate skip と整合)。
@@ -161,7 +161,7 @@ Phase 1 (bytea 化) で `pg_largeobject` 依存を外した上で、`create_dist
 
 **なぜ必要か**: `pg_largeobject` は PG のシステムカタログなので `create_distributed_table` の対象にできない。worker を増やしても LO 本体は永久に coordinator 1 台に集中し、容量の壁を越えられない。bytea はユーザーテーブルの列なので Citus で分散可能。
 
-**実装の中核とセマンティクスは [support_for_citus.md §Phase 1](design/support_for_citus.md) を正とする** (DDL / SQL パターン / TOAST partial detoast)。ここでは設計判断の経緯のみ:
+**実装の中核とセマンティクスは [support_for_citus.ja.md §Phase 1](design/support_for_citus.ja.md) を正とする** (DDL / SQL パターン / TOAST partial detoast)。ここでは設計判断の経緯のみ:
 
 - **各チャンクの payload 長 = 「これまで書き込まれたバイト数」** (LO セマンティクスをそのまま踏襲)。「全チャンクを chunk_size に固定 (zero パディング込み)」案も検討したが、storage 効率と du の accuracy を取って可変長を選択。
 - **WriteData は 1 SQL/チャンクの upsert で完結**: `INSERT ... ON CONFLICT (data_id, chunk_index) DO UPDATE SET payload = CASE ... END` の 3 ケース分岐。並行 WriteFile race は PG の行ロックで自動直列化 (旧 LO 版の `lo_create + ON CONFLICT DO NOTHING + 孤児 lo_unlink` 救済が不要に)。
@@ -216,7 +216,7 @@ fstab/mount(8) helper 由来の無関係なフラグ (`-i`, `-f`, `-n`, `-s`, `-
 
 **fstab 経由マウント時の PATH 剥がし問題**: `mount(8)` は helper を呼ぶ際に env から PATH を完全に剥がす (実測値で 8〜11 個の env しか残らない: LANG, LOGNAME, PWD, SHLVL, SUDO_*, TERM, USER, _)。Tmds.Fuse の `HasFusermount` は `$PATH` で `fusermount3` を探すため、`CheckDependencies` が false を返し即終了していた。`Mount/Program.cs` の `Main` 冒頭で PATH 空のときに `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin` を補うようにして解消 (子プロセスにも `Process.Start(UseShellExecute=false)` 経由で継承)。
 
-詳細仕様は [fstab-support.md](design/fstab-support.md) を参照。実機 `sudo mount -t pgfs -o allow_other ...` で root mount + 非 root ユーザーアクセス + umount まで通過確認済み。
+詳細仕様は [fstab-support.ja.md](design/fstab-support.ja.md) を参照。実機 `sudo mount -t pgfs -o allow_other ...` で root mount + 非 root ユーザーアクセス + umount まで通過確認済み。
 
 ### 接続失敗時の再試行 (Polly 相当)
 
@@ -249,7 +249,7 @@ PostgreSQL `LISTEN` / `NOTIFY` を使った cross-client change propagation。�
 
 ### Windows e2e のテスト基盤
 
-[tests/windows/](../tests/windows/README.md) に `e2e.ps1` (テスト本体) / `flow.ps1` (mount → test → unmount の全フロー) / `flow.cmd` (cmd ラッパー) / `run.cmd` (テストだけ) を新設。Linux 版と対称な構造で 24 件: mkdir/file 基本/データ I/O (LO チャンクまたぎ)/truncate/rename/ReadOnly/Hidden+System+Archive xattr 往復/ドットファイル heuristic/dotfile un-hide 永続化/LastWriteTime/ボリューム情報/FindFilesWithPattern/並行アクセス。
+[tests/windows/](../tests/windows/README.ja.md) に `e2e.ps1` (テスト本体) / `flow.ps1` (mount → test → unmount の全フロー) / `flow.cmd` (cmd ラッパー) / `run.cmd` (テストだけ) を新設。Linux 版と対称な構造で 24 件: mkdir/file 基本/データ I/O (LO チャンクまたぎ)/truncate/rename/ReadOnly/Hidden+System+Archive xattr 往復/ドットファイル heuristic/dotfile un-hide 永続化/LastWriteTime/ボリューム情報/FindFilesWithPattern/並行アクセス。
 
 POSIX 専用 (symlink / hardlink / chmod / chown / xattr API 公開) は DokanNet 非対応のため対象外、代わりに Windows 固有 (SetFileAttributes / SetFileTime / FindFilesWithPattern) を追加。
 
@@ -275,7 +275,7 @@ POSIX 専用 (symlink / hardlink / chmod / chown / xattr API 公開) は DokanNe
 
 ## コーディング規約 v4 の確立
 
-[docs/coding-style.md](design/coding-style.md) を新設し、`.editorconfig` にブレース必須 + `this.` qualifier 強制を追加。条件分岐ルール (本体は「末尾フロー脱出 + 任意の文 N 個」または「単一文のみ」、`else` 禁止、ternary 禁止、多分岐は `switch`、ログ出力は副作用としてカウントしない) を v4 として明文化。`FirstList.cs` を v4 規約に追従 (FindSegmentNode 書き換え、InsertNodeFirst/Last の Try* 抽出)。`Api.cs` の Logger ガード 26 箇所をブレース化。
+[docs/coding-style.ja.md](design/coding-style.ja.md) を新設し、`.editorconfig` にブレース必須 + `this.` qualifier 強制を追加。条件分岐ルール (本体は「末尾フロー脱出 + 任意の文 N 個」または「単一文のみ」、`else` 禁止、ternary 禁止、多分岐は `switch`、ログ出力は副作用としてカウントしない) を v4 として明文化。`FirstList.cs` を v4 規約に追従 (FindSegmentNode 書き換え、InsertNodeFirst/Last の Try* 抽出)。`Api.cs` の Logger ガード 26 箇所をブレース化。
 
 整理で旧 `Models/*Settings.cs` が削除されたので、そこに残っていた `else` / 三項演算子の大半も連れて消えた。
 

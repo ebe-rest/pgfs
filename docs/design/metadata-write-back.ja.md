@@ -1,6 +1,6 @@
 # metadata write-back — メタデータの遅延書き (Phase 1e)
 
-> **道順**: [docs/README.md](../README.md) › [runtime-control-plane.md](runtime-control-plane.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › [runtime-control-plane.ja.md](runtime-control-plane.ja.md) › **本書**
 >
 > **この doc が正である範囲**: メタデータ (create / 属性 / rename) の遅延書きの**確定設計**と
 > **実装ステータス (ステージ 1 / 1.5 / 2)**。pending-born 主義、pending inode 台帳
@@ -10,13 +10,13 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [metadata-write-back-reviews.md](metadata-write-back-reviews.md) | **敵対的レビューの結果と修正の記録** (ラウンド A / B-1〜B-13)。時系列の as-built はすべてそちら |
-> | [write-back.md](write-back.md) | **データ本体**の遅延書き (1d)。1e はこれを前提にする |
-> | [data-id-lifecycle.md](data-id-lifecycle.md) | `data_id` の寿命 (create で確定し unlink まで不変)。1e の予約 id と関わる |
-> | [audit-log.md](audit-log.md) | 監査行の書き方。1e は「操作時にキャプチャして flush で書く」 |
-> | [control-plane.md](control-plane.md) | `mount.write_back_metadata` の実行時切り替えと統計 |
-> | [../Mount.md](../Mount.md) | 利用者向けの挙動と、**契約として明文化した喪失** |
-> | [runtime-control-plane.md](runtime-control-plane.md) | 運用フェーズ全体の構成 (ハブ) |
+> | [metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) | **敵対的レビューの結果と修正の記録** (ラウンド A / B-1〜B-13)。時系列の as-built はすべてそちら |
+> | [write-back.ja.md](write-back.ja.md) | **データ本体**の遅延書き (1d)。1e はこれを前提にする |
+> | [data-id-lifecycle.ja.md](data-id-lifecycle.ja.md) | `data_id` の寿命 (create で確定し unlink まで不変)。1e の予約 id と関わる |
+> | [audit-log.ja.md](audit-log.ja.md) | 監査行の書き方。1e は「操作時にキャプチャして flush で書く」 |
+> | [control-plane.ja.md](control-plane.ja.md) | `mount.write_back_metadata` の実行時切り替えと統計 |
+> | [../Mount.ja.md](../Mount.ja.md) | 利用者向けの挙動と、**契約として明文化した喪失** |
+> | [runtime-control-plane.ja.md](runtime-control-plane.ja.md) | 運用フェーズ全体の構成 (ハブ) |
 
 ## 設計
 
@@ -25,7 +25,7 @@
 > 以下は **確定設計・投影**である。現在はステージ 2 まで実装済みであり、現行の差分・実測・未修正事項は後続の as-built とレビュー節を参照。1d (データ write-back) の拡張。
 > 設計は敵対的レビュー 2 レンズ (並行性・cross-client 整合 / データ安全・POSIX 契約・監査) の指摘を
 > 織り込んで確定した。**投影ベンチの結果、取り分は「小ファイル × Citus」に限られる** (下記・正は
-> [performance.md §1e 投影ベンチ](performance.md)) — 1d ほどの費用対効果は無く、実装するかは要判断。
+> [performance.ja.md §1e 投影ベンチ](performance.ja.md)) — 1d ほどの費用対効果は無く、実装するかは要判断。
 
 #### 狙い — rsync の残コスト ≈2,100 メタデータ tx を背景化する
 
@@ -36,7 +36,7 @@ write-through tx (≈2,100 本) で、これが前景 (rsync のシステムコ�
 
 * tx 本数: ≈2,845 (メタ ≈2,100 + close flush 745) → **≈750** (ファイル単位 flush は 1d 決定 4 を踏襲)。
 * 本数削減以上に効くのは **前景から DB 往復が消える**こと (close も rename も即返り、flush は背景でパイプライン)。
-* ~~期待値は **2〜4×** と見込む~~ → **投影ベンチ実施済み (2026-08-10・正は [performance.md §1e 投影ベンチ](performance.md))**:
+* ~~期待値は **2〜4×** と見込む~~ → **投影ベンチ実施済み (2026-08-10・正は [performance.ja.md §1e 投影ベンチ](performance.ja.md))**:
   **4 KB ファイル × Citus rf=2 で SQL 側 3.7× / 実世界投影 ≈2.1×** (FUSE 側固定費 ≈10.5 ms/file が残るため)。
   **768 KB では 1.21×** (データ書き込みが支配的)、**参照ワークロード (599 MB/745 mixed の rsync) への投影は ≈1.1×**、
   **単一ローカル PG では絶対差 1.3 ms/file で wall-clock にほぼ出ない**。設計時の「メタデータ tx が支配的」は
@@ -141,7 +141,7 @@ close で -EIO を返せなくなるぶん、報告経路を 4 段で確保す�
    write-through なら操作が即 -EIO で気づけたものが、write-back では「成功済みの操作が永遠に flush できない」に化ける。
 4. **back-pressure は本物に**: pending inode 数上限 (`mount.write_back_max_inodes`) 超過で「flush 成功か
    timeout まで write/create をブロック」。one-shot で 1 巡して戻る方式は flush が失敗し続けると上限を突破し続ける。
-   40P01 分散デッドロック ([tests.md §既知のフレーク](../tests.md)) は flush 失敗として指数バックオフで再試行。
+   40P01 分散デッドロック ([tests.ja.md §既知のフレーク](../tests.ja.md)) は flush 失敗として指数バックオフで再試行。
 
 配線レベルの前提が 2 つ: **SIGTERM ハンドラ** (現行は `Console.CancelKeyPress` = SIGINT のみで、
 systemd 経由の再起動では FlushAll が走らない。`PosixSignalRegistration` で追加し、PG と同居するホストでは
@@ -157,11 +157,11 @@ FlushAll → モード切替。一相だと flip と並行の create が flush �
 * **純キャンセル (create → unlink) も `audit.enabled` 時は create/delete のペアを次回 flush tx に同乗して残す**。
   残さないと「interval 内に作って・読ませて・消す」が監査ゼロで成立する回避チャネルになる。
 * audit の `id` (flush 時採番) と `occurred_at` (操作時刻) の順序は乖離し得る → **「audit は occurred_at で読む」**を
-  [audit-log.md](audit-log.md) に明記する (実装ターンで)。
+  [audit-log.ja.md](audit-log.ja.md) に明記する (実装ターンで)。
 
 #### 契約として明文化する喪失 (ドキュメント必須)
 
-> ✅ **利用者向けの記述は [Mount.md §write-back](../Mount.md) に置いた** (ステージ 2)。
+> ✅ **利用者向けの記述は [Mount.ja.md §write-back](../Mount.ja.md) に置いた** (ステージ 2)。
 > 下の表はその原典。既定 off の理由・同期化ヒューリスティックの例外・エラー報告経路も同じ節にある。
 
 | 項目 | 内容 |
@@ -191,7 +191,7 @@ FlushAll → モード切替。一相だと flip と並行の create が flush �
 | `mount.write_back_metadata` | メタデータ write-back の有効/無効。`mount.write_back = true` が前提 (単独 on は warning + 無効) | **`false`** |
 | `mount.write_back_max_inodes` | pending inode 数の上限 (超過でブロッキング back-pressure) | 4096 |
 
-追加時は [settings-matrix.md](settings-matrix.md) / [Mkfs.md](../Mkfs.md) / [pgfs.toml.example](../../pgfs.toml.example) へ
+追加時は [settings-matrix.ja.md](settings-matrix.ja.md) / [Mkfs.ja.md](../Mkfs.ja.md) / [pgfs.toml.example](../../pgfs.toml.example) へ
 反映する (実装ターンで)。Layer 3 status に pending inode 数 / 名前衝突数 / エラーステートを追加。
 
 #### 実装順
@@ -265,7 +265,7 @@ FlushAll → モード切替。一相だと flip と並行の create が flush �
    閉路を見つけられず、既定 `lock_timeout = 0` で無限待ち**になる。しかもこの flush は NSGate 配下なので
    **`kill -9` 以外で復旧できない**。対処は ① 書く監査行の月集合を洗い出して **tx を開く前に一括 ensure**
    ② DDL に `SET lock_timeout = '5s'` (規約が破れてもハングせず例外で落ちる)。
-   → **この落とし穴は 1e 固有ではない**ので [audit-log.md](audit-log.md) にも記録した。
+   → **この落とし穴は 1e 固有ではない**ので [audit-log.ja.md](audit-log.ja.md) にも記録した。
 7. **`{prefix}data` 行の `created_at` も操作時刻を明示指定** (不変条件 ④ を data 行にも適用)。
 8. **Persisted 残骸は best-effort** (上記 §pending 台帳と可視性 に反映済)。件数上限
    (4096) を超えたら古い順に間引く。
@@ -331,7 +331,7 @@ FlushAll → モード切替。一相だと flip と並行の create が flush �
 | [Program.cs (mount)](../../src/mount/src/Program.cs) | unmount 後に明示 `Dispose` → 未 flush 残があれば **exit 4** |
 | [StatusCommand.cs](../../src/ctl/src/StatusCommand.cs) | エラーステートを赤で表示 |
 | [Schema.cs](../../src/core/src/Config/Schema.cs) | `mount.write_back_flush_timeout_ms` (既定 30000) を追加 |
-| [Mount.md](../Mount.md) | **利用者向けの契約** (§write-back — 何を失うか / 例外 3 つ / 報告経路 4 段 / 既定 off の理由) |
+| [Mount.ja.md](../Mount.ja.md) | **利用者向けの契約** (§write-back — 何を失うか / 例外 3 つ / 報告経路 4 段 / 既定 off の理由) |
 
 #### 設計からの差分・判断 (ステージ 2)
 
@@ -376,7 +376,7 @@ FlushAll → モード切替。一相だと flip と並行の create が flush �
    ([wbmeta.sh](../../tests/linux/wbmeta.sh) の pin 検証) が pending ディレクトリで書かれている。
    **§対象操作の線引き の表 (mkdir = 遅延) に寄せ、§同期化ヒューリスティック の表の「mkdir /
    O_EXCL create はロックプリミティブ」の記述のうち mkdir は採らなかった**。
-   喪失は [Mount.md](../Mount.md) の契約表に「`mkdir` をロックに使うツールは 2 クライアントが同時に成功し得る」と明記した。
+   喪失は [Mount.ja.md](../Mount.ja.md) の契約表に「`mkdir` をロックに使うツールは 2 クライアントが同時に成功し得る」と明記した。
    **切り替えは 1 行** (`Api.CreateDirectory` の `exclusive: false` → `true`) なので、方針を変えるならそこだけ。
 6. **エラーの底 4 段の実装形**:
    | # | 検出 | ブロック | 報告 |
@@ -433,13 +433,13 @@ FS 越しの挙動と psql での DB 状態を突き合わせた。テスト自�
 #### ステージ 2 のテスト (追加・wbmeta.sh 4 → 16 件)
 
 上の手動シナリオを [wbmeta.sh](../../tests/linux/wbmeta.sh) に自動化した (内訳表は
-[tests/linux/README.md](../../tests/linux/README.md))。結果は**当時 15 passed / 1 failed** だった
+[tests/linux/README.ja.md](../../tests/linux/README.ja.md))。結果は**当時 15 passed / 1 failed** だった
 (+ 回帰: [writeback.sh](../../tests/linux/writeback.sh) 8/8・Linux e2e は `write_back_metadata`
 off / on の両方で 43 passed + 1 skip)。
 
 > **✅ その 1 failed は A-7 で解消済み。** いま `wbmeta.sh` は **27 件すべて緑**である
 > (2026-09-21 に再走して確認)。塞いだのは
-> [metadata-write-back-reviews.md の A-6 / A-7](metadata-write-back-reviews.md) で、
+> [metadata-write-back-reviews.ja.md の A-6 / A-7](metadata-write-back-reviews.ja.md) で、
 > **印を落とす条件を「実際に未 flush を書き切ったときだけ」に変えた** — 何も書いていない close では
 > 落とさないので、**`truncate` 側の close で印が消費されなくなった**。
 > 以下は**その不具合が何だったか**の記録である。
@@ -482,16 +482,16 @@ off / on の両方で 43 passed + 1 skip)。
 * **Dokan 側は on モードも実機検証済 (2026-09-21)** — `CloseInode` / `FlushDirectory` / `PrepareRenameReplace` は配線済で、
   既定 off の回帰に加えて **[wbmeta.ps1](../../tests/windows/wbmeta.ps1) が実 2 マウントで on モードを通る**
   (4 passed + 1 skip。skip は `unlink` による回復の観測で、Windows が `DeleteFile` を遅延させるため
-  この環境では観測できないもの)。件数の正は [tests.md](../tests.md)。
+  この環境では観測できないもの)。件数の正は [tests.ja.md](../tests.ja.md)。
 * `mkdir` の cross-client 可視性 (上記差分 5 の裁定)。
 
 
 ## 変更記録
 
-時系列の記録は [metadata-write-back-reviews.md](metadata-write-back-reviews.md) が持つ
+時系列の記録は [metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) が持つ
 (敵対的レビューのラウンド A / B の修正記録が 700 行を超えるため、切り出してある)。
 **それ以外の時系列はここに追記する。**
 
-- [runtime-control-plane.md](runtime-control-plane.md) が 1,802 行に肥大したため、
+- [runtime-control-plane.ja.md](runtime-control-plane.ja.md) が 1,802 行に肥大したため、
   機能ごとに分割してこの doc を切り出した。内容は分割前のまま。
-  レビュー記録はさらに [metadata-write-back-reviews.md](metadata-write-back-reviews.md) へ分けた。
+  レビュー記録はさらに [metadata-write-back-reviews.ja.md](metadata-write-back-reviews.ja.md) へ分けた。

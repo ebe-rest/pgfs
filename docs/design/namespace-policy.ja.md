@@ -1,6 +1,6 @@
 # 名前空間の方針 — 見え方と実体がずれる 3 件をまとめて決める
 
-> **道順**: [docs/README.md](../README.md) › **本書**
+> **道順**: [docs/README.ja.md](../README.ja.md) › **本書**
 >
 > **この doc が正である範囲**: **名前空間の見え方と実体がずれる件の方針**。
 > どの名前を作れるか / 作ったものがどう見えるか / 見えているものに到達できるか。
@@ -10,10 +10,10 @@
 >
 > | doc | そちらに書くもの |
 > |---|---|
-> | [handle-context.md](handle-context.md) | **なぜ `.fuse_hidden*` を隠すことにしたか** (§代案 H)。`hard_remove` を立てなかった経緯 |
-> | [windows-parity.md](windows-parity.md) | Windows 固有の実測 (§名前空間の先行試験) と Dokan の as-built |
-> | [../Assign.md](../Assign.md) / [../Mount.md](../Mount.md) | 利用者向けの挙動と契約 |
-> | [../Pgfsctl.md](../Pgfsctl.md) | `pgfsctl prune` が何を掃除するか |
+> | [handle-context.ja.md](handle-context.ja.md) | **なぜ `.fuse_hidden*` を隠すことにしたか** (§代案 H)。`hard_remove` を立てなかった経緯 |
+> | [windows-parity.ja.md](windows-parity.ja.md) | Windows 固有の実測 (§名前空間の先行試験) と Dokan の as-built |
+> | [../Assign.ja.md](../Assign.ja.md) / [../Mount.ja.md](../Mount.ja.md) | 利用者向けの挙動と契約 |
+> | [../Pgfsctl.ja.md](../Pgfsctl.ja.md) | `pgfsctl prune` が何を掃除するか |
 
 ## この doc を作った理由
 
@@ -31,7 +31,7 @@
 
 ### M-1 — 列挙に出ないのに消せない
 
-**これは「漏れ」ではなく、[handle-context.md §代案 H](handle-context.md) で
+**これは「漏れ」ではなく、[handle-context.ja.md §代案 H](handle-context.ja.md) で
 意識的に受け入れた代償である。** 当時の記述:
 
 > **代償**: **列挙に出ないのに `rmdir` が `ENOTEMPTY` になる**ことがある (隠しファイルが残っている親)。
@@ -115,7 +115,7 @@ Windows 側で塞ぐ**という整理である。
 - **M-1 の穴は pgfs 自身が開けている** (隠している)。**Windows では隠す理由が無い**
   (libfuse が `.fuse_hidden*` を作らないため) ので、**そこで隠すのをやめれば実害が消える**。
   **Linux 側の代償は残る**が、それは **`hard_remove` を立てられない libfuse の制約から来ている**ので、
-  **pgfs 側で消せる穴ではない** ([handle-context.md §なぜ `hard_remove` を立てないか](handle-context.md))。
+  **pgfs 側で消せる穴ではない** ([handle-context.ja.md §なぜ `hard_remove` を立てないか](handle-context.ja.md))。
   **この案は当時の評価を覆すことを承知のうえで推している** — 当時は「他マウントの `ls` に出るのが実害」
   と見て両 OS に効かせた。**実測後は「見えないほうが実害」に見える**が、**そう見えるのは
   「`ls` に残骸が出る」を軽く見ているだけかもしれない**。**ここが推奨のいちばん弱い部分**なので、
@@ -146,11 +146,11 @@ Windows 側で塞ぐ**という整理である。
 | **P-2 (T)** | Windows: `trail ` / `trail.` の作成が**拒否される**。**既存のものは見える** |
 
 **いずれも「修正前ビルドに当てて落ちること」を確認してから land する**
-([tests/windows/README.md §テストを書くときに踏んだ罠](../../tests/windows/README.md))。
+([tests/windows/README.ja.md §テストを書くときに踏んだ罠](../../tests/windows/README.ja.md))。
 
 ## 当時の決定と、その前提がいまどうなっているか
 
-**M-1 を「両 OS に効かせる」と決めたのは意識的である。** [handle-context.md §代案 H](handle-context.md) の理由:
+**M-1 を「両 OS に効かせる」と決めたのは意識的である。** [handle-context.ja.md §代案 H](handle-context.ja.md) の理由:
 
 > **Core に置いたので両 OS に効く** — 実害は「**他マウントの `ls` に出る**」ことで、
 > その他マウントには Windows も含まれるため。
@@ -181,13 +181,13 @@ Windows 側で塞ぐ**という整理である。
   隠しファイルを引けなくなる** — libfuse は**隠し名で `getattr` / `release` を撃つ**ため。
   **「隠すならどこでも隠す」で揃えると壊れる。** 隠すのは**列挙 (`ListChildren`) だけ**である。
 - **`hard_remove = 1` は採らない。** `.fuse_hidden*` をそもそも作らせない案はここで一度潰れている
-  ([handle-context.md §なぜ `hard_remove` を立てないか](handle-context.md))。**再提案するなら当時の理由を読んでから。**
+  ([handle-context.ja.md §なぜ `hard_remove` を立てないか](handle-context.ja.md))。**再提案するなら当時の理由を読んでから。**
 - **`IsDirectoryEmpty` を隠す側に揃えるなら、C-2 が守っている実体を消さない手当てが要る** (上の H-2)。
 
 ## 却下した案
 
 - **`.fuse_hidden*` を DB から消す / 作らせない** — **libfuse が作るものなので pgfs 側では止められない。**
   `hard_remove = 1` を立てれば作られなくなるが、**立てると `unlink` 後の read と rename-over が壊れる**
-  ([handle-context.md](handle-context.md) で①まで行って戻ってきた記録がある)。
+  ([handle-context.ja.md](handle-context.ja.md) で①まで行って戻ってきた記録がある)。
 - **予約名を自動リネームする** (`CON` → `CON_` 等) — **DB 名を自動で書き換えない**という既存方針に反する
-  ([windows-parity.md](windows-parity.md))。**Linux から見た名前が勝手に変わる**のは同一 namespace を壊す。
+  ([windows-parity.ja.md](windows-parity.ja.md))。**Linux から見た名前が勝手に変わる**のは同一 namespace を壊す。
