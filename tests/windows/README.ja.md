@@ -21,6 +21,7 @@ Linux 版 ([tests/linux/](../linux/README.ja.md)) と対になる Windows 版で
 | [wbmeta.ps1](wbmeta.ps1) | **metadata write-back + B-1 ノブ** の契約テスト (2 マウントで占有者を作る) |
 | [control_plane.ps1](control_plane.ps1) | **`pgfsctl config` / `status`** の受入 (live 反映・実効値・二相 flip) |
 | [prune.ps1](prune.ps1) | **`pgfsctl prune`** の通し (C-2 の保持 → kill → 孤児 data → 掃除) と、**利用者が付けた `.fuse_hidden*` という名前のファイルを消さないこと**。**自分でマウントして kill する** |
+| [permissions.ps1](permissions.ps1) | **権限の判定** (`app.enforce_permissions`・v0.2.1)。**昇格したシェルで実行**し、他人の所有のファイルを仕込んで**制限トークン**で確かめる。自分で `P:` にマウントし、設定は最後に戻す |
 | [wbcross.ps1](wbcross.ps1) | **write-back のマウントが dirty を抱えている間に他マウントが同じ実体を書いたとき**の契約 (2 マウント)。truncate の巻き戻りが起きないこと + **チャンク単位の踏み潰しが起きること** (後者は**望ましい挙動ではなく現状を固定する契約テスト**) |
 
 ## cross-client テスト (2 マウント)
@@ -37,7 +38,7 @@ pwsh -NoProfile -File tests\windows\crossclient.ps1 -NoNotify    # notify 無し
 - **可視性** (`--notify` 付きで起動したときのみ実行): 片方の create / 上書き / delete / 置換 rename がもう片方から見える
 - **ハンドル文脈** (handle-context 段階 B・`--notify` 必須): 開いたままの **append ハンドル**が相手マウントの伸長を見ていること (見ていないと**相手が書いたぶんを上書きして壊す** = 問題 2 の再現) / rename + 同名再作成を跨いでも最初の inode を指すこと (問題 1 のガード)
 
-**`database.notify_enabled` は既定 false** で、その構成では他マウントの変更は**見えないのが仕様**
+**`database.notify_enabled` が false の構成** (v0.2.0 までの既定・v0.2.1 からは `--no-notify`) では他マウントの変更は**見えないのが仕様**
 (各マウントの `InodeCache` / read キャッシュは独立で、invalidate は LISTEN/NOTIFY でしか来ない)。
 そのためスクリプトは自分が起動するマウントに `--notify` を付け、付けられない場合 (既存マウントの再利用 / `-NoNotify`) は
 可視性テストを **SKIP** する。実測でも notify 無しでは 4 件とも「古いまま見える」状態だった。
@@ -58,6 +59,20 @@ pwsh -NoProfile -File tests\windows\crossclient.ps1 -NoNotify    # notify 無し
   更新されてハンドル側も一緒に新しくなり、**検出力がゼロ**になる。
 - **長さの観測は列挙 (`Get-ChildItem -Filter`) で行う**。`Get-Item` / `Test-Path` は Windows
   クライアント側の FCB に答えられることがある (`Wait-Gone` と同じ理由)。
+
+## 権限の判定のテスト
+
+```powershell
+pwsh -NoProfile -File tests\windows\permissions.ps1                    # sticky 以外の 13 件
+pwsh -NoProfile -File tests\windows\permissions.ps1 -StickyDir P:\      # sticky も (root 所有で 1777 のディレクトリを渡す)
+pwsh -NoProfile -File tests\windows\permissions.ps1 -AssignBinary <別ビルドの assign.pgfs.exe>   # 修正前のビルドに当てる等
+```
+
+- **ユーザーを作らない**。仕込みは昇格したシェルから Set-Acl (SetFileSecurity の逆投影) で行い、所有者に **Administrator の SID** (= pgfs の `root`)、
+  グループに **Administrators** (= `root`) / **Users** (= `users`) を渡す。確かめる操作は **Administrators を deny-only にした制限トークン** (`CreateRestrictedToken`) で C# から行う
+  (PowerShell のスクリプトブロックを偽装中に走らせると別スレッドへ移ることがあるので、操作ごと C# に置いてある)。**昇格したシェルでそのまま開くと素通しで何も確かめられない**。
+- **sticky は Windows から立てられない**。root 所有で `1777` のディレクトリ (例: Linux から `chmod 1777` した FS の root) を `-StickyDir` に渡したときだけ見る。
+- **誰も書けない (w が全部落ちた) ファイルは Windows では「読み取り専用」に見えて消せない** (Windows が読み取り専用のファイルの削除を断るため。v0.2.0 では他人の `0644` もそう見えていた)。後片付けは所有者を自分に戻してから消している (`Clear-TestRoot`)。
 
 ## 0 件で緑にしない (2026-09-21 追加)
 
@@ -481,7 +496,7 @@ pwsh -NoProfile -File tests\windows\control_plane.ps1 -Filter reload
 | `test_cp_write_back_live_flip` | `mount.write_back` の **live on → off (二相 flip)** を跨いでデータが無傷 |
 | `test_cp_metadata_flip_completes` | **metadata write-back の flip が完走する** — pending 300 件を抱えた状態で off にして、受付再開 / pending 0 / ファイル 300 件が無傷 |
 
-**マウントに `--notify` を付けない**のが意図的なポイント。制御チャネルの LISTEN は常時 ON なので、
+**マウントを `--no-notify` で起動する** (v0.2.1 から既定 on なので明示的に切る) のが意図的なポイント。制御チャネルの LISTEN は常時 ON なので、
 `database.notify_enabled = false` のマウントにも `config set` は届く (Phase 3a)。そこを一緒に確認している。
 
 **反映は heartbeat スナップショット経由**なので、`status` の実効値に出るまで **最大 1 周期 (既定 30 秒)** かかる。

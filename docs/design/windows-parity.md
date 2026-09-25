@@ -136,9 +136,9 @@ once in three).
 - **The exclusion is decided in the database**: all 6 rounds of a simultaneous `CREATE_NEW` had exactly one
   success, and the winner's contents were intact. -> The proof that point 1 above (exclusive: true) works across
   clients too. A simultaneous `mkdir` also produces exactly one body.
-- **The visibility depends entirely on `database.notify_enabled`.** With the default (false), another mount's
-  create, overwrite, delete and replacing rename **are never visible** (all 4 stay stale; the `InodeCache` and
-  the read cache are per mount and an invalidation arrives only through LISTEN/NOTIFY). With `--notify` on both
+- **The visibility depends entirely on `database.notify_enabled`** (true by default since v0.2.1). With false,
+  another mount's create, overwrite, delete and replacing rename **are never visible** (all 4 stay stale; the
+  `InodeCache` and the read cache are per mount and an invalidation arrives only through LISTEN/NOTIFY). With `--notify` on both
   mounts, all 4 followed within a few hundred ms. -> **Running several mounts on Windows makes notify
   effectively mandatory.** This fact was written into [Assign.md](../Assign.md) and
   [tests/windows/README.md](../../tests/windows/README.md) as well.
@@ -178,7 +178,7 @@ injection through psql). **3 passed / 1 failed.**
 |---|---|---|
 | `uname` | **The requesting User SID** (`WindowsIdentity.User`) normalized by `WindowsUserResolver.UnameOf` (`DOMAIN\Alice` -> `alice`) | The stored form follows the "names only; no SID or UID is held" convention of [permission-interop.md](permission-interop.md). `.Owner` is not used because it can be `Administrators` with an elevated process |
 | `gname` | **Inherited from the parent directory** (proposal B) | A Windows token's primary group is effectively `Domain Users` or `None` and is not used in the permission decision either. With inheritance, "the same tree is the same group" and the group bits of the mode mean something. **It differs deliberately from the Linux default (the creator's primary group)** |
-| On a failure to obtain them | `fallback_uname` / `fallback_gname` (`nobody`/`nogroup` by default) plus a Warning | pgfs does not enforce access or share today, so the owner only affects the display and the audit. Failing the create would do more real harm. **It switches to "fail" in the stage that introduces enforcement** |
+| On a failure to obtain them | `file_system.unknown_name` (`(unknown)`, v0.2.1 and later; the old `fallback_uname` / `fallback_gname` were removed) plus a Warning | Failing the create would do more real harm, so the creation goes on. **The permission decision arrived in v0.2.1**, so an `(unknown)` owner matches nobody and that file is decided with the rights of other ([permission-interop.md, the decision on Windows](permission-interop.md)) |
 | A knob | **Not created** | `mount.owner_from_requestor` was considered, but adding a Field is `src/core/src/Config/Schema.cs` = the Linux side's territory. Only the behaviour equivalent to on-by-default was implemented, and if an escape hatch is needed, a Field can be added on the Core side |
 
 **The pitfall**: the normalization drops the domain, so **`CORP\alice` and `LOCAL\alice` become the same
@@ -321,7 +321,7 @@ visible from Linux).
 
 | | What it does |
 |---|---|
-| Setting it | **Drops every write bit (0222).** `FileSystemUtils.IsWritable` judges it writable **if owner, group or other has +w**, so dropping only the owner's does not make it look ReadOnly from Windows |
+| Setting it | **Drops every write bit (0222).** `FileSystemUtils.IsReadOnly` sets ReadOnly **when the w of owner, group and other are all cleared** (v0.2.1; the earlier `IsWritable` likewise judged it "writable if any of them has +w"), so dropping only the owner's does not make it look ReadOnly from Windows |
 | Clearing it | **Restores only the owner's write (0200)** |
 
 **Measured (2026-09-21, on the server)**: a directory at `0755` -> ReadOnly -> **`0555`** (the x survives) ->

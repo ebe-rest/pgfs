@@ -16,7 +16,7 @@ mount.pgfs (Linux) でマウント済みの PGFS に対して、実装済み機�
 | [startup.sh](startup.sh) | **起動まわりの契約専用** (10 件)。`-o` の扱い / `started (pid N)` / 所有者解決の fallback。自分でマウントを張り替える |
 | [prune.sh](prune.sh) | **`pgfsctl prune` 専用** (11 件)。異常終了が残したものの掃除。**psql 必須** (人工の残骸を作るため)。自分でマウントを張り替え、`kill -9` で本物の `.fuse_hidden` 残骸も作る |
 | [handles.sh](handles.sh) | **ハンドルリーク専用** (**11 件**)。`pgfsctl status` の `handles` 行を見て、借りたハンドルが必ず返っていることを確認する。**psql 必須** (スナップショットを ping で撃たせるため)。自分でマウントを張り替える |
-| [crossclient.sh](crossclient.sh) | **cross-client 専用** (**18 件**)。同じ DB-FS を **2 マウント**して可視性を見る (Windows の [crossclient.ps1](../windows/crossclient.ps1) の Linux 版)。自分で 2 つマウントを張る |
+| [crossclient.sh](crossclient.sh) | **cross-client 専用** (**19 件**)。同じ DB-FS を **2 マウント**して可視性を見る (Windows の [crossclient.ps1](../windows/crossclient.ps1) の Linux 版)。自分で 2 つマウントを張る |
 | [negcache.sh](negcache.sh) | **negative lookup キャッシュ専用** (7 件)。`mount.negative_cache_ttl_ms` の可視性契約。自分でマウントを張り替え、他クライアントは psql 直接 INSERT で代用 |
 | [run.cmd](run.cmd) | テスト**だけ**実行 (マウント済み前提) |
 | [flow.ps1](flow.ps1) | **全フロー**: rsync → publish → mount → test → unmount (PowerShell) |
@@ -143,7 +143,7 @@ TEST_FILTER=hardlink bash tests/linux/crossclient.sh
 **`PGFS_XC_WAIT`** (可視性を待つ上限秒・既定 10)。
 
 > ⚠ **両マウントを `--notify` で起動する**。cross-client の可視性は
-> `database.notify_enabled` に完全依存で、既定 (false) では他マウントの作成 / 上書き /
+> `database.notify_enabled` に完全依存で、false (v0.2.0 までの既定) では他マウントの作成 / 上書き /
 > 削除 / 置換 rename が**いつまでも見えない** ([Assign.ja.md](../../docs/Assign.ja.md) の注記と同じ)。
 > スクリプトが自分で付けるので呼び出し側の設定は要らない。
 
@@ -392,6 +392,8 @@ TEST_FILTER=xattr bash tests/linux/e2e.sh /mnt/pgfs
 |---|---|
 | `TEST_FILTER` | テスト名に部分一致するものだけ実行 |
 | `PGFS_TEST_PG_EXEC` | `test_fallback_uname_gname` が使う psql 呼び出し全文をオーバライド (既定: pgsql_server 上のソースビルド psql を ssh 経由で叩く形)。docker Citus に向けるときは `docker exec -i <container> psql ...` を設定する。[tests/citus/race_multinode.sh](../citus/race_multinode.sh) が使用 |
+| `PGFS_SCHEMA` / `PGFS_PREFIX` / `PGFS_DB` | `test_fallback_uname_gname` が見る FS (`<schema>.<prefix>inode` と、既定の ssh 経路の `-d`)。**無ければ `PGFS_SETTING_FILE` から読む**。docker ([run.sh](../docker/run.sh)) と race_multinode は `PGFS_SCHEMA` を渡す。**DB 名が分からなければ psql を撃たずに skip** (既定の DB へ撃って別の FS を書き換えないため)。テーブルが無ければ「別の DB / schema を見ている」で fail |
+| `PGFS_SETTING_FILE` | 上の 3 つの読み元 (既定 `$HOME/pgfs_test.toml`)。マウントに使った設定ファイルを渡す。以前は DB `pgfs` / schema `pgfs` の決め打ちで、別の DB / schema でマウントすると別の FS を見て落ちた |
 
 ## 出力例
 

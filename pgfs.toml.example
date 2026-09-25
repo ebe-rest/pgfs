@@ -22,14 +22,13 @@ database.connection = "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Data
 # ----- database structure -----
 database.schema = "public"
 database.prefix = "pgfs_"
-# database.tablespace / database.tablespace_path are **SaveTo=DB** fs-identifying information (given with
-# mkfs `--tablespace` / `--tablespace-path` -> stored in pgfs_settings). They are not written into the
-# generated toml. Overriding them from a settings file is not intended (the same treatment as the
-# file_system keys below).
+# database.tablespace / database.tablespace_path / database.citus / database.shard_count / database.shard_replication_factor
+# are mkfs's **creation-only instructions** (since v0.2.1 they are stored nowhere). They have no effect on an existing
+# DB, and whether a DB is Citus is decided by what the DB actually is. They are not written in the toml.
 
 # ----- file system settings (fixed when the FS is created) -----
 # file_system.* (cluster_size / default_chunk_size / max_file_size / volume_label / version) and
-# app.statfs / database.citus / app.plperlu are **SaveTo=DB** FS-identifying information. They are stored
+# app.statfs / app.plperlu / app.enforce_permissions / audit.enabled / file_system.unknown_name are **SaveTo=DB** FS-identifying information. They are stored
 # into pgfs_settings at mkfs time and every client reads them from there. **They are not written in the
 # toml** (and are not emitted into the generated toml either). cluster_size / default_chunk_size in
 # particular can corrupt data when the value differs between clients, so the single copy in the DB is
@@ -66,12 +65,8 @@ database.prefix = "pgfs_"
 # mount.write_back_flush_timeout_ms = 30000   # the longest back-pressure may block / the deadline for writing everything out at unmount.
 #                                             #   0 means do not wait. Whatever could not be written within the deadline
 #                                             #   is enumerated in the Error log and mount.pgfs exits with 4.
-# mount.fallback_uname = "nobody"             # the fallback when uname resolution fails (on Windows, "Guest" or similar is recommended)
-# mount.fallback_gname = "nogroup"            # the fallback when gname resolution fails (on Windows, "Guests")
-# Note: fallback_uname / fallback_gname are SaveTo=DB, so they are read from pgfs_settings.
-# Giving them in pgfs.toml makes them win over the DB value, just as a CLI argument does, but when the same
-# FS is mounted from several machines the intended operation is to manage them centrally on the DB side
-# (at mkfs time, or with a later UPDATE).
+# mount.self_uname = ""                      # the name this client calls itself (a supplement, since v0.2.1). Given to what the user running this mount creates
+# mount.self_gname = ""                      # the same for the group. Empty means the usual rules (the old mount.fallback_uname / fallback_gname were retired)
 
 # ----- database connection retry -----
 # database.retry_max_attempts = 5             # the maximum number of attempts for a transient failure when opening a connection (including the first)

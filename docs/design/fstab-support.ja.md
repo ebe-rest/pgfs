@@ -137,7 +137,7 @@ postgresql://pgfs@pgsql_server/pgfs   /mnt/pgfs   pgfs   _netdev,allow_other,def
 | `-s <name>` / `--schema` / `--schema-name` | `database.schema` | **`-s` は直接実行時のみ有効** (helper context では `--sloppy`)。`--schema` は常時 OK |
 | `-x` / `--prefix` | `database.prefix` | テーブル名接頭辞 |
 | `--cache-max-entries <N>` | `mount.cache_max_entries` | |
-| `--fallback-uname <name>` / `--fallback-gname <name>` | `mount.fallback_uname` / `_gname` | OS で uname 解決不能時の逃げ先 |
+| `--self-uname <name>` / `--self-gname <name>` | `mount.self_uname` / `self_gname` | 自分の名乗り (v0.2.1〜。旧 `--fallback-uname` / `--fallback-gname` は廃止) |
 | `--log-level <level>` / `--log-output <spec>` | `logging.level` / `logging.output` | |
 | `--foreground` | `mount.foreground` | デーモン化を抑制。短縮形 `-f` は setting.file と衝突するため [意図的に持たない](#短縮形の衝突) |
 | `--retry-max-attempts` / `--retry-initial-delay-ms` / `--retry-max-delay-ms` | `database.retry_*` | 接続オープン時の transient エラー再試行 |

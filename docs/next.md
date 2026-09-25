@@ -18,6 +18,8 @@
 
 ## Where things stand (in a line)
 
+**v0.2.1 is implemented** (where settings live, the Windows permission check, deleting a filesystem from its database topology and `mkfs --purge`; [CHANGELOG.md](../CHANGELOG.md) lists every change and [history.md](history.md) why).
+
 **v0.2.0 (the Core/Fuse/Dokan split plus the in-house FUSE binding) is implemented**, and
 **the operations phase is implemented apart from the Phase 5 GUI and the 1c read-ahead**. The caches (1a/1b),
 the data write-back (1d), the metadata write-back (1e, stages 1 and 2 plus every finding of review rounds A and
@@ -73,7 +75,7 @@ The main decisions of A (the details and the grounds are in [v0.2.0-plan.md](des
 
 | # | The item | What it is | The scale |
 |---|---|---|---|
-| 4 | **The Linux-Windows interoperability of the ACLs and the permissions** - the main purpose is achieved; only what remains | [permission-interop.md](design/permission-interop.md) is the source of truth for the design and [permission-interop-diagram.html](design/permission-interop-diagram.html) for the diagram. The 5 immediate items plus the ACL proper 3-0 to 3-3 (the canonical model [PgfsAcl](../src/core/src/Models/PgfsAcl.cs) / the Windows read and write projection / the Linux POSIX ACL [PosixAcl](../src/fuse/src/PosixAcl.cs)) are complete and regressed. **Remaining**: converting the Windows inheritance of `system.posix_acl_default`, and an automated test of the cross-OS round trip. 3-4 (the strict enforcement of a named ACL) is held back awaiting a requirement ([permission-interop.md, re-evaluating Phase 3-4](design/permission-interop.md)) | Only what remains |
+| 4 | **The Linux-Windows interoperability of the ACLs and the permissions** - the main purpose is achieved; only what remains | [permission-interop.md](design/permission-interop.md) is the source of truth for the design and [permission-interop-diagram.html](design/permission-interop-diagram.html) for the diagram. The 5 immediate items plus the ACL proper 3-0 to 3-3 (the canonical model [PgfsAcl](../src/core/src/Models/PgfsAcl.cs) / the Windows read and write projection / the Linux POSIX ACL [PosixAcl](../src/fuse/src/PosixAcl.cs)) are complete and regressed. **Since v0.2.1 Windows checks the mode and the named ACL itself** (in POSIX order; `app.enforce_permissions`). **Remaining**: converting the Windows inheritance of `system.posix_acl_default`, an automated test of the cross-OS round trip, and the strict enforcement of a named ACL on Linux (held back awaiting a requirement; [permission-interop.md](design/permission-interop.md)) | Only what remains |
 | 5 | **Junctions and native links** (the Assign side) | The `pgfs_inode.is_junction` column already exists and the Linux side substitutes a symlink. **A reachability PoC was done on 2026-09-19 = with the current binding neither creating nor reading works**: `IDokanOperations2` has no link callbacks and there is no entry point for getting or setting the reparse data. Measured, `mklink /H`, `/J`, `/D` and `File.CreateSymbolicLink` all fail, and **a symlink of Linux origin disappears from the enumeration and opens as an empty file when named directly**. -> **An addition to DokanNet / Dokany or a switch to WinFsp is a precondition.** [windows-parity.md, the reachability PoC for native links](design/windows-parity.md) is the source of truth | Large (it involves changing the binding or the backend) |
 | 6 | **ADS (Alternate Data Streams)** (Windows) | The NTFS-compatible `:streamname` through Dokan. It needs the data model extended | Large |
 
@@ -141,6 +143,8 @@ consolidation see [docs/tests.md](tests.md).
 |---|---|---|
 | 19 | **Separating out `pgfs_inode_lock`** | Phase 3 started with a single `pgfs_lock` plus the sign namespace. If the asymmetric cost ([support_for_citus.md, the Phase 3 caveats](design/support_for_citus.md)) shows up in a workload dominated by inode locks, it becomes a separate table |
 | 20 | **Considering multi-coordinator HA Citus** | Whether Enterprise Citus is in scope |
+| 27 | **Client installers** | Packages (or install scripts) for mount.pgfs / assign.pgfs / pgfsctl that can be handed out together with the `pgfs.toml` mkfs writes: the install locations, the logon task or fstab entry, the Dokan / libfuse3 prerequisites. The `pgfs.toml` holds the connection's password, so how the bundle is handed out needs care |
+| 28 | **An immutable attribute** | A per-file "cannot be changed or deleted" flag kept by pgfs itself (Linux `chattr +i`, shown on Windows as read-only), so that "not deletable" means the same on both operating systems. Today a file with every write bit removed cannot be deleted from Windows but can be from Linux |
 | 21 | **Distributing `pgfs_inode` on the id** | The alternative of guaranteeing the `(parent_id, name)` UK at the application layer. To be reconsidered if the cost of a cross-shard rename becomes a problem |
 
 ---
@@ -153,6 +157,7 @@ history see [history.md](history.md).
 
 | The completed item | The authoritative document |
 |---|---|
+| **v0.2.1** (where settings live, the Windows permission check, deleting from the database topology, `mkfs --purge`, `--version`) | [CHANGELOG.md](../CHANGELOG.md) / [history.md](history.md) / [Mkfs.md](Mkfs.md) / [permission-interop.md](design/permission-interop.md) |
 | **v0.2.0** (the Core/Fuse/Dokan split plus the in-house libfuse binding) | Above / [v0.2.0-plan.md](design/v0.2.0-plan.md) / [fuse-binding.md](design/fuse-binding.md) |
 | The Mount `-o` support | [Mount.md, the mount options](Mount.md) |
 | The byte-string transparency of the xattr | [xattr-bytea.md](design/xattr-bytea.md) |

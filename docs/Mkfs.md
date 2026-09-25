@@ -8,9 +8,9 @@
 > tables on the Mount / Assign side defer to it.
 >
 > **[design/settings-matrix.md](design/settings-matrix.md) is the source of truth for the complete table of all
-> 44 settings.** This document lists **only what is meaningful from mkfs's CLI**, and
-> **what only takes effect at mount time** (`mount.max_write` / `mount.fallback_uname` /
-> `mount.fallback_gname` / `mount.foreground` / `database.retry_*` / `database.notify_enabled` and so on)
+> the settings.** This document lists **only what is meaningful from mkfs's CLI**, and
+> **what only takes effect at mount time** (`mount.max_write` /
+> `mount.foreground` / `database.retry_*` / `database.notify_enabled` and so on)
 > **is deliberately left out**.
 > **"Not here" does not mean "it does not exist"**, so look at the matrix when checking every setting
 > (what once said "the defaults table of every setting" was narrowed to match reality).
@@ -61,9 +61,9 @@ The entry point is [src/mkfs/src/Program.cs](../src/mkfs/src/Program.cs).
 # a development build (bin/Debug/mkfs.pgfs.{dll,exe})
 dotnet build src/mkfs/Mkfs.csproj
 # running during development
-dotnet run --project src/mkfs -- [options]
+dotnet run --project src/mkfs -- -f pgfs.toml [options]
 # or the built executable
-./bin/Debug/mkfs.pgfs [options]
+./bin/Debug/mkfs.pgfs -f pgfs.toml [options]
 
 # a self-contained publish (bin/Publish/mkfs.pgfs[.exe] - single-file, the host RID automatically)
 dotnet publish src/mkfs/Mkfs.csproj -c Release
@@ -143,9 +143,16 @@ so a single source in the database is correct (moved from File to Db; for the de
 | `--cluster-size` | The cluster size (in bytes) | `4096` |
 | `--default-chunk-size` | The bytea chunk size (in bytes) | `1048576` (1 MiB) |
 | `--max-file-size` | The maximum file size (in bytes; `-1` for unlimited) | `1099511627776` (1 TiB) |
-| `--version` | The filesystem version | `1.0.0` |
+| `--fs-version` | The filesystem version (renamed from `--version` in v0.2.1) | `1.0.0` |
 
-### The feature flags (stored in the database, common to every client)
+**The permissions of the root directory** (since v0.2.1) are an mkfs-only action that is kept neither in the
+database nor in the toml:
+
+| The option | What it is | The default |
+|---|---|---|
+| `--root-access owner\|everyone` | The permissions of the root directory (inode 0) **when it is newly created**. `owner` = `root:root 0755` (Administrators can write from Windows) / `everyone` = `root:root 1777` (anyone can write, and only the creator can delete = the same sticky bit as `/tmp`; Everyone can write from Windows). **If the root already exists it is left unchanged and a Warning is printed** (to change it, mount and `sudo chmod`). Windows does not enforce the mode, so the sticky bit only has an effect on Linux | `owner` |
+
+### The feature flags (stored in the database, common to every client; changed after creation with `pgfsctl config set`)
 
 These are saved in `pgfs_settings` and read from the database by mount and assign at startup (they are not
 written into the TOML).
@@ -175,17 +182,52 @@ written into the TOML).
 
 | The option | What it is | The default |
 |---|---|---|
-| `-f`, `--setting`, `--setting-file` | The settings file path | `pgfs.toml` |
-| `--setting-path`, `--setting-search-path`, `--setting-file-path`, `--setting-file-search-path` | The search path for the settings file (several may be given) | The current directory -> `~/.config/pgfs` -> `~/.config` -> `~` -> `LocalAppData/pgfs` -> `AppData/pgfs` |
+| `-f`, `--setting`, `--setting-file` | **The location of the settings file (mandatory for mkfs, since v0.2.1)**. If it exists it is read and written back there at the end; if not it is created. With `--clean` it is overwritten without being read | (mandatory) |
+| `--setting-path`, `--setting-search-path`, `--setting-file-path`, `--setting-file-search-path` | The search path for the settings file. **mkfs does not use it** (giving it prints a Warning; it is for mount / assign / pgfsctl) | - |
 
 ### The rest
 
 | The option | What it is |
 |---|---|
 | `-?`, `-h`, `--help` | Show the help and exit |
-| `--clean` | Ignore any existing `pgfs.toml` and `DROP DATABASE` before recreating. No short form. The tablespace and the role (the PGFS user) are not discarded, so the owner and the tablespace are kept across the recreation. If other clients are connected, they are forcibly disconnected with `pg_terminate_backend` |
+| `--version` | Show the program's version and exit (since v0.2.1; the same for mount / assign / pgfsctl) |
+| `--clean` | Ignore any existing `pgfs.toml` and `DROP DATABASE` before recreating. No short form. The tablespace and the role (the PGFS user) are not discarded, so the owner and the tablespace are kept across the recreation. **Before removing anything it checks for connections and asks for confirmation** (see "The confirmation before removing" below; since v0.2.1) |
+| `--purge` | **Remove and stop there** (since v0.2.1). `DROP DATABASE` the database at the connection target of the `-f` settings file and, on Citus, the database of the same name on every worker. **Nothing is recreated and no settings file is written**. It cannot be given together with `--clean` (exit 2). See "`--purge`" below |
+| `--yes`, `-y` | **Skip the confirmation** of `--clean` / `--purge` (for scripts). **When non-interactive (stdin is not a terminal) and it is not given, nothing is removed and the exit code is 3** |
+| `--now` | With `--clean` / `--purge`, **disconnect what is connected (live mounts / other connections) without waiting, and go on**. Without it, an interactive run keeps asking "retry?", and a non-interactive run exits with 3 |
 
 ## The settings file (pgfs.toml)
+
+### What goes into the toml that mkfs writes out for distribution (since v0.2.1)
+
+At the end, mkfs writes out a `pgfs.toml` to hand out to the other clients. **Only these two kinds of item go
+into it**:
+
+1. **The core of the connection** - `database.connection` (the Password is written as it is; it is masked in the
+   mkfs command line in the leading comment) / `database.schema` / `database.prefix`. Always written.
+2. **The `SaveTo=File` items given explicitly on the CLI or in the TOML that was read** - including the items for
+   mount / assign such as `--notify` / `--no-notify`, `-m` (mount_point) and `--write-back`.
+   **Even an item that has no effect on mkfs itself stays in the toml if it is given explicitly** (the lines
+   marked `[written to pgfs.toml for mount/assign]` in `mkfs --help`).
+   **Only `database.workers` is an exception and is not written** (it is mkfs-only and means nothing to the
+   clients it is handed to, and writing it would make a later mkfs without `--clean` register the workers on
+   its own).
+
+**Items left at their defaults are not written**. Writing them would pin the default on the clients, and they
+would not follow a default changed in a later version (for example, v0.2.1 changed the default of
+`database.notify_enabled` to true, but a toml written by the v0.2.0 mkfs that contains `false` does not follow).
+**`mount.mount_point` is also written only when given explicitly** - a toml written on Linux can be handed to
+Windows without rewriting it (the mount target is each OS's default, `/mnt/pgfs` / `P:`).
+
+The `SaveTo=Db` items (the tablespace / the file_system size settings / audit / statfs / plperlu and others)
+have the database as the source of truth, so they do not appear in the toml.
+
+**The only place it is written to is the location given with `-f`** (since v0.2.1; mandatory). Up to v0.2.0 it
+looked for a toml along the default search path (the current directory -> `~/.config/pgfs` -> ... ->
+`LocalAppData/pgfs`) and **wrote back to where it was found**, so it could read and overwrite the toml used by
+a resident mount (for example `%LOCALAPPDATA%\pgfs\pgfs.toml`).
+
+### The format
 
 TOML, with the hierarchy expressed in dot notation.
 
@@ -343,12 +385,12 @@ redistributes the data into the shards, so it is behind an explicit flag; it is 
 
 ```bash
 # a single-node configuration (no workers; the coordinator holds the shards itself)
-mkfs.pgfs --clean --citus \
+mkfs.pgfs -f pgfs.toml --clean --citus \
     -c     "Host=coord;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" \
     --super "Host=coord;Port=5432;Username=postgres;Password=postgres;Database=postgres"
 
 # a multi-node configuration (a coordinator plus worker1 plus worker2)
-mkfs.pgfs --clean --citus \
+mkfs.pgfs -f pgfs.toml --clean --citus \
     -c     "Host=coord;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" \
     --super "Host=coord;Port=5432;Username=postgres;Password=postgres;Database=postgres" \
     --worker "w1:5432,w2:5432"
@@ -361,8 +403,14 @@ mkfs.pgfs --clean --citus \
   worker. The LOCATION directory is created automatically by plperlu, owned by postgres at 0700, with
   `--allow-plperlu` (allow by default) when `--tablespace-path` is given. For the details see
   [settings-and-plperlu.md](design/settings-and-plperlu.md).
-- `--clean --citus` DROPs the worker databases **only on the workers given with `--worker`**. Removing a worker
-  from the configuration needs the pgfs database on that worker DROPped by hand.
+- **The workers that `--clean` removes are decided by what is actually in the database (`pg_dist_node`)**
+  (since v0.2.1). Even without `--worker`, the database of the same name is removed on every worker of the
+  current configuration (up to v0.2.0 only the workers given with `--worker` were covered, and forgetting it
+  left the database behind on the workers).
+  **If even one worker cannot be reached, it stops without removing anything** (the node names in
+  `pg_dist_node` are the names as seen from the coordinator, so they have to be reachable from the host that
+  runs mkfs). Take an unused worker out first with `citus_remove_node` on the coordinator.
+  `--worker` is relied on only when the coordinator's database no longer exists.
 - In a multi-node configuration the PG on the worker side also needs `shared_preload_libraries = 'citus'` set.
 
 ### The behaviour in detail and the verification
@@ -379,25 +427,97 @@ Every `CREATE` issues an existence-check SQL statement beforehand.
 
 | The subject | The existence check | What happens when it exists |
 |---|---|---|
-| The user | `pg_user.usename` | Skipped (the password is not changed) |
-| The tablespace | `pg_tablespace.spcname` | Skipped |
+| The user | `pg_user.usename` | Skipped (the password is not changed). On the workers it is ensured only when the database is created (`--clean` or no database) |
+| The tablespace | `pg_tablespace.spcname` | Skipped. **Ensured only when the database is created** (an existing database does not use it) |
 | The database | `pg_database.datname` | Skipped |
 | The schema | `pg_namespace.nspname` | Skipped |
 | A table | `pg_class` plus `pg_namespace` | Skipped |
 | The root inode | `INSERT ... ON CONFLICT (parent_id, name) DO NOTHING` | Not inserted |
-| A settings row | `INSERT ... ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value` | The value is overwritten |
+| A settings row | Rows in `pgfs_settings` mean an existing FS | **The FS-specific settings take the value in the database** (since v0.2.1; see "Running it again on an existing FS" below). Only the items added in later versions are added |
+
+### Running it again on an existing FS (since v0.2.1)
+
+The settings fall into three groups: **client-specific** (the toml - the connection target, `mount.*`, notify,
+logging, retries) / **FS-specific** (the database - `audit.enabled`, `app.statfs`, `app.plperlu`,
+`file_system.*`) / **instructions only for creation** (kept nowhere - `--clean`, `--root-access`, `--worker`,
+`--citus`, `--shard-count`, `--rf`, `--tablespace`, `--tablespace-path`).
+
+- **The FS-specific settings are decided once, when the FS is created**. Running mkfs again on an existing FS
+  without `--clean` uses the values in the database, and a different value given on the CLI is not applied;
+  a Warning is printed instead ("this has no effect on an existing FS; use `pgfsctl config set` to change
+  it"). Up to v0.2.0 they were silently overwritten by the CLI or the defaults.
+- **The instructions only for creation**: `--tablespace` / `--tablespace-path` / `--worker` have no effect on an
+  existing database and print a Warning. **For an existing database nothing is created on the workers or in
+  the tablespace** (v0.2.1; before, the user and the tablespace were ensured before the database existence
+  check, so roles were created on every `--worker` node even for an existing database).
+  **Whether it is Citus is decided by what is actually in the database** (whether the `citus` extension is
+  there), **in both directions** - a database that is already Citus distributes the tables added later even
+  without `--citus`, and **giving `--citus` to a database that is not Citus does not make it Citus** (a
+  Warning; to make it Citus, recreate it with `--clean`. Before, it tried to distribute the tables of a new
+  schema and failed). Workers are added with `citus_add_node` on the coordinator. The tablespace that the
+  statfs function measures is also taken from what is actually in the database (`pg_database`).
+- `--distribute-existing` is an instruction for an existing FS, so it takes effect as before.
 
 ### Recreating with `--clean`
 
 With `--clean`, a **`DROP DATABASE`** runs before the database creation and then the series of `CREATE`s.
 
 - **What is removed**: the target database (along with the `pgfs_*` tables, the root inode, the settings rows
-  and the bytea chunks inside it)
+  and the bytea chunks inside it). On Citus, **also the database of the same name on every worker in
+  `pg_dist_node`** (see the constraints of the Citus distribution above)
 - **What is not removed**: the tablespace, the PGFS user (the role) and the superuser connection details
 - **The settings file**: any existing `pgfs.toml` is **not read** (it starts as if the file did not exist). Only
   the CLI arguments apply, and a new `pgfs.toml` is written out at the end.
-- **Other clients' connections**: they are forcibly disconnected with `pg_terminate_backend` before the DROP.
-  A mounted mount.pgfs or assign.pgfs should be stopped beforehand.
+- **Other clients' connections**: **they are counted and shown, and nothing is removed until they are gone**
+  (since v0.2.1; see "The confirmation before removing" below). Up to v0.2.0 they were silently disconnected
+  with `pg_terminate_backend`. To disconnect them without waiting, use `--now`.
+
+### `--purge` (remove and stop there; since v0.2.1)
+
+This is `--clean` without the "recreate". **What it removes is the connection target of the `-f` settings file**
+(exit 2 if there is no settings file. The toml actually in use has to be given, so that a mistyped connection
+string does not remove a different FS).
+
+- **What is removed**: the target database. On Citus, also the database of the same name on every worker in
+  `pg_dist_node` (see the constraints of the Citus distribution).
+- **What is not removed**: the role, the tablespace and the settings file (the `-f` toml).
+- Given together with `--clean`, it is unclear which was meant, so it does nothing and exits with 2.
+- Before removing, what will be removed can be checked with the `target` / `citus` of
+  `pgfsctl status -f <the same toml>` ([Pgfsctl.md](Pgfsctl.md)).
+
+```bash
+pgfsctl status -f /etc/pgfs.toml          # check the target (host:port/db) and the citus nodes
+mkfs.pgfs --purge -f /etc/pgfs.toml       # what is connected -> the confirmation (y/N) -> remove
+```
+
+### The confirmation before removing (`--clean` / `--purge`; since v0.2.1)
+
+The order is **look up the configuration in the database -> can the workers be reached -> what is connected ->
+the confirmation -> remove**. **`--now` takes out only "what is connected", and `--yes` only "the
+confirmation"** (to take out both, `--yes --now`).
+
+1. **What is connected** is counted and shown as a list:
+   - **Live mounts** - the rows whose heartbeat is within 90 seconds in the `*mounts` table of every schema in
+     the target database (the same as live in `pgfsctl status`). The host and the mountpoint are shown.
+   - **Other connections** - the client backends in `pg_stat_activity` (excluding itself = application_name
+     `mkfs.pgfs`, and Citus's internal connections). On Citus, also the database of the same name on each
+     worker. The count per application_name is shown.
+
+   | Given | Interactive (with a terminal) | Non-interactive |
+   |---|---|---|
+   | With `--now` | Disconnect and go on (`pg_terminate_backend` at the time of removing) | The same |
+   | Without `--now` | **Keep asking "retry? (y/n)"**. y counts again, and 0 moves on. n does nothing and exits with 3 | Do nothing and exit with 3 |
+
+   Between the retries, the mounts can be taken down (`umount` / `dokanctl /u`) or the other side checked with
+   `pgfsctl status`.
+2. **The confirmation**: the connection target (`host:port/db`), **every schema in the database** (`--clean` /
+   `--purge` remove the whole database, so schemas other than the one given are removed too) and the Citus
+   workers are shown, with "remove? (y/N)".
+   With `--yes` they are only shown. **Non-interactive without `--yes` removes nothing and exits with 3**.
+3. Remove.
+
+**The exit codes**: 0 = success / 1 = failure / 2 = a wrong argument (`--clean --purge` / `--purge` with no
+settings file) / **3 = aborted (nothing removed)**.
 
 ## The Linux-specific points
 

@@ -28,6 +28,37 @@ its own is gathered here (where a feature document exists, that one is authorita
 
 ---
 
+## v0.2.1 - where settings live, permissions on Windows and deleting a filesystem (complete)
+
+v0.2.1 is a release of corrections found while running v0.2.0 across several machines. **Each item's source of
+truth is the linked document**; this entry only keeps why things were decided the way they were.
+
+- **Settings fall into three kinds and each kind has one home**: client-specific settings (the connection, `mount.*`,
+  notify, logging, retries) live in `pgfs.toml`; filesystem-specific settings (`audit.enabled`, `app.*`,
+  `file_system.*`) live in the database and are fixed when the filesystem is created; creation-only instructions
+  (`--clean`, `--root-access`, `--citus`, `--worker`, `--shard-count`, `--rf`, `--tablespace`) are stored nowhere.
+  v0.2.0 wrote some of each kind to the wrong place, so running mkfs again silently overwrote filesystem settings and
+  a `pgfs.toml` could register Citus workers by itself. The consequence that stayed visible: **whether a filesystem
+  is Citus is read from the database itself** (the `citus` extension and `pg_dist_node`), never from a setting
+  ([Mkfs.md](Mkfs.md)).
+- **mkfs needs the settings file's location (`-f`)** and no longer searches the default paths, because a search could
+  pick up (and then overwrite) the `pgfs.toml` of a mount that runs at logon.
+- **Names that cannot be resolved are shown the way the OS shows them** (the kernel's overflowuid / overflowgid on
+  Linux, `ANONYMOUS LOGON` on Windows) instead of configurable fallback names, and the name recorded when the
+  creator's name is unknown is the filesystem setting `file_system.unknown_name`. What a client calls itself
+  (`mount.self_uname` / `self_gname`) is a separate, client-side declaration
+  ([permission-interop.md](design/permission-interop.md)).
+- **Windows checks POSIX permissions itself**, because Dokan does not check access against the security descriptor
+  the filesystem returns. The check follows the POSIX order rather than Windows's union of ACEs so that both
+  operating systems give the same answer; the read-only attribute was changed to "nobody can write" at the same
+  time, since judging it by the mounting user made other people's files undeletable from Windows
+  ([permission-interop.md](design/permission-interop.md)).
+- **Deleting a filesystem finds its nodes in the database** (`pg_dist_node`), refuses to start unless every worker is
+  reachable, counts what is still connected and asks before it drops anything; `mkfs --purge` deletes without
+  re-creating ([Mkfs.md](Mkfs.md)).
+- **The root inode is re-read after a remote change**; it had been read once at mount time, so a `chmod` of the root
+  on one mount stayed invisible on the others until they remounted ([cache.md](design/cache.md)).
+
 ## Turning the inode UPDATEs into router queries - resolving the Citus distributed deadlock (complete)
 
 `{prefix}inode`'s UPDATEs had only `WHERE id = @id`, which does not include the distribution key (`parent_id`),

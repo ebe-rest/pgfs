@@ -16,7 +16,7 @@ End-to-end tests that exercise the implemented features ([docs/Mount.md](../../d
 | [startup.sh](startup.sh) | **Dedicated to the start-up contracts** (10 tests). The treatment of `-o` / `started (pid N)` / the fallback of owner resolution. It mounts and remounts on its own |
 | [prune.sh](prune.sh) | **Dedicated to `pgfsctl prune`** (11 tests). Cleaning up what an abnormal exit left behind. **psql is required** (to make the artificial leftovers). It mounts and remounts on its own and also makes a real `.fuse_hidden` leftover with `kill -9` |
 | [handles.sh](handles.sh) | **Dedicated to handle leaks** (**11 tests**). It reads the `handles` line of `pgfsctl status` and confirms that every borrowed handle comes back. **psql is required** (to fire a ping that makes a snapshot be written). It mounts and remounts on its own |
-| [crossclient.sh](crossclient.sh) | **Dedicated to cross-client** (**18 tests**). Mounts the same DB-FS **twice** and looks at visibility (the Linux version of Windows's [crossclient.ps1](../windows/crossclient.ps1)). It establishes both mounts itself |
+| [crossclient.sh](crossclient.sh) | **Dedicated to cross-client** (**19 tests**). Mounts the same DB-FS **twice** and looks at visibility (the Linux version of Windows's [crossclient.ps1](../windows/crossclient.ps1)). It establishes both mounts itself |
 | [negcache.sh](negcache.sh) | **Dedicated to the negative lookup cache** (7 tests). The visibility contract of `mount.negative_cache_ttl_ms`. It mounts and remounts on its own, and a direct psql INSERT stands in for the other client |
 | [run.cmd](run.cmd) | Runs **only** the tests (assuming it is already mounted) |
 | [flow.ps1](flow.ps1) | **The whole flow**: rsync -> publish -> mount -> test -> unmount (PowerShell) |
@@ -144,7 +144,7 @@ Environment variables: `PGFS_SETTING_FILE` / `MOUNT_ROOT` (A, default `$HOME/mnt
 **`PGFS_XC_WAIT`** (the upper bound in seconds for waiting on visibility, default 10).
 
 > ⚠ **Both mounts are started with `--notify`.** Cross-client visibility depends entirely on
-> `database.notify_enabled`, and with the default (false) another mount's creations / overwrites /
+> `database.notify_enabled`, and with false (the default up to v0.2.0) another mount's creations / overwrites /
 > deletions / replacement renames **stay invisible indefinitely** (the same note as in [Assign.md](../../docs/Assign.md)).
 > The script passes it itself, so the caller needs no configuration.
 
@@ -394,6 +394,8 @@ TEST_FILTER=xattr bash tests/linux/e2e.sh /mnt/pgfs
 |---|---|
 | `TEST_FILTER` | run only tests whose name partially matches |
 | `PGFS_TEST_PG_EXEC` | override the full psql invocation used by `test_fallback_uname_gname` (default: invoke the source-built psql on pgsql_server over ssh). To point at docker Citus, set `docker exec -i <container> psql ...`. Used by [tests/citus/race_multinode.sh](../citus/race_multinode.sh) |
+| `PGFS_SCHEMA` / `PGFS_PREFIX` / `PGFS_DB` | the FS that `test_fallback_uname_gname` looks at (`<schema>.<prefix>inode`, and the `-d` of the default ssh path). **If unset, read from `PGFS_SETTING_FILE`**. docker ([run.sh](../docker/run.sh)) and race_multinode pass `PGFS_SCHEMA`. **If the database name is unknown, it skips without running psql** (so as not to hit the default database and rewrite another FS). If the table is missing it fails with "looking at another database / schema" |
+| `PGFS_SETTING_FILE` | where the 3 above are read from (default `$HOME/pgfs_test.toml`). Pass the settings file used for the mount. It used to hardcode database `pgfs` / schema `pgfs`, so mounting with another database / schema made it look at another FS and fail |
 
 ## Example output
 

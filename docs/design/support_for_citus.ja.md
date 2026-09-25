@@ -307,10 +307,10 @@ mkfs に 2 つの新フラグ:
 
 ```bash
 # 1 ノード Citus (coordinator のみ、shard も coordinator が持つ)
-mkfs.pgfs --clean --citus -c "Host=coord;..." --super "..."
+mkfs.pgfs -f pgfs.toml --clean --citus -c "Host=coord;..." --super "..."
 
 # 多ノード Citus (coordinator + worker1 + worker2)
-mkfs.pgfs --clean --citus \
+mkfs.pgfs -f pgfs.toml --clean --citus \
     -c     "Host=coord;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" \
     --super "Host=coord;Port=5432;Username=postgres;Password=postgres;Database=postgres" \
     --worker "w1:5432,w2:5432"
@@ -318,7 +318,10 @@ mkfs.pgfs --clean --citus \
 
 mkfs --citus は **DB を新規作成するときのみ** Citus のセットアップを行う:
 
-1. **worker bootstrap** (Phase 1): 各 `--worker` 上に super 接続で `EnsureUser` → (`--clean` なら DropDatabase) → `CREATE DATABASE pgfs` → `CREATE EXTENSION IF NOT EXISTS citus`
+0. **`--clean` の削除** (v0.2.1〜): **消すノードは DB の実体で決める** — coordinator の対象 DB があれば、その DB の `pg_dist_node` (groupid 0 = coordinator を除く全ノード) の同名 DB → coordinator の DB の順に DROP する。
+   **`--citus` / `--worker` は消す側では使わない** (作り直す側の指示)。coordinator の DB が無いときだけ `--worker` を当てにする。**消す前に全 worker へ繋がるか確かめ、1 つでも繋がらなければ何も消さない**
+   (途中で止まると coordinator だけ消えて worker にゴミが残るため。使っていない worker は先に `citus_remove_node`)。消したあと接続プールを空にする (`Pg.ClearPools` — DROP で切られた接続を作り直した DB への操作が拾わないように)。
+1. **worker bootstrap** (Phase 1): 各 `--worker` 上に super 接続で `EnsureUser` → `CREATE DATABASE pgfs` → `CREATE EXTENSION IF NOT EXISTS citus`
 2. **coordinator DB ensure** (Phase 2): coordinator 上に super 接続で `CREATE DATABASE pgfs`
 3. **Citus topology** (Phase 3):
    ```sql

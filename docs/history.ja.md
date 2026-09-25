@@ -21,6 +21,28 @@
 
 ---
 
+## v0.2.1 — 設定の置き場・Windows の権限・FS の消し方 (完了)
+
+v0.2.1 は、v0.2.0 を複数台で運用して見つかった点を直した版である。**各項目の正はリンク先**で、ここには「なぜそう決めたか」だけを残す。
+
+- **設定は 3 種類に分かれ、それぞれ置き場は 1 つ**: クライアント固有 (接続先・`mount.*`・notify・ログ・リトライ) は `pgfs.toml`、FS 固有
+  (`audit.enabled`・`app.*`・`file_system.*`) は DB (FS を作るときに決まる)、作るときだけの指示 (`--clean`・`--root-access`・`--citus`・`--worker`・
+  `--shard-count`・`--rf`・`--tablespace`) はどこにも残さない。v0.2.0 はそれぞれの一部を違う場所に書いていたので、mkfs の打ち直しが FS の設定を黙って
+  上書きし、`pgfs.toml` が Citus の worker を勝手に登録することがあった。見える形で残った帰結は **「Citus かどうかは DB の実体で読む」**
+  (`citus` 拡張と `pg_dist_node`。設定は見ない) — [Mkfs.ja.md](Mkfs.ja.md)。
+- **mkfs は設定ファイルの場所 (`-f`) を必須にし、既定の探索パスを使わない**。探すと、ログオン時に常駐するマウントの `pgfs.toml` を拾って
+  そこへ書き戻し得るため。
+- **解決できない名前は OS の見せ方で見せる** (Linux はカーネルの overflowuid / overflowgid、Windows は `ANONYMOUS LOGON`)。設定できる fallback 名は
+  やめ、作った人の名前が分からないときに記録する名前は FS 固有の `file_system.unknown_name` にした。クライアントの名乗り (`mount.self_uname` /
+  `self_gname`) はそれとは別の、クライアント側の宣言である ([permission-interop.ja.md](design/permission-interop.ja.md))。
+- **Windows は POSIX の権限を自前で判定する**。Dokan はファイルシステムが返したセキュリティ記述子でアクセス判定をしないため。両 OS で同じ答えに
+  なるよう、Windows の ACE の和ではなく POSIX 順で判定する。同時に読み取り専用属性を「誰も書けない」ときだけにした — マウントしたユーザー基準で
+  決めていたので、他人のファイルが Windows から消せなかった ([permission-interop.ja.md](design/permission-interop.ja.md))。
+- **FS を消すときはノードを DB (`pg_dist_node`) から調べ**、全 worker に届かなければ始めず、接続中のものを数え、消す前に確認を取る。
+  `mkfs --purge` は作り直さずに消す ([Mkfs.ja.md](Mkfs.ja.md))。
+- **root inode は他のマウントの変更で読み直す**。マウント時に 1 回読んだきりだったので、あるマウントで root を `chmod` しても、他のマウントは
+  再マウントするまで古い値のままだった ([cache.ja.md](design/cache.ja.md))。
+
 ## inode UPDATE の router 化 — Citus の分散デッドロック解消 (完了)
 
 `{prefix}inode` の UPDATE が `WHERE id = @id` だけだったため、分散キー (`parent_id`) を含まず **Citus が全 shard に配っていた** (`EXPLAIN` の Task Count = shard 数)。実害は (a) 1 メタデータ更新が「shard 数 × placement 数」のリモート文になる (b) shard ロックの取得順が非決定的で並行時に `40P01 distributed deadlock` が起きる、の 2 つ。**700 ファイルの `rsync -a` (毎ファイル chmod + utime) で実際に 2 件落ちた** (rsync exit 23)。Linux e2e 38 件は並行度が低く露見しなかった。

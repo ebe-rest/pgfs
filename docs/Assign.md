@@ -66,8 +66,9 @@ dotnet run --project src\assign -- `
     -c "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" `
     -m P:
 
-# the help
+# the help / the version
 dotnet run --project src\assign -- --help
+dotnet run --project src\assign -- --version
 ```
 
 > **Unmounting**: Ctrl+C requests an unmount. `dokanctl /u <mountpoint>` in another terminal works too.
@@ -104,6 +105,69 @@ It is made to build on Linux/macOS (for cross-compilation). On an ordinary start
 an `OperatingSystem.IsWindows()` guard emits an error directing the user to `mount.pgfs` (the FUSE build) and
 exits.
 
+### Keeping it resident from logon (v0.2.1 and later)
+
+`assign.pgfs` is a foreground process and does not run as a Windows service. **An everyday mount is brought up
+through a script from a logon task.** The bundled scripts are in
+[scripts/windows/](../scripts/windows/pgfs-mount.ps1). No administrator rights are needed (the task is
+registered as a task of your own user).
+
+1. **Where to put it**: put `assign.pgfs.exe` and `pgfsctl.exe` in `%LOCALAPPDATA%\Programs\pgfs\` (from the
+   `bin\Publish` of the [build](../README.md)).
+2. **The settings**: put `%LOCALAPPDATA%\pgfs\pgfs.toml` (based on the distribution toml that mkfs wrote out).
+   The three to review for a resident mount are:
+   - `[mount] mount_point` - match it with the script's `-Drive` (both default to `P:`).
+   - `[logging] output` - for example `"daily:~/pgfs/log/pgfs-*.log"`. **It runs without a window, so unless
+     the log goes to a file the reason for a failure cannot be traced.**
+   - `[database] notify_enabled` - `true` if several mounts use the same FS (the default since v0.2.1).
+3. **The scripts**: copy [pgfs-mount.ps1](../scripts/windows/pgfs-mount.ps1) and
+   [pgfs-mount.cmd](../scripts/windows/pgfs-mount.cmd) (for double-clicking) to any place you like (for
+   example the desktop). `pgfs-mount.ps1` starts assign.pgfs in a hidden window with `%LOCALAPPDATA%\pgfs` as
+   the start folder and waits up to 30 seconds for the drive to appear.
+   **It has three guards against running twice** - hitting any of them does nothing and exits 0:
+   1. A named Mutex (concurrent runs of the script itself. Even if the task and a double-click overlap, one
+      of them ends at once)
+   2. The drive is already mounted
+   3. `assign.pgfs` is already running - **one mount per user is assumed**. To keep another drive resident
+      for the same user, add `-SkipProcessGuard`
+4. **Registering the task**: run [register-logon-task.ps1](../scripts/windows/register-logon-task.ps1) in the
+   same folder as the copied `pgfs-mount.ps1`.
+
+   ```pwsh
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File register-logon-task.ps1 -Drive P:
+   Start-ScheduledTask -TaskName 'pgfs assign P'      # bring it up now (without waiting for the next logon)
+   # to remove it
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File register-logon-task.ps1 -Drive P: -Unregister
+   ```
+
+   The registered task calls
+   `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<pgfs-mount.ps1>" -Drive P:`
+   "at logon of this user". Two of its settings must not be dropped:
+   - **No execution time limit** (`-ExecutionTimeLimit 0`). Left at the default 72 hours, the Task Scheduler
+     stops the mounted assign.pgfs along with the task.
+   - **Multiple instances are `IgnoreNew`**. Triggering it again while it runs starts nothing new (doubled
+     with the script's guards).
+   Besides that, it is set to start and keep running on battery power, and its privileges are normal
+   (`Limited`).
+5. **Checking it**: double-click `pgfs-mount.cmd`. If it is already mounted, `P: is already mounted; nothing to
+   do` appears. Which hosts are mounting right now can be seen with `pgfsctl status` ([Pgfsctl.md](Pgfsctl.md)).
+6. **Stopping it**: `"C:\Program Files\Dokan\Dokan Library-2.x.x\dokanctl.exe" /u P:` (assign.pgfs exits by
+   itself).
+   **Do not stop it with `Stop-Process` or the task's "End"** - they do not go through the same staged stop
+   as Ctrl+C, so write-back's unflushed work can be lost ("Unmounting" above).
+   A logoff or a shutdown is also cut off by Windows within seconds, so **if it stays resident with write-back
+   on, stop it with `dokanctl /u` before logging off**.
+
+The points to note:
+
+- **No elevation is needed** (the task is registered as `Limited`). The permission decision is made with **the
+  requester's token**, not with assign.pgfs's privileges, so the resident process's privileges play no part in
+  it. However, **an operation from an elevated shell passes the decision straight through** (the same as root
+  on Linux; see "The permission decision" below).
+- **Do not start it from inside the repository.** assign.pgfs picks up the `pgfs.toml` of its start folder, so
+  it would end in the accident of mounting your everyday FS with the development toml.
+- There is no mechanism for running it as a service (mounting before logon / sharing among several users).
+
 ## The settings
 
 The settings model shares [`Pgfs.Core.Config.RootConfig`](../src/core/src/Config/RootConfig.cs). The same TOML
@@ -118,7 +182,7 @@ What assign.pgfs uses in particular:
 | `mount.mount_point` | `-m`, `--mount-point` | Windows: `P:` |
 | `mount.cache_max_entries` | `--cache-max-entries` | `1024` |
 | `logging.level` | `--log-level` | `information` |
-| `database.notify_enabled` | `--notify` | `false` (opting into the data-change notifications. It invalidates the Core cache and calls NotifyUpdate. **It is effectively mandatory for running several mounts at once** - see the note below) |
+| `database.notify_enabled` | `--notify` / `--no-notify` | **`true`** (v0.2.1 and later. Up to v0.2.0 it was a `false` opt-in to the data-change notifications. It invalidates the Core cache and calls NotifyUpdate. **It is effectively mandatory for running several mounts at once** - see the note below) |
 
 ### How the Linux additions apply
 
@@ -147,8 +211,9 @@ details see [windows-parity.md, `mkdir` is not made synchronous](design/windows-
 [wbmeta.ps1](../tests/windows/wbmeta.ps1)**
 (the data write-back = `mount.write_back` on is verified at 6/6).
 
-> **⚠ Add `--notify` if several mounts are used at once.** Each mount's `InodeCache` and read cache are
-> independent, and another mount's changes only travel through LISTEN/NOTIFY. With the default
+> **⚠ Do not use `--no-notify` if several mounts are used at once** (on by default since v0.2.1; up to v0.2.0
+> `--notify` was needed). Each mount's `InodeCache` and read cache are
+> independent, and another mount's changes only travel through LISTEN/NOTIFY. With the notifications turned off
 > (`database.notify_enabled=false`),
 > **a create, an overwrite, a delete or a replacing rename done by another mount is never visible**
 > (measured with two mounts on 2026-09-19; with `--notify` it follows within a few hundred ms).
@@ -288,6 +353,39 @@ is [permission-interop.md](design/permission-interop.md)).
 - On the Linux side, `system.posix_acl_access` (setfacl/getfacl) round-trips with the same canonical store
   ([Mount.md](Mount.md)).
 
+### The permission decision (v0.2.1 and later)
+
+**Dokan does not make access decisions from the SD that GetFileSecurity returns**, so assign decides by itself
+in the POSIX order (the owner -> the named users -> the group -> other) (`app.enforce_permissions`, `true` by
+default, stored in the database, switched while running with `pgfsctl config set`). The source of truth for
+the design is [permission-interop.md, the decision on Windows](design/permission-interop.md).
+
+- **The decision is made only in `CreateFile` and `MoveFile`.** After the open, a `WriteFile`, an attribute
+  change, a delete reservation or an SD change is stopped by the Windows I/O manager through **the access
+  granted to the handle**.
+- **The subject** is the user of the requester's token (`UnameOf`) and its **enabled** groups (`GnameOf`).
+  **A token with Administrators enabled (elevated) passes straight through.** If the subject cannot be
+  obtained, the decision is made with the rights of other.
+- **A create** needs w on the parent, **the source of a delete or rename** needs w on the parent plus the
+  sticky rule (if the parent is `01000`, only the owner of the target or of the parent), and **the destination
+  of a rename** needs w on the destination's parent.
+  For the destination's parent, Windows first **opens the directory with a write request**, so most cases stop
+  at `CreateFile` (the decision in `MoveFile` is a second guard).
+- **A `DeleteChild` on a sticky directory is for the owner only.** When a `Delete` on a file is refused,
+  Windows **reopens the parent with `DeleteChild` and, if that opens, deletes the file anyway** (the meaning of
+  NTFS's FILE_DELETE_CHILD; measured). In POSIX, w on the parent means deleting a child only when the parent
+  is not sticky, so on a sticky one it is not translated that way.
+- **Changing the permissions (WRITE_DAC) is for the owner, and changing the owner (WRITE_OWNER) is only for a
+  pass-through subject** (the same as chmod / chown). Changing times and attributes needs the owner or w.
+- A refusal returns `STATUS_ACCESS_DENIED` and leaves an Information line in the log saying it was denied for
+  lack of permission, with the path, the request, the subject and the groups.
+- **An intended difference**: the x (search) of the intermediate directories is not checked (matching
+  Windows's "bypass traverse checking").
+- **The "read-only" attribute is set only when nobody can write (the w of owner / group / other are all
+  cleared)** (v0.2.1). Who can write is decided by the decision above.
+  Windows refuses to delete a read-only file, so a file after `chmod a-w` cannot be deleted from Windows (on
+  Linux it can be with w on the parent; it can also be deleted once the attribute is removed).
+
 ### LockFile / UnlockFile
 
 `DokanOptions.UserModeLock` is the setting that **handles LockFile / UnlockFile in userspace**. pgfs holds no
@@ -354,14 +452,15 @@ is born**, and hiding them would leave only "**it is not in the enumeration and 
 | append (`FILE_APPEND_DATA`) | ✅ | **Core decides where the end is** (`Api.AppendData`). Dokan only says "write at the end" through `WriteToEndOfFile`, so the FS writes at **the end it resolved again** (up to stage A it used the stale `Inode.Size` the handle held and **overwrote and erased what another mount had added** - `test_x_append_handle_sees_peer_growth` in [crossclient.ps1](../tests/windows/crossclient.ps1) reproduced it as a loss from 11 to 6 bytes). **[Mount.md, the append contract](Mount.md) is the source of truth for the limit of the indivisibility** (only under write-through, and only when it fits in one callback). **On Windows one `WriteFile` arrives as one callback without being split** (measured 2026-09-21) - at 64 KB, 1 MB, 16 MB and **64 MB** alike, the `NumberOfBytesToWrite` came through in one row. It was the same on all 4 paths - the raw Win32 `WriteFile`, `FILE_FLAG_WRITE_THROUGH`, `FILE_APPEND_DATA` and .NET's `FileStream` - with `NoCache=False, PagingIo=False` (a synchronous descent that is neither through the cache nor paging I/O). **Linux splits at `max_write`, so the limit of an append's indivisibility differs by OS** - do not carry Windows's limit over to Linux |
 | SID <-> uname/gname resolution | ✅ | NTAccount.Translate in [WindowsUserResolver](../src/dokan/src/WindowsUserResolver.cs) |
 | Reducing the chunks on a truncate | ✅ | `Api.TruncateData` (shared with Mount) |
-| The ACLs (Get/SetFileSecurity) | ✅ | POSIX canonical with a Windows projected view. The SD <-> the st_mode plus the canonical ACL (`user.pgfs_acl`). owner = a group goes to nobody plus that group. Deny and the inheritance are dropped in the projection. For the details see [permission-interop.md](design/permission-interop.md). Remaining: the strict enforcement of a named ACL (awaiting a requirement) |
+| The ACLs (Get/SetFileSecurity) | ✅ | POSIX canonical with a Windows projected view. The SD <-> the st_mode plus the canonical ACL (`user.pgfs_acl`). owner = a group goes to nobody plus that group. Deny and the inheritance are dropped in the projection. For the details see [permission-interop.md](design/permission-interop.md) |
+| The permission decision (the mode plus the ACL) | ✅ | **v0.2.1 and later**: its own decision in the POSIX order (`app.enforce_permissions`, on by default). An elevated process passes straight through. The x of the intermediate directories is not checked. See "The permission decision" above |
 | The Hidden / System / Archive attributes | ✅ | Saved in the xattr `user.win.attrs` as the JSON `{hidden,system,archive}`. `ReadOnly` is the write bits of the st_mode (as before). A dotfile created on Linux shows as Hidden through the heuristic fallback |
 | Alternate Data Streams | ❌ | NTFS's ADS is unsupported |
 | An application's range lock | ⚠️ | **Within one mount the driver enforces it** (`UserModeLock` was removed). **Between separate mounts it is unsupported.** It is separate from Core's tx exclusion (`pgfs_lock`) |
 | Creating a native symlink or hardlink, and junctions | ❌ | **A PoC was done on 2026-09-19: with the current binding neither creating nor reading works.** `IDokanOperations2` has no link callbacks and there is no entry point for getting or setting the reparse data. Measured, `mklink /H`, `/J`, `/D` and `File.CreateSymbolicLink` all fail, and **a symlink of Linux origin disappears from the enumeration and opens as an empty file when named directly**. For the details see [windows-parity.md, the reachability PoC for native links](design/windows-parity.md) |
 | Notify (the notification of another client's changes) | ⚠️ | **Fixed**: an absolute path prefixed with the real mount point reported by `Mounted` (`P:\dir\file`) is passed, and the bool return is used in the failure log. **Something that is gone gets a `NotifyDelete`** (a `NotifyUpdate` is treated as an attribute change and the entry stays in the peer's cache with `Test-Path` returning true). The kind is tried as a file then a directory (the payload has no op or kind). **The visibility across two mounts was measured** (a create, an overwrite, a delete and a replacing rename follow within a few hundred ms; see [crossclient.ps1](../tests/windows/crossclient.ps1)). **Another mount's changes do not become FileSystemWatcher or Explorer events** (measured 2026-09-21). **A local operation produces plenty** (`Created` / `Changed` / `Renamed` / `Deleted` - the driver generates them), yet **not one comes from another mount**. In other words `NotifyUpdate` / `NotifyDelete` **work as a cache invalidation** (the visibility is measured as above) but **produce no `ReadDirectoryChangesW` notification**. **Reading again shows the new value, but a window that is already open does not refresh** (an F5 is needed). That is to say **Windows has no path by which "a notification fixes the display" at all**, which is a different layer from what [Mount.md](Mount.md) says about "when everything is discarded there is nothing to hand to the OS" (**even if there were, the display would not be fixed**). See the [official DokanInstance API](https://dokan-dev.github.io/dokan-dotnet-doc/html/class_dokan_instance.html) and [the parity design](design/windows-parity.md) |
 | Reconnecting after a failed connection | ✅ | The `Pg.OpenConnection` family is wrapped in [Retry](../src/core/src/Utility/Retry.cs). Exponential backoff, tuned with `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. It does not retry arbitrary queries. Separately, Core's create / write / flush have a bounded tx retry for 40P01 and 40001 |
-| The fallback for a uname or gname that does not exist on the OS | ✅ | When `NTAccount.Translate` fails, `mount.fallback_uname` / `mount.fallback_gname` (stored in the database, `nobody` / `nogroup` by default) are resolved to SIDs and returned. `nobody` / `nogroup` resolve to `NT AUTHORITY\ANONYMOUS LOGON` through the well-known mapping. If even that cannot be resolved to a SID, `WellKnownSidType.AnonymousSid` is hardcoded and a warning is logged. The implementation is [src/dokan/src/WindowsUserResolver.cs](../src/dokan/src/WindowsUserResolver.cs) |
+| How a uname or gname that does not exist on the OS is shown | ✅ | v0.2.1 and later. A name that cannot be looked up as a SID is shown as the well-known `NT AUTHORITY\ANONYMOUS LOGON` (there is no setting; the old `mount.fallback_*` were removed). When a SID cannot be looked up as a name, or the requester cannot be obtained, `file_system.unknown_name` (`(unknown)`) is written to the database. **Its own identity is `mount.self_uname` / `self_gname`** - what the assign process creates under its own SID gets this name, and this name is shown as its own SID (for example when it lacks the right to look up its own SID as a name under Entra ID, or to line up on a short name instead of `AzureAD\...`). It is not used for any other SID |
 
 ### The additional unfixed points (**stocktaken**; the struck-through ones are fixed)
 

@@ -54,8 +54,9 @@ sudo dotnet run --project src/mount -- \
     -c "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" \
     -m /mnt/pgfs
 
-# ヘルプ
+# ヘルプ / 版
 dotnet run --project src/mount -- --help
+dotnet run --project src/mount -- --version
 ```
 
 > **アンマウント**: `fusermount3 -u /mnt/pgfs` (Linux) または Ctrl+C (LazyUnmount)。
@@ -115,7 +116,7 @@ mount.pgfs が特に使うのは:
 | `mount.cache_max_entries` | `--cache-max-entries` | `1024` |
 | `mount.max_write` | `--max-write` | `0` = libfuse のネゴシエーション任せ (実測では既定でカーネル上限 1 MiB まで上がる)。FUSE の 1 WRITE 要求の最大バイト数。write-back 時の flush tx 粒度とは別。下げたい / libfuse の版差で固定したいときに使う (`-o max_write` も受け付けるが、libfuse3 はこれをマウントオプションとして拒否するので **pgfs がこの Field に流して init コールバックで設定する**) |
 | `logging.level` | `--log-level` | `information` |
-| `database.notify_enabled` | `--notify` | `false`。複数クライアントから同じ PG/pgfs を mount するときに有効化推奨。詳細は下記「他クライアント変更通知」 |
+| `database.notify_enabled` | `--notify` / `--no-notify` | **`true`** (v0.2.1〜。v0.2.0 までは `false`)。1 マウントだけの運用で通知のコストを省きたいときは `--no-notify`。詳細は下記「他クライアント変更通知」 |
 
 `pgfs.toml` は Mkfs と同じ TOML を使えます。
 
@@ -304,7 +305,7 @@ unmount 時の flush は既定で最大 `mount.write_back_flush_timeout_ms` (300
 
 ## 他クライアント変更通知 (Notify)
 
-`database.notify_enabled=true` で有効化すると、PostgreSQL `LISTEN` / `NOTIFY` 経由で他クライアントの書き込みを受信し、ローカル `InodeCache` を invalidate する ([src/core/src/Api/NotifyChannel.cs](../src/core/src/Api/NotifyChannel.cs))。複数の `mount.pgfs` / `assign.pgfs` から同じ PG/pgfs を共有マウントしているときに、書き込みクライアントの変更が他クライアントの `stat` / `ls` に反映される。
+`database.notify_enabled=true` (v0.2.1 から既定) のとき、PostgreSQL `LISTEN` / `NOTIFY` 経由で他クライアントの書き込みを受信し、ローカル `InodeCache` を invalidate する ([src/core/src/Api/NotifyChannel.cs](../src/core/src/Api/NotifyChannel.cs))。複数の `mount.pgfs` / `assign.pgfs` から同じ PG/pgfs を共有マウントしているときに、書き込みクライアントの変更が他クライアントの `stat` / `ls` に反映される。
 
 **Linux 側の制約**: 現行 `Pgfs.Fuse` は OS 通知ブリッジを登録していません。受信時に
 `InodeCache` と `ContentCache` を無効化しますが、カーネルのページ／dentry キャッシュまで
@@ -544,7 +545,7 @@ pgfs は **OS が決めたオフセットを使いません**。使うと**相�
 | アクセスチェック (`Access`) | ❌ | 当面マウント時に `default_permissions` を渡せばカーネル側で判断される想定 |
 | Mount オプション `-o` | ✅ | `-o key=val,flag,...` を分類 (FUSE passthrough / 受理して無視 + `x-` 接頭辞 / pgfs 設定 / 未知=Warning / 非対応マウント操作=明示 Warning)。詳細は上記「マウントオプション」。実装は [ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs) |
 | 接続失敗時の再接続 | ✅ | [Retry](../src/core/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。任意のクエリを再試行するものではない。別途、create / write / flush に `40P01`・`40001` の bounded tx retry がある ([support_for_citus.ja.md](design/support_for_citus.ja.md)) |
-| OS に存在しない uname / gname のフォールバック | ✅ | `getpwnam` / `getgrnam` 失敗時、`mount.fallback_uname` / `mount.fallback_gname` (DB 保存、既定 `nobody` / `nogroup`) に解決した uid/gid を返す。fallback 名自体が解決できなければ uid=65534 (NFS の nobody 慣習値) を hardcode し warning ログ。実装は [src/fuse/src/UserResolver.cs](../src/fuse/src/UserResolver.cs)、Linux e2e の `test_fallback_uname_gname` で検証 |
+| OS に存在しない uname / gname の見せ方 | ✅ | v0.2.1〜。**カーネルの overflowuid / overflowgid** (`/proc/sys/kernel/overflow*`・通常 65534 = Debian 系 `nobody` / `nogroup`、RHEL 系 `nobody` / `nobody`) として見せる (設定は持たない。旧 `mount.fallback_*` は廃止)。名前の無い uid / gid (コンテナの uid など) で作ったものは DB に `file_system.unknown_name` (`(unknown)`) と書く。**自分の名乗りは `mount.self_uname` / `self_gname`** (自分が作ったものに付け、その名前は自分の uid / gid として見せる)。注意: 名前の無い uid は、自分が作ったファイルでも overflowuid の所有に見えるので `default_permissions` の下では書けない (名前で持つ設計の制限・v0.2.0 からの挙動)。実装は [src/fuse/src/UserResolver.cs](../src/fuse/src/UserResolver.cs)、e2e の `test_fallback_uname_gname` で検証 |
 | Read/Write のキャッシュ・バッチ | ⚠️ | bytea チャンク方式。read cache / ファイル単位 write-back は実装済み。read-ahead とファイル横断 flush バッチは未実装 |
 | xattr 値のバイナリ表現 | ✅ | `xattr_values BYTEA[]` に**生バイト列を忠実保持** (旧 Base64+JSONB から移行)。NUL 含む任意バイト列が無加工で往復し、SQL でも bytea として直接見える。設計・検証は [xattr-bytea.ja.md](design/xattr-bytea.ja.md) |
 
@@ -552,7 +553,7 @@ pgfs は **OS が決めたオフセットを使いません**。使うと**相�
 
 ```bash
 # 1. PostgreSQL に PGFS を初期化（[docs/Mkfs.md](Mkfs.md) 参照）
-dotnet run --project src/mkfs
+dotnet run --project src/mkfs -- -f pgfs.toml
 
 # 2. マウントポイントを準備
 sudo mkdir -p /mnt/pgfs

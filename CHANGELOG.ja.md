@@ -15,6 +15,73 @@
 このファイルは**リリースタグ単位**の変更を記録する。粒度は「利用者が見て分かる差分」で、
 内部リファクタは原則載せない (経緯は [docs/history.ja.md](docs/history.ja.md) と各設計 doc が正)。
 
+## [Unreleased] v0.2.1
+
+### ⚠ 移行が必要な変更
+
+- **`mkfs --clean` は消す前に確認を取るようになった** (接続先・DB の中の schema 全部・Citus の worker を見せて y/N)。**スクリプトから呼ぶなら `--yes` (`-y`) を足す** — 非対話で無いと何も消さずに exit 3。
+  また**接続中のもの (生きているマウント / 他の接続) があると消さない**。v0.2.0 までは黙って切っていた。待たずに切るなら `--now` (対話なら「再試行しますか」を繰り返す)。
+- **mkfs は設定ファイルの場所 (`-f <path>`) が必須になった**。ファイルがあれば読み込んで終了時にそこへ書き戻し、無ければ新規作成、
+  `--clean` なら読まずに上書きする。**既定の探索パス (`~/.config/pgfs` / `%LOCALAPPDATA%\pgfs` など) は mkfs では使わない**。
+  v0.2.0 までは探索パスで見つけた toml を読み込み、**その場所へ書き戻していた**ため、常駐マウント用の toml を上書きする事故が起き得た。
+  スクリプトから mkfs を呼んでいるなら `-f pgfs.toml` を足せば従来 (カレントに書く) と同じになる。
+- **既存の FS に `--clean` なしで mkfs を打ち直しても、FS 固有の設定 (`audit.enabled` / `app.statfs` / `app.plperlu` / `file_system.*`) を変えなくなった**。
+  DB の値を使い、CLI で違う値を渡すと Warning を出す (変えるなら `pgfsctl config set`)。v0.2.0 までは CLI か既定値で**黙って上書き**していた
+  (例: 後から audit を on にした FS に `--audit` なしで打つと off に戻った)。
+- **`mount.fallback_uname` / `mount.fallback_gname` を廃止した**。このホストに無い名前は OS の値 (Linux: カーネルの overflowuid / overflowgid、
+  Windows: `ANONYMOUS LOGON`) として見せ、作った人の名前が分からないときは DB に `file_system.unknown_name` (既定 `(unknown)`) と書く。
+  指定しても専用の Warning を出して無視する。el9 などで `nobody` / `nobody` に変えていた場合は、何もしなくても OS の値で同じ見え方になる。
+- **作るときだけの指示 (`database.citus` / `shard_count` / `shard_replication_factor` / `tablespace` / `tablespace_path`) を DB に保存しなくなった**。
+  既存 FS に残っている行は読まれないだけ (消さなくてよい)。`pgfsctl status` の Citus 表示は DB の実体 (`citus` 拡張の有無) から出す。
+- **`mkfs --clean` は、消す worker を DB の実体 (`pg_dist_node`) で決めるようになった**。v0.2.0 までは `--worker` で渡した worker だけを消していて、付け忘れると worker 側に DB が残った
+  (配布用 toml には workers を書かないので、付け忘れは普通に起きる)。**worker に 1 つでも繋がらなければ何も消さずに止まる** — mkfs を動かすホストから
+  `pg_dist_node` のノード名で届く必要がある。使っていない worker は先に `citus_remove_node` で外す。
+- **既存の DB に mkfs を打ち直したとき、`--citus` / `--worker` / `--tablespace` を効かせなくなった** (Warning を出す)。Citus かどうかは DB の実体で決まり、
+  Citus でない DB に `--citus` を付けても Citus にならない (v0.2.0 までは新しい schema のテーブルを分散しようとして失敗した)。
+  既存の DB のときは `--worker` の各ノードにロールや tablespace も作らない (v0.2.0 までは作っていた)。Citus にする / worker を足すなら `--clean` で作り直すか `citus_add_node`。
+- **`database.notify_enabled` の既定を `true` にした** (他マウントの変更通知が既定で on)。v0.2.0 までは既定 `false` で、
+  複数マウントでは `--notify` を付けないと他マウントの create / delete / rename がいつまでも見えなかった。
+  **1 マウントだけの運用で通知のコスト (LISTEN 接続 1 本・書き込みごとの `pg_notify`) を省きたいときは `--no-notify`** か
+  TOML の `notify_enabled = false`。既存の toml に `notify_enabled = false` が書いてあれば、それが優先されて従来どおり off のまま。
+- **Windows (assign) でも POSIX の権限 (mode + ACL) を判定するようになった** (`app.enforce_permissions`・既定 `true`)。v0.2.0 までは
+  Windows からは mode に関係なく読み書き・作成・削除ができた (`root:root 0755` の root 直下にも書けた)。上げると、**Windows から書けていたものが拒否され得る**。
+  判定は所有者 → 名前付きユーザー → グループ → other の順で、所有者名が Linux 側と一致しないユーザーは other の権利になる。
+  **昇格したプロセス (Administrators が有効) は素通し** (Linux の root 相当。UAC で制限された普段のプロセスは素通しにならない)。
+  困ったら `pgfsctl config set app.enforce_permissions false` で走行中に v0.2.0 と同じ挙動へ戻せる。Linux の判定 (`default_permissions`) は変わらない。
+
+### 変更
+
+- **`mkfs --purge` を追加した** (消して終わる)。消す相手は `-f` の設定ファイルの接続先で、Citus なら全 worker の同名 DB も消す。ロール / tablespace / 設定ファイルは残す。`--clean` との同時指定は不可。
+- **`pgfsctl status` の Filesystem 節に `target` (接続先 host:port/db) を足し、`citus` にノード (`coordinator host:port` / `worker host:port`) を DB の実体から出すようにした** (`--json` は `target` / `citus_nodes`)。消す前にどこを消すかを確かめる用。
+- **Windows の「読み取り専用」属性を、誰も書けない (owner / group / other の w が全部落ちている) ときだけ立てるようにした**。v0.2.0 までは
+  「マウントしているユーザーが書けるか」で決めていたので、**他人の所有の `0644` などが読み取り専用に見え、Windows から (昇格しても) 削除できなかった**。
+  誰が書けるかは v0.2.1 の権限の判定が決める。
+- **他のマウントが root (`/`) の属性 (mode / 所有者 / 時刻) を変えたとき、再マウントしなくても見えるようにした**。v0.2.0 までは root を起動時に 1 回読んだきりで、
+  root を `chmod` しても変更したホスト以外は古い値のままだった (root 直下のファイルの出入りは見えていた)。
+- **mkfs が書き出す配布用 `pgfs.toml` の中身を整理した**。接続の核 (connection / schema / prefix) と、**CLI か読み込んだ TOML で明示した
+  項目だけ**を書く。既定値のままの項目は書かない (後の版で既定が変わっても追従するように)。**`mount_point` も明示したときだけ**書くので、
+  Linux で吐いた toml を Windows にそのまま配れる。
+- **mkfs に mount / assign 向けの設定を渡せるようにした** (`mkfs --notify` / `--write-back` など)。v0.2.0 までは CLI で受け付けても
+  toml に書かれずに黙って捨てられていた。`mkfs --help` にも `[written to pgfs.toml for mount/assign]` の注記つきで載る。
+- `--no-notify` を追加した (mkfs / mount / assign 共通)。
+- **`--version` がプログラムの版を表示して終了するようになった** (mkfs / mount / assign / pgfsctl)。v0.2.0 まで mkfs の `--version` は FS フォーマットの版 (`file_system.version`) の指定だったので、そちらは **`--fs-version`** に改名した (移行: mkfs に `--version` を渡すスクリプトは `--fs-version` に直す)。
+- **`mount.self_uname` / `mount.self_gname` を追加した** (toml / CLI)。マウントを動かしているユーザー自身が作ったものに付ける名前 (補完) で、
+  名前が引けても引けなくても上書きする (例: Entra ID で自分の SID を名前に引く権限が無い / 使いたくない名前)。他のユーザーの要求には使わない。
+  この名前は自分の uid / SID として見せる。DB は全員共有の `pgfs` ロールで認証しているので、これは認証ではなく「このクライアントがこう名乗る」宣言。
+- **`mount.write_back` をライブで off にしたあとの drain (期限内に書き切れなかったぶんの書き出し) が終わったとき、`pgfsctl status` にその場で反映するようにした**。v0.2.0 までは次の heartbeat (最大 30 秒) まで「未 flush が残っている」と出続けた。
+- テストの環境依存を 3 件直した: Linux e2e の名前解決のテストが DB / schema を決め打ちしていた (`PGFS_SCHEMA` / `PGFS_PREFIX` / `PGFS_DB` か設定ファイルから取る) / メタデータ write-back の監査のテストが `audit.enabled` を立てる INSERT に NOT NULL の列を渡しておらず、元から on の環境でしか検査になっていなかった / write-back のライブ off のテストが drain の終わりを待っていなかった。
+- **Windows でログオン時に常駐させるスクリプトを同梱した** ([scripts/windows/](scripts/windows/pgfs-mount.ps1): `pgfs-mount.ps1` / `pgfs-mount.cmd` / `register-logon-task.ps1`)。多重実行ガード付きで assign.pgfs を隠しウィンドウで上げ、タスクは実行時間の制限なし・`IgnoreNew` で登録する。手順は [docs/Assign.ja.md §ログオン時に常駐させる](docs/Assign.ja.md)。
+- `tests/windows/permissions.ps1` を追加した (Windows の権限判定 12 件。ユーザーを作らずに、昇格したシェルで他人の所有のファイルを仕込み、Administrators を無効にした制限トークンで確かめる)。
+- **mkfs に `--root-access owner|everyone` を追加した**。`everyone` で root ディレクトリを `1777` (誰でも書ける・消せるのは作った本人だけ) で作る。既定は従来どおり `owner` (`root:root 0755`)。root を新しく作るときだけ効き、既にあれば Warning を出して変えない。
+
+### 既知の制限
+
+- **Windows では途中のディレクトリの実行権 (探索) を見ない**。Windows は既定で全員が「走査チェックのバイパス」を持つのに合わせたためで、
+  **`0700` のディレクトリの奥にある `0644` のファイルは、Windows からだけ (パスを直接指定すれば) 読める**。Linux (`default_permissions`) は経路の各ディレクトリの x を見る。
+- **Windows では、全員の書き込み権を落とした (`chmod a-w`) ファイルは削除できない** (読み取り専用属性が立ち、Windows は読み取り専用のファイルの削除を断る)。
+  Linux では親ディレクトリの w があれば消せる。Windows から消すなら先に読み取り専用を外す。
+- **`MAXIMUM_ALLOWED` だけで開く要求は判定していない** (未検証)。
+
 ## [v0.2.0] - 2026-09-23
 
 > **v0.1.0 からの差分**。柱は ① プロジェクト構成の作り直し (libfuse 内製化)

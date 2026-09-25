@@ -17,6 +17,133 @@ This file records the changes **per release tag**. The granularity is "a differe
 internal refactors are not listed as a rule ([docs/history.md](docs/history.md) and the design documents are
 authoritative for how things came about).
 
+## [Unreleased] v0.2.1
+
+### ⚠ Changes that require a migration
+
+- **`mkfs --clean` now asks for confirmation before removing anything** (it shows the connection target, every
+  schema in the database and the Citus workers, and asks y/N). **When calling it from a script, add `--yes`
+  (`-y`)** - when non-interactive and it is not given, nothing is removed and the exit code is 3.
+  Also, **nothing is removed while something is connected (live mounts / other connections)**. Up to v0.2.0 they
+  were silently disconnected. To disconnect them without waiting, use `--now` (an interactive run keeps asking
+  "retry?").
+- **mkfs now requires the location of the settings file (`-f <path>`)**. If the file exists it is read and
+  written back there at the end; if not it is created; with `--clean` it is overwritten without being read.
+  **mkfs does not use the default search path (`~/.config/pgfs` / `%LOCALAPPDATA%\pgfs` and so on)**.
+  Up to v0.2.0 it read the toml found along the search path and **wrote back to that place**, so it could
+  accidentally overwrite the toml used by a resident mount.
+  If you call mkfs from a script, adding `-f pgfs.toml` gives the old behaviour (writing to the current
+  directory).
+- **Running mkfs again on an existing FS without `--clean` no longer changes the FS-specific settings
+  (`audit.enabled` / `app.statfs` / `app.plperlu` / `file_system.*`)**.
+  The values in the database are used, and a different value given on the CLI prints a Warning (to change it,
+  use `pgfsctl config set`). Up to v0.2.0 they were **silently overwritten** by the CLI or the defaults
+  (for example, running it without `--audit` on an FS where audit had been turned on later turned it back off).
+- **`mount.fallback_uname` / `mount.fallback_gname` were retired**. A name that does not exist on this host is
+  shown as the OS's value (Linux: the kernel's overflowuid / overflowgid, Windows: `ANONYMOUS LOGON`), and when
+  the creator's name is unknown, `file_system.unknown_name` (default `(unknown)`) is written to the database.
+  Giving them prints a dedicated Warning and they are ignored. If you had changed them to `nobody` / `nobody`
+  on el9 and the like, the OS's values give the same appearance without doing anything.
+- **The instructions only for creation (`database.citus` / `shard_count` / `shard_replication_factor` /
+  `tablespace` / `tablespace_path`) are no longer stored in the database**.
+  The rows left on an existing FS are simply not read (they do not need to be removed). The Citus display of
+  `pgfsctl status` comes from what is actually in the database (whether the `citus` extension is there).
+- **`mkfs --clean` now decides the workers to remove by what is actually in the database (`pg_dist_node`)**.
+  Up to v0.2.0 it removed only the workers given with `--worker`, and forgetting it left the database behind on
+  the workers (the toml for distribution does not contain the workers, so forgetting it happens as a matter of
+  course). **If even one worker cannot be reached, it stops without removing anything** - the node names in
+  `pg_dist_node` have to be reachable from the host that runs mkfs. Take unused workers out first with
+  `citus_remove_node`.
+- **Running mkfs again on an existing database no longer applies `--citus` / `--worker` / `--tablespace`** (a
+  Warning is printed). Whether it is Citus is decided by what is actually in the database, and giving `--citus`
+  to a database that is not Citus does not make it Citus (up to v0.2.0 it tried to distribute the tables of a
+  new schema and failed).
+  For an existing database, no roles or tablespaces are created on the `--worker` nodes either (up to v0.2.0
+  they were). To make it Citus or to add workers, recreate it with `--clean` or use `citus_add_node`.
+- **The default of `database.notify_enabled` is now `true`** (the change notifications from other mounts are on
+  by default). Up to v0.2.0 the default was `false`, and with several mounts the creates / deletes / renames of
+  the other mounts never became visible unless `--notify` was given.
+  **To save the cost of the notifications (one LISTEN connection, a `pg_notify` per write) when running a single
+  mount, use `--no-notify`** or `notify_enabled = false` in the TOML. If an existing toml has
+  `notify_enabled = false` in it, that takes precedence and it stays off as before.
+- **Windows (assign) now also evaluates the POSIX permissions (the mode plus the ACL)**
+  (`app.enforce_permissions`, default `true`). Up to v0.2.0, Windows could read, write, create and delete
+  regardless of the mode (it could even write directly under a `root:root 0755` root). After upgrading,
+  **what could be written from Windows may be refused**.
+  The evaluation goes owner -> named user -> group -> other, and a user whose name does not match the owner name
+  on the Linux side gets the rights of other.
+  **An elevated process (with Administrators enabled) passes through** (the equivalent of root on Linux; an
+  ordinary process restricted by UAC does not pass through).
+  If it gets in the way, `pgfsctl config set app.enforce_permissions false` returns it to the v0.2.0 behaviour
+  while running. The evaluation on Linux (`default_permissions`) does not change.
+
+### Changed
+
+- **`mkfs --purge` was added** (remove and stop there). What it removes is the connection target of the `-f`
+  settings file, and on Citus also the database of the same name on every worker. The role, the tablespace and
+  the settings file are kept. It cannot be given together with `--clean`.
+- **The Filesystem section of `pgfsctl status` gained `target` (the connection target host:port/db), and
+  `citus` now shows the nodes (`coordinator host:port` / `worker host:port`) from what is actually in the
+  database** (`target` / `citus_nodes` in `--json`). It is for checking what will be removed before removing
+  it.
+- **The Windows "read-only" attribute is now set only when nobody can write (the w of owner / group / other is
+  all off)**. Up to v0.2.0 it was decided by "can the mounting user write", so **a `0644` owned by someone else
+  and the like looked read-only and could not be deleted from Windows (even elevated)**.
+  Who can write is decided by the permission evaluation of v0.2.1.
+- **When another mount changes the attributes of the root (`/`) (the mode / the owner / the times), it is now
+  visible without remounting**. Up to v0.2.0 the root was read once at startup, and after a `chmod` of the
+  root every host other than the one that changed it kept the old values (files coming and going directly
+  under the root were visible).
+- **The contents of the `pgfs.toml` for distribution that mkfs writes out were tidied up**. It writes the core
+  of the connection (connection / schema / prefix) and **only the items given explicitly on the CLI or in the
+  TOML that was read**. Items left at their defaults are not written (so that a default changed in a later
+  version is followed). **`mount_point` is also written only when given explicitly**, so a toml written on
+  Linux can be handed to Windows as it is.
+- **The settings for mount / assign can now be given to mkfs** (`mkfs --notify` / `--write-back` and so on).
+  Up to v0.2.0 they were accepted on the CLI but silently dropped without being written to the toml. They
+  also appear in `mkfs --help` with the note `[written to pgfs.toml for mount/assign]`.
+- `--no-notify` was added (common to mkfs / mount / assign).
+- **`--version` now shows the program's version and exits** (mkfs / mount / assign / pgfsctl). Up to v0.2.0,
+  mkfs's `--version` specified the version of the FS format (`file_system.version`), so that one was renamed
+  to **`--fs-version`** (migration: change scripts that pass `--version` to mkfs to `--fs-version`).
+- **`mount.self_uname` / `mount.self_gname` were added** (toml / CLI). They are the names given to what the
+  user running the mount creates (a supplement), and they override whether or not the name can be looked up
+  (for example, no permission to look up one's own SID as a name with Entra ID / a name one does not want to
+  use). They are not used for the requests of other users.
+  This name is shown as one's own uid / SID. The database authenticates everyone with the shared `pgfs` role,
+  so this is not authentication but a declaration of "this client calls itself this".
+- **When the drain after turning `mount.write_back` off live (writing out what could not be written within the
+  deadline) finishes, `pgfsctl status` now reflects it immediately**. Up to v0.2.0 it kept showing "something
+  unflushed remains" until the next heartbeat (up to 30 seconds).
+- Three environment dependencies in the tests were fixed: the name resolution test of the Linux e2e hard-coded
+  the database / schema (it now takes them from `PGFS_SCHEMA` / `PGFS_PREFIX` / `PGFS_DB` or the settings
+  file) / the audit test of the metadata write-back did not pass a NOT NULL column to the INSERT that turns
+  `audit.enabled` on, so it only checked anything in an environment where it was already on / the live-off test
+  of write-back did not wait for the end of the drain.
+- **Scripts to keep the mount resident from logon on Windows are now included**
+  ([scripts/windows/](scripts/windows/pgfs-mount.ps1): `pgfs-mount.ps1` / `pgfs-mount.cmd` /
+  `register-logon-task.ps1`). They bring assign.pgfs up in a hidden window with a guard against running
+  twice, and register the task with no execution time limit and `IgnoreNew`. For the procedure see
+  [docs/Assign.md, keeping it resident from logon](docs/Assign.md).
+- `tests/windows/permissions.ps1` was added (12 cases of the Windows permission evaluation. Without creating
+  users, it plants files owned by someone else from an elevated shell and checks them with a restricted token
+  that has Administrators disabled).
+- **`--root-access owner|everyone` was added to mkfs**. `everyone` creates the root directory as `1777` (anyone
+  can write, and only the creator can delete). The default stays `owner` (`root:root 0755`). It takes effect
+  only when the root is newly created; if it already exists, a Warning is printed and it is left unchanged.
+
+### The known limitations
+
+- **On Windows the execute (search) permission of the directories along the way is not checked**. This matches
+  Windows, where by default everyone has "bypass traverse checking", so
+  **a `0644` file deep inside a `0700` directory can be read from Windows only (by giving its path
+  directly)**. Linux (`default_permissions`) checks the x of each directory along the path.
+- **On Windows, a file with the write permission removed for everyone (`chmod a-w`) cannot be deleted** (the
+  read-only attribute is set, and Windows refuses to delete a read-only file).
+  On Linux it can be removed if the parent directory has w. To delete it from Windows, clear the read-only
+  attribute first.
+- **A request that opens with `MAXIMUM_ALLOWED` alone is not evaluated** (unverified).
+
 ## [v0.2.0] - 2026-09-23
 
 > **The difference from v0.1.0**. The pillars are (1) rebuilding the project structure (bringing

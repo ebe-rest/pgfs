@@ -39,9 +39,9 @@ hardware; the same rhythm as 1a/1b).
   `mount.cache_max_entries` -> **`SetCapacity` is added to InodeCache** / `mount.cache_data_max_bytes` ->
   **`SetMaxBytes` is added to ContentCache** / `audit.enabled` -> **Api.auditEnabled is made mutable**.
 - **NextMount (takes effect on a remount)**: `database.connection` / `super_connection` / `schema` / `prefix` /
-  `tablespace*` / `citus` / `workers` / `notify_enabled` / `mount.mount_point` / `foreground` / the FuseFlags /
-  `mount.fallback_uname` / `fallback_gname` (for now: making them Live needs the resolver rebuilt, so it is put
-  off).
+  `workers` / `notify_enabled` / `mount.mount_point` / `foreground` / the FuseFlags /
+  `mount.self_uname` / `self_gname` (since v0.2.1. The old fallback_* were retired, and tablespace / citus are
+  not stored in the database since v0.2.1).
 - **Format (mkfs only; immutable afterwards)**: `file_system.version` / `volume_label` / `cluster_size` /
   `default_chunk_size` / `max_file_size`.
 
@@ -142,13 +142,13 @@ alongside it:
 
 | The kind | What it means | Examples |
 |---|---|---|
-| `Live` | Can be re-applied while running | `logging.level` / `output`, `mount.cache_max_entries`, `mount.fallback_uname` / `gname`, `audit.enabled`, `app.statfs` |
+| `Live` | Can be re-applied while running | `logging.level` / `output`, `mount.cache_max_entries`, `audit.enabled`, `app.statfs` |
 | `NextMount` | Takes effect on a remount | `mount.mount_point`, the FuseFlags, `database.connection`, `schema` / `prefix` |
 | `Format` | mkfs only; immutable afterwards | `file_system.cluster_size` / `chunk_size` / `max_file_size` |
 
 What a live application really is is replacing the mutable runtime state on the Core side (`Logger.MinLevel` /
-`LogSink.Configure` / resetting the InodeCache capacity / the fallback names / the audit flag / the statfs
-flag). No re-initialization of FUSE or Dokan is needed (= `Live` is exactly the range that needs no change at
+`LogSink.Configure` / resetting the InodeCache capacity / the audit flag / the statfs flag / the Windows
+permission-check flag). No re-initialization of FUSE or Dokan is needed (= `Live` is exactly the range that needs no change at
 the OS layer). The matrix becomes authoritative by adding a reload column to
 [settings-matrix.md](settings-matrix.md).
 
@@ -215,7 +215,7 @@ running mount applies it directly to the live target.
 |---|---|---|---|
 | **Db, Live** (`audit.enabled` / `app.statfs`) | Written to pgfs_settings | ✅ a `set` NOTIFY -> immediately | persisted + applied live to N mounts |
 | **File, Live** (the 5 of logging/cache/retry) | **No (ephemeral)** | ✅ a `set` NOTIFY -> immediately | applied live to N mounts (ephemeral; edit pgfs.toml to persist) |
-| Db, NextMount (`fallback_*` / `tablespace*` / `citus` / `plperlu`) | Written to pgfs_settings | On the next mount | persisted; applies on next mount |
+| Db, NextMount (`plperlu`) | Written to pgfs_settings | On the next mount | persisted; applies on next mount |
 | File, NextMount (`mount_point` / `connection` / `schema` / `prefix` / `notify_enabled` / `workers`) | No (a remote toml is not reachable) | On the next mount | cannot reach remote toml; edit pgfs.toml locally; applies next mount |
 | Format (`file_system.*`) | Refused | - | mkfs-only, immutable after format |
 | None (`--clean` / `foreground` / `super_connection` / `setting.*`) | Refused | - | not a settable runtime field |

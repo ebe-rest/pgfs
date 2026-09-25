@@ -122,24 +122,24 @@ PostgreSQL 17 を起動し、スーパーユーザー（通常 `postgres`）で�
 
 ```bash
 # 既定値で初期化（localhost:5432 / postgres スーパーユーザー / pgfs ユーザー＋DB を新規作成）
-dotnet run --project src/mkfs
+dotnet run --project src/mkfs -- -f pgfs.toml
 
 # スーパーユーザー接続を明示
-dotnet run --project src/mkfs -- \
+dotnet run --project src/mkfs -- -f pgfs.toml \
     --super-connection "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=template1"
 
 # PGFS ユーザー接続を明示
-dotnet run --project src/mkfs -- \
+dotnet run --project src/mkfs -- -f pgfs.toml \
     --connection "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs"
 
 # スキーマ・プレフィックスを変える
-dotnet run --project src/mkfs -- -s myschema -x myfs_
+dotnet run --project src/mkfs -- -f pgfs.toml -s myschema -x myfs_
 
 # ヘルプ
 dotnet run --project src/mkfs -- --help
 ```
 
-完了すると `pgfs.toml`（設定ファイル）がカレントディレクトリに書き出されます。詳細は [docs/Mkfs.ja.md](docs/Mkfs.ja.md) を参照してください。
+完了すると `-f` で指定した場所に `pgfs.toml`（配布用の設定ファイル）が書き出されます。**`-f` は必須**で、ファイルがあれば読み込んでそこへ書き戻し、無ければ新規作成します。詳細は [docs/Mkfs.ja.md](docs/Mkfs.ja.md) を参照してください。
 
 ### 3. マウント
 
@@ -170,7 +170,7 @@ dotnet run --project src\assign -- -m P:
 Get-ChildItem P:\
 ```
 
-詳細は [docs/Assign.ja.md](docs/Assign.ja.md) を参照。
+詳細は [docs/Assign.ja.md](docs/Assign.ja.md) を参照。ログオン時に常駐させる手順とスクリプトは [docs/Assign.ja.md §ログオン時に常駐させる](docs/Assign.ja.md) / [scripts/windows/](scripts/windows/pgfs-mount.ps1)。
 
 ## ドキュメント
 

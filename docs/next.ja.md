@@ -16,6 +16,8 @@
 
 ## 現在地 (1 行)
 
+**v0.2.1 は実装完了** (設定の置き場・Windows の権限の判定・FS を DB の構成から消す・`mkfs --purge`。変更の一覧は [CHANGELOG.ja.md](../CHANGELOG.ja.md)、理由は [history.ja.md](history.ja.md))。
+
 **v0.2.0 (Core/Fuse/Dokan 分割 + FUSE 内製化) は実装完了**、**運用フェーズは Phase 5 GUI と 1c read-ahead を除いて
 実装済み**である。キャッシュ (1a/1b)・データ write-back (1d)・metadata write-back (1e 段階 1・2 + レビュー
 ラウンド A / B の全指摘)・土台 (2a〜2c)・config (Phase 3)・status Layer 1〜3 (Phase 4) はいずれも実機で緑、
@@ -65,7 +67,7 @@ A の主な決定 (詳細と根拠は [v0.2.0-plan.ja.md](design/v0.2.0-plan.ja.
 
 | # | 項目 | 内容 | 規模 |
 |---|---|---|---|
-| 4 | **ACL・権限の Linux↔Windows 相互運用** — 主目的は達成済み・残りのみ | 設計の正は [permission-interop.ja.md](design/permission-interop.ja.md)、図は [permission-interop-diagram.html](design/permission-interop-diagram.html)。直近 5 件 + ACL 本体 3-0〜3-3 (正準モデル [PgfsAcl](../src/core/src/Models/PgfsAcl.cs) / Windows 読み書き投影 / Linux POSIX ACL [PosixAcl](../src/fuse/src/PosixAcl.cs)) は完了・回帰済み。**残**: `system.posix_acl_default` の Windows 継承変換と、OS 間ラウンドトリップの自動テスト。3-4 (名前付き ACL の厳密適用) は要件待ちで保留 ([permission-interop.ja.md §Phase 3-4 の再評価](design/permission-interop.ja.md)) | 残りのみ |
+| 4 | **ACL・権限の Linux↔Windows 相互運用** — 主目的は達成済み・残りのみ | 設計の正は [permission-interop.ja.md](design/permission-interop.ja.md)、図は [permission-interop-diagram.html](design/permission-interop-diagram.html)。直近 5 件 + ACL 本体 3-0〜3-3 (正準モデル [PgfsAcl](../src/core/src/Models/PgfsAcl.cs) / Windows 読み書き投影 / Linux POSIX ACL [PosixAcl](../src/fuse/src/PosixAcl.cs)) は完了・回帰済み。**v0.2.1 から Windows は mode と名前付き ACL を自前で判定する** (POSIX 順・`app.enforce_permissions`)。**残**: `system.posix_acl_default` の Windows 継承変換、OS 間ラウンドトリップの自動テスト、Linux での名前付き ACL の厳密適用 (要件待ちで保留・[permission-interop.ja.md](design/permission-interop.ja.md)) | 残りのみ |
 | 5 | **ジャンクション / native リンク** (Assign 側) | `pgfs_inode.is_junction` 列は既にあり、Linux 側は symlink で代替している。**2026-09-19 に到達性 PoC 実施 = 現行バインディングでは作成も読み取りも不可**: `IDokanOperations2` にリンク系コールバックが無く、reparse データの取得・設定の入口も無い。実測で `mklink /H` / `/J` / `/D` と `File.CreateSymbolicLink` がすべて失敗し、**Linux 由来の symlink は列挙から消え、名前直指定では空ファイルとして開く**。→ **DokanNet / Dokany への追加か WinFsp への切り替えが前提**。正は [windows-parity.ja.md §native リンクの到達性 PoC](design/windows-parity.ja.md) | 大 (バインディングかバックエンドの変更を伴う) |
 | 6 | **ADS (Alternate Data Streams)** (Windows) | Dokan 経由の NTFS 互換 `:streamname`。データモデルの拡張が要る | 大 |
 
@@ -131,6 +133,8 @@ Layer 2 と Config は mount 無しでも出る)。**残: 5c** (Config 画面か
 |---|---|---|
 | 19 | **`pgfs_inode_lock` の分離** | Phase 3 は単一 `pgfs_lock` + 符号名前空間で始めた。非対称コスト ([support_for_citus.ja.md §Phase 3 の注意点](design/support_for_citus.ja.md)) が inode ロック主体のワークロードで出るなら別テーブルにする |
 | 20 | **マルチコーディネータ HA Citus の検討** | Enterprise Citus が射程に入るか |
+| 27 | **クライアント用インストーラー** | mkfs が書き出す `pgfs.toml` と一緒に配れる mount.pgfs / assign.pgfs / pgfsctl のパッケージ (かインストールスクリプト)。置き場・ログオン時タスクや fstab の行・Dokan / libfuse3 の前提。`pgfs.toml` には接続のパスワードが入るので、配り方に注意が要る |
+| 28 | **immutable 属性** | pgfs 自身が持つファイル単位の「変更も削除もできない」印 (Linux は `chattr +i`、Windows は読み取り専用として見せる)。「消せない」を両 OS で同じ意味にするため。いまは書き込み権を全部落としたファイルは Windows からは消せず、Linux からは消せる |
 | 21 | **`pgfs_inode` を id で分散** | `(parent_id, name)` UK をアプリ層で保証する代替案。クロスシャード rename のコストが問題になったら再検討 |
 
 ---
@@ -142,6 +146,7 @@ Layer 2 と Config は mount 無しでも出る)。**残: 5c** (Config 画面か
 
 | 完了項目 | 正のドキュメント |
 |---|---|
+| **v0.2.1** (設定の置き場・Windows の権限の判定・DB の構成からの削除・`mkfs --purge`・`--version`) | [CHANGELOG.ja.md](../CHANGELOG.ja.md) / [history.ja.md](history.ja.md) / [Mkfs.ja.md](Mkfs.ja.md) / [permission-interop.ja.md](design/permission-interop.ja.md) |
 | **v0.2.0** (Core/Fuse/Dokan 分割 + libfuse 内製化) | 上記 / [v0.2.0-plan.ja.md](design/v0.2.0-plan.ja.md) / [fuse-binding.ja.md](design/fuse-binding.ja.md) |
 | Mount の `-o` 対応 | [Mount.ja.md §マウントオプション](Mount.ja.md) |
 | xattr のバイト列透過 | [xattr-bytea.ja.md](design/xattr-bytea.ja.md) |

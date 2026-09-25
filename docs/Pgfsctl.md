@@ -52,6 +52,7 @@ CLI > TOML > the database > the default). For the details see [settings-matrix.m
 ## `config` - looking at and changing the settings
 
 ```
+pgfsctl --version                     # show the version and exit (since v0.2.1)
 pgfsctl config list [--json] [the connection options]
 pgfsctl config get <scope.key> [--json] [the connection options]
 pgfsctl config set <scope.key> <value> [the connection options]
@@ -72,7 +73,7 @@ The provenance (source) is one of three values: `config` (the CLI or the TOML), 
 |---|---|---|---|
 | Db, Live | `audit.enabled` / `app.statfs` | Written to `{prefix}settings` | ✅ immediately (a `set` NOTIFY) |
 | File, Live | `logging.level` / `output` / `cache_*` / `retry_*` | **No (ephemeral)** | ✅ immediately (a `set` NOTIFY) |
-| Db, NextMount | `fallback_*` / `tablespace*` / `citus` / `plperlu` | Written to `{prefix}settings` | On the next mount |
+| Db, NextMount | `plperlu` | Written to `{prefix}settings` | On the next mount |
 | File, NextMount | `mount_point` / `connection` / `schema` / `prefix` / `notify_enabled` | No (a remote toml is not reachable) | On the next mount (it directs you to edit your own toml) |
 | Format | `file_system.*` | Refused | - |
 | None | `--clean` / `foreground` / `setting.*` | Refused | - |
@@ -129,6 +130,9 @@ pgfsctl config set audit.enabled true -c "$CONN" -s pgfs
 
 # Every setting as JSON
 pgfsctl config list --json -c "$CONN" -s pgfs
+
+# Turn off the Windows (assign) permission evaluation while running (since v0.2.1; true by default)
+pgfsctl config set app.enforce_permissions false -c "$CONN" -s pgfs
 ```
 
 ---
@@ -145,10 +149,14 @@ layers are implemented.
 1. **Mounts (the list of what is running in the cluster, Layer 1)** ... from the `{prefix}mounts` registry: the
    host / pid / mode (`fuse` or `dokan`) / mountpoint / uptime / time since the heartbeat / live? (under 90 s).
    An absent table (an FS mkfs'd before Phase 2) shows as "table not present".
-2. **Filesystem (the FS statistics, Layer 2)** ... the schema/prefix/version/volume_label, the number of inodes,
+2. **Filesystem (the FS statistics, Layer 2)** ... **the target (the connection target `host:port/db`; since
+   v0.2.1)**, the schema/prefix/version/volume_label, the number of inodes,
    of files and of chunks, the bytes used (`sum(length(payload))`), the cluster_size, the max_file_size, audit
-   on/off and whether Citus is in use (plus the number of `pg_dist_node` rows). A value whose aggregation failed
-   shows as `?`.
+   on/off and whether Citus is in use (plus the number of `pg_dist_node` rows and **the list of the nodes**,
+   `coordinator host:port` / `worker host:port`, since v0.2.1; all of it from what is actually in the
+   database). A value whose aggregation failed shows as `?`.
+   **Use it to check "what will be removed" before `mkfs --clean` / `--purge`** (`pgfsctl status -f <toml>` ->
+   `mkfs --purge -f <the same toml>`; [Mkfs.md, --purge](Mkfs.md)).
 3. **Process detail (the details of the running processes, Layer 3)** ... the snapshot each mount wrote at its
    most recent heartbeat ([P4-2/P4-4](design/control-plane.md)). **The inode cache** (entries / capacity / the
    hit rate / hits, misses and evictions), **the content cache** (the number of chunks / bytes / max / the hit
@@ -167,7 +175,7 @@ layers are implemented.
 
 The `--json` output is
 `{ "mounts": { "table_present", "rows": [ { …, "stats": {…}, "config": {…} } ] }, "fs": {…} }`
-(each mount row carries `stats` and `config` as nested objects).
+(each mount row carries `stats` and `config` as nested objects; `fs` also carries `target` / `citus_nodes`).
 
 ### Examples
 

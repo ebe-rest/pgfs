@@ -471,10 +471,10 @@ Examples:
 
 ```bash
 # single-node Citus (the coordinator only; the coordinator holds the shards too)
-mkfs.pgfs --clean --citus -c "Host=coord;..." --super "..."
+mkfs.pgfs -f pgfs.toml --clean --citus -c "Host=coord;..." --super "..."
 
 # multi-node Citus (a coordinator plus worker1 plus worker2)
-mkfs.pgfs --clean --citus \
+mkfs.pgfs -f pgfs.toml --clean --citus \
     -c     "Host=coord;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" \
     --super "Host=coord;Port=5432;Username=postgres;Password=postgres;Database=postgres" \
     --worker "w1:5432,w2:5432"
@@ -482,8 +482,18 @@ mkfs.pgfs --clean --citus \
 
 mkfs --citus does the Citus setup **only when it creates the database**:
 
+0. **The removal by `--clean`** (since v0.2.1): **the nodes to remove are decided by what is actually in the
+   database** - if the coordinator's target database exists, the database of the same name on the nodes in that
+   database's `pg_dist_node` (every node except groupid 0 = the coordinator) and then the coordinator's
+   database are DROPped in that order.
+   **`--citus` / `--worker` are not used on the removing side** (they are instructions for the recreating side).
+   `--worker` is relied on only when the coordinator's database does not exist. **Before removing, it checks
+   that every worker can be reached, and if even one cannot, nothing is removed** (stopping halfway would remove
+   only the coordinator and leave garbage on the workers. Take unused workers out first with
+   `citus_remove_node`). After removing, the connection pools are cleared (`Pg.ClearPools` - so that a
+   connection cut by the DROP is not picked up by an operation on the recreated database).
 1. **The worker bootstrap** (Phase 1): on each `--worker`, over a super connection, `EnsureUser` ->
-   (DropDatabase with `--clean`) -> `CREATE DATABASE pgfs` -> `CREATE EXTENSION IF NOT EXISTS citus`
+   `CREATE DATABASE pgfs` -> `CREATE EXTENSION IF NOT EXISTS citus`
 2. **Ensuring the coordinator database** (Phase 2): `CREATE DATABASE pgfs` on the coordinator over a super
    connection
 3. **The Citus topology** (Phase 3):

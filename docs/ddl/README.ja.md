@@ -107,14 +107,13 @@ DB 保管の設定は `pgfs.toml` ではなく `pgfs_settings` の行で持つ�
 
 | (scope, key) | 既定 | 備考 |
 |---|---|---|
-| `(mount, fallback_uname)` | `nobody` | 名前解決失敗時の逃げ先 |
-| `(mount, fallback_gname)` | `nogroup` | 同上 |
+| `(file_system, unknown_name)` | `(unknown)` | 作った人の名前が分からないときに書く名前 (v0.2.1〜。旧 `(mount, fallback_uname / fallback_gname)` は廃止・残っていても読まれない) |
 | `(file_system, version)` | `1.0.0` | mkfs 時凍結用 |
 | `(file_system, volume_label)` | `pgfs` | Windows ドライブ名 |
 | `(file_system, cluster_size)` | `4096` | FS 共通のブロックサイズ |
 | `(file_system, default_chunk_size)` | `1048576` | 新規 data のチャンクサイズ |
 | `(file_system, max_file_size)` | `1099511627776` | 公称容量等に使用 |
-| `(database, tablespace)` / `(database, tablespace_path)` | `pg_default` / 空文字 | mkfs の DB 構築設定。TOML のマウント設定とは分離 |
+| ~~`(database, tablespace)` / `(database, tablespace_path)` / `(database, citus)`~~ | — | **v0.2.1 から保存しない** (作るときだけの指示。DB の実体 `pg_database` / `pg_tablespace` / `pg_extension` から取る)。既存 FS に残っている行は読まれない |
 | `(audit, enabled)` | `false` | 監査ログ ([../audit-log.ja.md](../design/audit-log.ja.md))。使うなら `true` |
 
 例 (監査ログを有効化。`value` は JSONB なので bool は `true`/`false`):

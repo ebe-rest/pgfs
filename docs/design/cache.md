@@ -37,7 +37,11 @@ Two caches on the reading side. For where they sit in the whole, see the table i
 2. **One cap, with `byId` as the authority.** When `byId.Count > cache_max_entries` it evicts by LRU, and
    afterwards it **sweeps `byPath`/`childrenByParent` of entries pointing at ids that are no longer in byId**
    to keep them consistent (three dictionaries bounded indirectly by byId's single cap). The root has
-   `CacheTime = DateTime.MaxValue` fixed, so it is **never evicted**.
+   `CacheTime = DateTime.MaxValue` fixed, so it is **never evicted**. **The root is held separately as the
+   starting point of path resolution**: `Invalidate(0)` / `InvalidateAll` set a "re-read it" mark, and the next
+   `GetRoot()` re-reads it from the database and swaps it in (v0.2.1. Before that it was read only once at
+   startup, and **another client's chmod / chown / mtime on the root were invisible until a remount**. If it
+   cannot be re-read, it carries on with the old root and reads again at the next query).
 3. **Thread safety stays as it is** (the eviction happens under `lock(this)`). Resolving `lock(this)` plus
    database queries inside the lock ([performance.md](performance.md)) is **a separate step** (it is not
    mixed in here).

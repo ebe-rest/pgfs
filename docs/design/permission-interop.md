@@ -17,14 +17,15 @@
 > | [../Assign.md](../Assign.md) | The current CLI contract and the operation list of **the Windows side** |
 > | [windows-parity.md](windows-parity.md) | **The as-built and the staging of what is unimplemented** for taking it to Windows |
 > | [audit-log.md](audit-log.md) | **The audit rows for changes** to the ACLs and the ownership |
-> | [settings-matrix.md](settings-matrix.md) | **The settings** such as `mount.fallback_uname` / `fallback_gname` |
+> | [settings-matrix.md](settings-matrix.md) | **The settings** such as `mount.self_uname` / `self_gname` / `file_system.unknown_name` |
 > | [xattr-bytea.md](xattr-bytea.md) | **The byte-string transparency of the xattr** that carries the ACL |
 > | [../next.md](../next.md) | **The priority** of what remains (the punch list) |
 
 > **The status**: the design is agreed (**revised** the same day). **The implementation is complete
 > as far as the main purpose** - the 5 immediate items plus the ACL proper 3-0 to 3-3 are implemented (the
 > regressions were Windows 26/26 and Linux 35/35; the progress is in the "the agreements" table below).
-> **Only the strict enforcement of a named ACL (3-4) is held back, awaiting a requirement.** This document is the
+> **The decision on Windows (the Windows side of 3-4) is implemented in v0.2.1** (see the decision on Windows).
+> **Only the strict enforcement of a named ACL on Linux is held back, awaiting a requirement.** This document is the
 > source of truth for the design decisions, and **for the implementation details see
 > [Mount.md](../Mount.md) / [Assign.md](../Assign.md) /
 > [FileSystemUtils.cs](../../src/dokan/src/FileSystemUtils.cs)**.
@@ -56,7 +57,7 @@ internal model is canonically a **POSIX ACL**, and **a Windows ACL is drawn as a
 | 4 | The Windows ACL | **Demoted to a projected view** (the opaque and the bidirectional round trip are withdrawn) |
 | 5 | The ACL model | POSIX-only, allow only. `acl[]={principal_type,principal_name,rights}`, with `mode` and `acl[]` coexisting |
 | 6 | The Windows attributes xattr | JSON `{hidden,system,archive}` in `user.win.attrs` (the user namespace). `compressed` is for the future |
-| 7 | ReadOnly | If the accessor itself cannot write, it is ReadOnly (the owner/group/other writability is evaluated against the normalized caller) |
+| 7 | ReadOnly | ~~If the accessor itself cannot write, it is ReadOnly (the owner/group/other writability is evaluated against the normalized caller)~~ -> **changed in v0.2.1 to "ReadOnly only when nobody can write (the w of owner / group / other are all cleared)"**. Who can write is decided by the permission decision (see the decision on Windows) |
 | 8 | owner = a group | owner = nobody and group = the one in question |
 | 9 | Anonymous access | The policy is only stated; no code change (pgfs has no anonymous connection path) |
 | 10 | The ACL decision | Evaluated in POSIX order in the client driver (Linux too decides in the pgfs layer, including the normalization, rather than delegating to the kernel) |
@@ -78,7 +79,7 @@ concepts.
 |---|---|---|
 | The owner (`uname`) | `fuse_get_context()->uid` resolved through `UserResolver.UnameOf` | The requestor's `WindowsIdentity.User` (a SID) resolved through `WindowsUserResolver.UnameOf` |
 | The group (`gname`) | The caller's **gid** (= effectively the primary group) | **Inherited from the parent directory's `gname`** |
-| When it cannot be resolved | `mount.fallback_uname` / `fallback_gname` (`nobody` / `nogroup` by default) | The same (**it never masquerades as the mount process's user**) |
+| When it cannot be resolved | How it is shown comes from the OS (Linux: the overflowuid / overflowgid). When written to the database it is `file_system.unknown_name` (`(unknown)`) | It is shown as `ANONYMOUS LOGON`. When written to the database, the same as on the left (**it never masquerades as the mount process's user**. Its own identity is `mount.self_uname` / `self_gname`, only for its own SID) |
 
 **Why Windows inherits the group**: a Windows token's primary group is in practice almost always
 `Domain Users` or `None`, and it is not used in the access decision either. Storing it as it is fills the
@@ -131,8 +132,8 @@ the Linux name plus the normalization) and "drawing/resolving" (the Linux name -
 - **How an unknown name is treated**: even when the name resolution fails, **the ACL itself is not rewritten**.
   It is stored under its original name, and **only at evaluation time** is it resolved to `nobody` / `nogroup`
   (`ANONYMOUS LOGON` in the Windows drawing).
-- root <-> Administrator(s) existed only in the display decision of the existing
-  [`IsWritable`](../../src/dokan/src/FileSystemUtils.cs), so it is **extended to the storing direction** too,
+- root <-> Administrator(s) originally existed only in the display decision (the old `IsWritable`, removed in
+  v0.2.1), so it is **extended to the storing direction** too,
   and nobody/nogroup/other follow the table.
 
 ## The ACL model (POSIX-only, allow only)
@@ -189,9 +190,12 @@ Linux's owner resolution (getpwnam) and the group information would be lost).
 
 ## The Windows attributes
 
-- **Only ReadOnly links to the mode**: if the accessor itself cannot write (the owner/group/other writability
-  evaluated against the normalized caller), it is ReadOnly (following the thinking of the current
-  [`IsWritable`](../../src/dokan/src/FileSystemUtils.cs)).
+- **Only ReadOnly links to the mode**: **if nobody can write (the w of owner / group / other are all cleared),
+  it is ReadOnly** ([`IsReadOnly`](../../src/dokan/src/FileSystemUtils.cs), v0.2.1).
+  Originally it was "ReadOnly if the accessor itself cannot write", but `GetFileInformation`, which returns the
+  attributes, has no caller, so it could only be evaluated as **the user who mounted it**, and **someone else's
+  `0644` looked read-only and could not be deleted from Windows** (Windows refuses to delete a read-only file;
+  in POSIX a delete is decided by w on the parent).
 - **Hidden / System / Archive**: stored as **JSON** in the xattr `user.win.attrs`
   (**the user namespace = visible from Linux's `getfattr` too**).
 
@@ -242,13 +246,13 @@ pgfs_inode
 | [2] Stripping the domain / UPN | **✅ Implemented** | `NameNormalizer.StripDomain` handles both `\` and `@`. The old `StripDomain` on the Windows side was removed |
 | [3] The principal mapping | **✅ Implemented** | The well-known aliases went into [WindowsUserResolver](../../src/dokan/src/WindowsUserResolver.cs) (MapWinUserToPgfs/MapWinGroupToPgfs/MapPgfsUserToWin/MapPgfsGroupToWin). nobody/nogroup <-> `NT AUTHORITY\ANONYMOUS LOGON` |
 | [6] The Windows attributes xattr | **✅ Implemented** | `user.win_attrs` (4 bytes) became `user.win.attrs` (the JSON `{hidden,system,archive}`). The Load/SaveWinAttrs of [FileSystemUtils](../../src/dokan/src/FileSystemUtils.cs) |
-| [7] ReadOnly | **✅ Implemented** | [`IsWritable`](../../src/dokan/src/FileSystemUtils.cs) was simplified to a comparison of normalized names (the root <-> Administrator alias is absorbed by the mapping) |
+| [7] ReadOnly | **✅ Implemented (the condition changed in v0.2.1)** | [`IsReadOnly`](../../src/dokan/src/FileSystemUtils.cs) = only when the w are all cleared. The old `IsWritable` (whether the user who mounted it can write) was removed |
 | [9] The anonymous policy | **✅ Stated only** | Stated in this document (no code change) |
 | [5] The ACL model (the canonical document) | **✅ 3-0 implemented** | [PgfsAcl](../../src/core/src/Models/PgfsAcl.cs) (in the library): the `user.pgfs_acl` JSON (entries[]/default[]). Allow only |
 | [4] The projected view (the Windows read) | **✅ 3-1 implemented** | [FileSystemUtils.BuildSecurity](../../src/dokan/src/FileSystemUtils.cs) plus [GetFileSecurity](../../src/dokan/src/FileSystem.cs). The owner and group SIDs plus the mode-derived ACEs plus the named ACL are projected into the SD. `test_getfilesecurity_projection` was added to the Windows e2e suite (25/25 PASS) |
 | [4] The projection (the Windows write) / [8] owner = a group | **✅ 3-2 implemented** | [SetFileSecurity](../../src/dokan/src/FileSystem.cs) plus [ApplySecurity](../../src/dokan/src/FileSystemUtils.cs): the SD -> the mode (the three basic classes) plus the acl[] (named) plus the owner and group. If the owner is a group SID it goes to nobody plus that group ([IsGroupSid](../../src/dokan/src/WindowsUserResolver.cs) = LookupAccountSid). Deny is dropped in the projection. `test_setfilesecurity_roundtrip` was added to the Windows e2e suite (26/26). An Explorer operation with owner = a group depends on SeRestorePrivilege so it is not covered by the e2e suite (the logic is implemented) |
 | [4][5] The Linux POSIX ACL | **✅ 3-3 implemented (access)** | The [PosixAcl](../../src/fuse/src/PosixAcl.cs) codec plus [the FUSE FileSystem](../../src/fuse/src/FileSystem.cs) convert `system.posix_acl_access` <-> the st_mode (the three basic classes) plus the `user.pgfs_acl` (named) plus computing the mask. With no named entries it is ENODATA. `test_posix_acl_named_user` was added to the Linux e2e suite (35/35). **`system.posix_acl_default` is passed through as it is today** (a round trip within Linux only; converting the Windows inheritance is unsupported) |
-| [10] The driver's evaluation | **Phase 3-4 (to be re-evaluated)** | With 3-1 to 3-3, the mode and the ACL round-trip through both Get and Set, and the enforcement is the kernel's (the mode plus the returned SD). The name normalization takes effect on the stored names, so whether each op really needs its own decision needs consideration. See "re-evaluating 3-4" below |
+| [10] The driver's evaluation | **Implemented for Windows in v0.2.1 / held back for Linux** | Windows (Dokan) does not decide from the SD, so its own decision in POSIX order is added - see "the decision on Windows" below. Linux stays with the kernel's decision under `default_permissions` (the strict enforcement of a named ACL awaits a requirement) |
 
 > **The regressions**: after implementing the 5 immediately applicable items ([1][2][3][6][7]),
 > the Windows e2e suite **24/24** (including the attributes), the Linux e2e suite **34/34** plus the race
@@ -279,6 +283,115 @@ interoperability are the main purpose, what there is now is enough in practice. 
 enforcement appears, (a) making the ACL take effect on the Linux mount or (b) the driver's evaluation is
 designed again. **3-4 is held back for now (until a requirement appears)**, and the main purpose of the
 interoperability is taken as achieved by 3-1 to 3-3.
+
+### The decision on Windows (implemented in v0.2.1)
+
+**A correction of the premise**: the re-evaluation above says "Windows has the kernel decide from the returned
+SD", but **that is wrong**. Dokan **makes no access decision** from the SD that `GetFileSecurity` returns (the
+decision is left to the user-mode file system). On v0.2.0 it was measured that Windows could write directly
+under a `root:root 755` root ([CHANGELOG.md](../../CHANGELOG.md)).
+Linux has the kernel decide the mode through `default_permissions` as before (this section does not change
+Linux's behaviour).
+
+**What was decided**:
+
+| The item | The decision |
+|---|---|
+| The method | **The Dokan side decides by itself in POSIX order** (owner -> named user -> group / named group -> other). Passing the projected SD to Windows's `AccessCheck` is not taken, because it decides by the union of the ACEs and so gives a different result from POSIX when "the owner is narrower than the group" |
+| Where it is decided | The evaluator (the mode + the uname / gname + the canonical ACL + the caller -> the allowed r/w/x) lives in **Core** (so that Linux's [10] can use it in the future). Dokan only holds the translation of an access mask into r/w/x and what to check in which callback |
+| The setting | **`app.enforce_permissions`** (bool, **`true` by default**, **stored in the database**, `Live`). It is an item to keep uniform across the whole FS, so it lives in the database ([settings-matrix.md](settings-matrix.md), "FS-specific goes in the database"). It is switched with `pgfsctl config set app.enforce_permissions false` (reflected while running). mkfs has no flag for it. **It only takes effect on Windows (assign)** - Linux's decision is on the mount-option side |
+| The migration | An FS made with v0.2.0 has no row -> the default `true` takes effect. **At the moment of upgrading, what Windows could write may be refused** (written in the CHANGELOG's "changes that need a migration") |
+
+**The caller** (obtainable only inside `CreateFile` - the `GetRequestor` constraint of [Assign.md](../Assign.md)):
+
+- The user = the token's User SID -> `WindowsUserResolver.UnameOf` (normalization + mapping +
+  `mount.self_uname`).
+- The groups = the token's **enabled** group SIDs -> `GnameOf` (cached per SID).
+- **A token with Administrators enabled (elevated) passes straight through** (the equivalent of Linux's root).
+  A token restricted by UAC has Administrators as deny-only, so it **does not pass through**.
+- The settled subject (the uname / the set of gnames / whether it passes through) is put on the
+  `OpenFileContext`, and `MoveFile` / `SetFileSecurity` / `SetFileAttributes` / `DeleteFile` use it (carried
+  around the same way as the audit subject).
+
+**The translation of the access mask** (in `CreateFile`, against the target being opened):
+
+| The request | What it needs |
+|---|---|
+| `ReadData` (= `ListDirectory`) / `ReadExtendedAttributes` / `GenericRead` | r |
+| `WriteData` (= `AddFile`) / `AppendData` (= `AddSubdirectory`) / `WriteExtendedAttributes` / `GenericWrite` | w |
+| `Execute` (= `Traverse`) / `GenericExecute` | x |
+| `WriteAttributes` (times, attributes) | The owner **or** w |
+| `ChangePermissions` (WRITE_DAC) | The owner |
+| `SetOwnership` (WRITE_OWNER) | Only a pass-through (Administrators) (the same as POSIX's chown) |
+| `Delete` / `DeleteOnClose` | w on the parent + the sticky rule (below) |
+| `ReadAttributes` / `ReadPermissions` / `Synchronize` / `MaximumAllowed` | Always allowed (the equivalent of stat) |
+
+**The operations that look at the parent directory**:
+
+- Creating (when it did not exist under `CreateNew` / `Create` / `OpenOrCreate`): w on the parent.
+- Deleting / the source of a rename: w on the parent. **If the parent is sticky (`01000`), only the owner of
+  the target, the owner of the parent or a pass-through** may do it.
+- The destination of a rename: w on the destination's parent. When overwriting, the sticky rule applies to the
+  destination's target too.
+- Truncating the contents (`Truncate` / a `Create` on an existing one): w on the target.
+
+**What is not decided (intended differences)**:
+
+- **The x (search) of the intermediate directories.** On Windows everyone has the "bypass traverse checking"
+  right by default, so it follows that. Linux (`default_permissions`) checks the x of each directory on the
+  path, so **a `0644` file deep inside a `0700` directory can be read only from Windows**.
+- The display of the read-only attribute (decision [7]) is called from `GetFileInformation`, which has no
+  caller, so it is decided by **a condition that does not depend on the subject** (whether the w are all
+  cleared) (the as-built below).
+
+**How the canonical ACL is treated**: a named entry is not narrowed by the mode's group bits (the stored form
+has no mask, and Linux's projection **computes** the mask - decision [5]).
+An owner whose name is unknown (`file_system.unknown_name` = `(unknown)`) matches nobody, so that owner's
+files are decided with the rights of other.
+
+**How it refuses**: `DokanResult.AccessDenied` (= `STATUS_ACCESS_DENIED`; Explorer shows "You need
+permission"). A refusal is left in the log at Information (the request, the path, the subject and the right
+that was needed).
+
+**The verification plan (possible without creating test users)**: the Windows tests run in **a non-elevated
+shell**, so the caller is the everyday user (who does not pass through).
+"Someone else's files" can be made from a Linux mount with `root` / `nobody` as the owner. The following are
+added to crossclient: a `root:root 0644` can be read but not written / a `0600` cannot be read / with rw given
+to that user through a named ACL it can be written / a group `users` `0664` can be written through the group /
+a `root` file inside a `root:root 1777` cannot be deleted (your own file can) / with
+`app.enforce_permissions=false` everything passes. The pass-through in an elevated shell is checked by hand
+once.
+**First confirm that the refusal cases fail with "it could write" against a build from before the fix.**
+
+**The as-built**: the evaluator is [PermissionEvaluator](../../src/core/src/Api/PermissionEvaluator.cs) +
+[AccessCaller](../../src/core/src/Api/AccessCaller.cs) (Core), and the Dokan side is
+[FileSystem.Access.cs](../../src/dokan/src/FileSystem.Access.cs). The verification is
+[tests/windows/permissions.ps1](../../tests/windows/permissions.ps1) (14 cases = the first 12 plus the 2 read-only attribute cases in the as-built below; **confirmed that against a build
+from before the fix the 7 refusal cases fail with "it was `ok`"**).
+The differences from the plan:
+
+- **The verification became a standalone suite rather than cross-client.** The setup (someone else's
+  ownership, the mode, a named ACL) can be made **from an elevated shell through SetFileSecurity** (passing the
+  Administrator SID as the owner makes it `root`), so no mount on the Linux side was needed. The checking
+  operations are done with **a restricted token that has Administrators disabled** (`CreateRestrictedToken`)
+  (an elevated shell passes straight through and checks nothing).
+  Only sticky cannot be set from Windows, so it is checked only when a root-owned `1777` is passed to
+  `-StickyDir`.
+- **A `DeleteChild` on a sticky directory was made owner-only** (not in the plan). When a `Delete` on a file is
+  refused, Windows **reopens the parent with `DeleteChild` and, if that opens, deletes it** (NTFS's
+  FILE_DELETE_CHILD; found when the sticky test failed with "it could delete"). When not sticky, `DeleteChild`
+  means the same as w on the parent, so it is left as is.
+- **The destination's parent of a rename is often stopped at `CreateFile`.** Before a rename, Windows opens the
+  destination's parent with a write request. The decision in `MoveFile` is kept as a second guard.
+- **The "read-only" attribute (decision [7]) was changed to "only when nobody can write".** At first it was left
+  based on the user of the mounting process, so a file owned by someone else that could not be written looked
+  read-only, and since **Windows refuses to delete a read-only file** it could not be deleted from Windows even
+  when elevated (the behaviour since v0.2.0; found while cleaning up after the tests).
+  The remaining difference is only a file whose owner cleared everyone's w (`chmod a-w`) - it cannot be deleted
+  on Windows, while on Linux it can with w on the parent.
+  **To line up "cannot be deleted" on both OSes, there is the idea of holding an immutable attribute separately**
+  (not started). The tests are 2 cases in permissions.ps1 (confirmed to fail against a build from before the
+  fix).
 
 ## A concrete example: setting the owner to "Users" on Windows
 

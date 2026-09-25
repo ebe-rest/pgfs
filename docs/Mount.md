@@ -59,8 +59,9 @@ sudo dotnet run --project src/mount -- \
     -c "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" \
     -m /mnt/pgfs
 
-# the help
+# the help / the version
 dotnet run --project src/mount -- --help
+dotnet run --project src/mount -- --version
 ```
 
 > **Unmounting**: `fusermount3 -u /mnt/pgfs` (Linux) or Ctrl+C (a LazyUnmount).
@@ -126,7 +127,7 @@ What mount.pgfs uses in particular:
 | `mount.cache_max_entries` | `--cache-max-entries` | `1024` |
 | `mount.max_write` | `--max-write` | `0` = left to libfuse's negotiation (measured, it goes up to the kernel limit of 1 MiB by default). The maximum bytes of one FUSE WRITE request. It is separate from the flush tx granularity under write-back. It is for lowering it, or pinning it across libfuse versions (`-o max_write` is accepted too, but libfuse3 refuses it as a mount option, so **pgfs routes it into this Field and sets it in the init callback**) |
 | `logging.level` | `--log-level` | `information` |
-| `database.notify_enabled` | `--notify` | `false`. Recommended when several clients mount the same PG/pgfs. For the details see "the notification of another client's changes" below |
+| `database.notify_enabled` | `--notify` / `--no-notify` | **`true`** (v0.2.1 and later; up to v0.2.0 it was `false`). Use `--no-notify` to save the cost of the notifications when running only one mount. For the details see "the notification of another client's changes" below |
 
 The same TOML as Mkfs can be used for the `pgfs.toml`.
 
@@ -351,8 +352,8 @@ are separate from the `pgfs_lock` used for the database updates.
 
 ## The notification of another client's changes (Notify)
 
-Enabling it with `database.notify_enabled=true` receives other clients' writes through PostgreSQL's `LISTEN` /
-`NOTIFY` and invalidates the local `InodeCache`
+With `database.notify_enabled=true` (the default since v0.2.1), it receives other clients' writes through
+PostgreSQL's `LISTEN` / `NOTIFY` and invalidates the local `InodeCache`
 ([src/core/src/Api/NotifyChannel.cs](../src/core/src/Api/NotifyChannel.cs)). When several `mount.pgfs` or
 `assign.pgfs` instances share the same PG/pgfs, a writing client's change is reflected in the other clients'
 `stat` and `ls`.
@@ -668,7 +669,7 @@ by hand with `fusermount3 -u <mountpoint>`.
 | The access check (`Access`) | ❌ | For now it is expected that passing `default_permissions` at mount time has the kernel decide |
 | The mount option `-o` | ✅ | `-o key=val,flag,...` is classified (FUSE passthrough / accepted and ignored plus the `x-` prefix / pgfs settings / unknown = a Warning / an unsupported mount operation = an explicit Warning). For the details see "the mount options" above. The implementation is [ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs) |
 | Reconnecting after a failed connection | ✅ | The `Pg.OpenConnection` family is wrapped in [Retry](../src/core/src/Utility/Retry.cs). Exponential backoff, tuned with `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. It does not retry arbitrary queries. Separately, create / write / flush have a bounded tx retry for `40P01` and `40001` ([support_for_citus.md](design/support_for_citus.md)) |
-| The fallback for a uname or gname that does not exist on the OS | ✅ | When `getpwnam` / `getgrnam` fail, the uid/gid resolved from `mount.fallback_uname` / `mount.fallback_gname` (stored in the database, `nobody` / `nogroup` by default) are returned. If the fallback names themselves cannot be resolved, uid=65534 (NFS's conventional nobody) is hardcoded and a warning is logged. The implementation is [src/fuse/src/UserResolver.cs](../src/fuse/src/UserResolver.cs), verified by `test_fallback_uname_gname` in the Linux e2e suite |
+| How a uname or gname that does not exist on the OS is shown | ✅ | v0.2.1 and later. It is shown as **the kernel's overflowuid / overflowgid** (`/proc/sys/kernel/overflow*`, usually 65534 = `nobody` / `nogroup` on Debian-family systems, `nobody` / `nobody` on RHEL-family ones) (there is no setting; the old `mount.fallback_*` were removed). What is created by a uid / gid with no name (such as a container's uid) is written to the database as `file_system.unknown_name` (`(unknown)`). **Its own identity is `mount.self_uname` / `self_gname`** (put on what it creates itself, and that name is shown as its own uid / gid). Note: for a uid with no name, even a file it created itself appears owned by the overflowuid, so it cannot write it under `default_permissions` (a limit of the design that holds names; the behaviour since v0.2.0). The implementation is [src/fuse/src/UserResolver.cs](../src/fuse/src/UserResolver.cs), verified by `test_fallback_uname_gname` in the e2e suite |
 | Caching and batching the reads and writes | ⚠️ | The bytea chunk scheme. The read cache and the per-file write-back are implemented. Read-ahead and a flush batch across files are unimplemented |
 | The binary representation of an xattr value | ✅ | **The raw byte string is held faithfully** in `xattr_values BYTEA[]` (migrated from the old Base64 plus JSONB). Any byte string including NULs round-trips untouched and it is directly visible as a bytea in SQL too. The design and the verification are in [xattr-bytea.md](design/xattr-bytea.md) |
 
@@ -676,7 +677,7 @@ by hand with `fusermount3 -u <mountpoint>`.
 
 ```bash
 # 1. initialize PGFS in PostgreSQL (see [docs/Mkfs.md](Mkfs.md))
-dotnet run --project src/mkfs
+dotnet run --project src/mkfs -- -f pgfs.toml
 
 # 2. prepare the mount point
 sudo mkdir -p /mnt/pgfs

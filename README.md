@@ -152,25 +152,26 @@ Start PostgreSQL 17 and make it reachable as a superuser (usually `postgres`).
 
 ```bash
 # With the defaults (localhost:5432 / the postgres superuser / creating the pgfs user and database)
-dotnet run --project src/mkfs
+dotnet run --project src/mkfs -- -f pgfs.toml
 
 # Giving the superuser connection explicitly
-dotnet run --project src/mkfs -- \
+dotnet run --project src/mkfs -- -f pgfs.toml \
     --super-connection "Host=localhost;Port=5432;Username=postgres;Password=postgres;Database=template1"
 
 # Giving the PGFS user connection explicitly
-dotnet run --project src/mkfs -- \
+dotnet run --project src/mkfs -- -f pgfs.toml \
     --connection "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs"
 
 # Changing the schema and the prefix
-dotnet run --project src/mkfs -- -s myschema -x myfs_
+dotnet run --project src/mkfs -- -f pgfs.toml -s myschema -x myfs_
 
 # Help
 dotnet run --project src/mkfs -- --help
 ```
 
-When it finishes, `pgfs.toml` (the settings file) is written into the current directory. For the details see
-[docs/Mkfs.md](docs/Mkfs.md).
+When it finishes, `pgfs.toml` (the settings file for distribution) is written to the place given with `-f`.
+**`-f` is mandatory**: if the file exists it is read and written back there, and if not it is created. For the
+details see [docs/Mkfs.md](docs/Mkfs.md).
 
 ### 3. Mount
 
@@ -202,7 +203,9 @@ dotnet run --project src\assign -- -m P:
 Get-ChildItem P:\
 ```
 
-For the details see [docs/Assign.md](docs/Assign.md).
+For the details see [docs/Assign.md](docs/Assign.md). The procedure and the scripts for keeping it resident from
+logon are in [docs/Assign.md, keeping it resident from logon](docs/Assign.md) /
+[scripts/windows/](scripts/windows/pgfs-mount.ps1).
 
 ## The documentation
 

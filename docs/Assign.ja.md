@@ -57,8 +57,9 @@ dotnet run --project src\assign -- `
     -c "Host=localhost;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" `
     -m P:
 
-# ヘルプ
+# ヘルプ / 版
 dotnet run --project src\assign -- --help
+dotnet run --project src\assign -- --version
 ```
 
 > **アンマウント**: Ctrl+C でアンマウント要求。または別ターミナルで `dokanctl /u <mountpoint>` を使うこともできます。
@@ -89,6 +90,48 @@ dotnet run --project src\assign -- --help
 
 ビルドだけは Linux/macOS でも通します（クロスコンパイル目的）。通常起動では設定の構築後に `OperatingSystem.IsWindows()` ガードで `mount.pgfs` (FUSE 版) に誘導するエラーを出して終了します。
 
+### ログオン時に常駐させる (v0.2.1〜)
+
+`assign.pgfs` は前景プロセスで、Windows サービスとしては動かない。**普段使いのマウントは、ログオン時のタスクからスクリプト経由で上げる**。
+同梱のスクリプトは [scripts/windows/](../scripts/windows/pgfs-mount.ps1) にある。管理者権限は要らない (自分のユーザーのタスクとして登録する)。
+
+1. **置き場**: `%LOCALAPPDATA%\Programs\pgfs\` に `assign.pgfs.exe` と `pgfsctl.exe` を置く ([ビルド](../README.ja.md) の `bin\Publish` から)。
+2. **設定**: `%LOCALAPPDATA%\pgfs\pgfs.toml` を置く (mkfs が書き出した配布用の toml を元にする)。常駐用に見直すのは次の 3 つ:
+   - `[mount] mount_point` — スクリプトの `-Drive` と揃える (既定は両方 `P:`)。
+   - `[logging] output` — 例 `"daily:~/pgfs/log/pgfs-*.log"`。**ウィンドウを出さずに動くので、ログをファイルに出さないと失敗の理由が追えない**。
+   - `[database] notify_enabled` — 複数のマウントで同じ FS を使うなら `true` (v0.2.1 からの既定)。
+3. **スクリプト**: [pgfs-mount.ps1](../scripts/windows/pgfs-mount.ps1) と [pgfs-mount.cmd](../scripts/windows/pgfs-mount.cmd) (ダブルクリック用) を好きな場所 (例: デスクトップ) にコピーする。
+   `pgfs-mount.ps1` は assign.pgfs を `%LOCALAPPDATA%\pgfs` を開始フォルダにして隠しウィンドウで起動し、ドライブが現れるまで最大 30 秒待つ。
+   **多重実行ガードが 3 段ある** — どれかに当たったら何もせず exit 0:
+   1. 名前付き Mutex (このスクリプト自身の同時実行。タスクとダブルクリックが重なっても片方は即終了)
+   2. ドライブが既にマウント済み
+   3. `assign.pgfs` が既に動いている — **1 ユーザー 1 マウント前提**。同じユーザーで別のドライブも常駐させるなら `-SkipProcessGuard` を付ける
+4. **タスクの登録**: [register-logon-task.ps1](../scripts/windows/register-logon-task.ps1) をコピーした `pgfs-mount.ps1` と同じフォルダで実行する。
+
+   ```pwsh
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File register-logon-task.ps1 -Drive P:
+   Start-ScheduledTask -TaskName 'pgfs assign P'      # いま上げる (次のログオンを待たない)
+   # 外すとき
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File register-logon-task.ps1 -Drive P: -Unregister
+   ```
+
+   登録されるタスクは「このユーザーのログオン時」に `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<pgfs-mount.ps1>" -Drive P:` を呼ぶ。
+   設定のうち外せないものが 2 つある:
+   - **実行時間の制限なし** (`-ExecutionTimeLimit 0`)。既定の 72 時間のままだと、タスクスケジューラがマウント中の assign.pgfs ごと止める。
+   - **多重起動は `IgnoreNew`**。動いている間に再度トリガーされても新しく起動しない (スクリプトのガードと二重)。
+   ほかに、バッテリー駆動でも開始・継続する設定と、権限は通常 (`Limited`) にしてある。
+5. **確かめる**: `pgfs-mount.cmd` をダブルクリックする。既にマウント済みなら `P: is already mounted; nothing to do` が出る。どのホストが今マウントしているかは `pgfsctl status` で見られる ([Pgfsctl.ja.md](Pgfsctl.ja.md))。
+6. **止める**: `"C:\Program Files\Dokan\Dokan Library-2.x.x\dokanctl.exe" /u P:` (assign.pgfs は自分で終了する)。
+   **`Stop-Process` やタスクの「終了」で止めない** — Ctrl+C と同じ段階的な停止を通らないので、write-back の未 flush が失われ得る (上の「アンマウント」)。
+   ログオフ / シャットダウンでも Windows が数秒で打ち切るので、**write-back を on にして常駐させるなら、ログオフの前に `dokanctl /u` で止める**。
+
+注意点:
+
+- **昇格は要らない** (タスクは `Limited` で登録する)。権限の判定は assign.pgfs の権限ではなく**要求元のトークン**で行うので、常駐プロセスの権限は判定に関係しない。
+  ただし**昇格したシェルからの操作は判定を素通しする** (Linux の root と同じ。下の「権限の判定」)。
+- **リポジトリの中から起動しない**。assign.pgfs は開始フォルダの `pgfs.toml` を拾うので、開発用の toml で普段使いの FS をマウントする事故になる。
+- サービスとして動かす (ログオン前にマウントする / 複数ユーザーで共有する) 仕組みは無い。
+
 ## 設定
 
 設定モデルは [`Pgfs.Core.Config.RootConfig`](../src/core/src/Config/RootConfig.cs) を共有しています。Mkfs / Mount と同じ TOML 設定ファイル ([pgfs.toml.example](../pgfs.toml.example)) と同じコマンドラインオプションが使えます。詳細は [docs/Mkfs.ja.md](Mkfs.ja.md) を参照。
@@ -101,7 +144,7 @@ assign.pgfs が特に使うのは:
 | `mount.mount_point` | `-m`, `--mount-point` | Windows: `P:` |
 | `mount.cache_max_entries` | `--cache-max-entries` | `1024` |
 | `logging.level` | `--log-level` | `information` |
-| `database.notify_enabled` | `--notify` | `false` (データ変更通知の opt-in。Core cache を無効化し NotifyUpdate を呼ぶ。**複数マウントを同時に運用するなら事実上必須** — 下の注を参照) |
+| `database.notify_enabled` | `--notify` / `--no-notify` | **`true`** (v0.2.1〜。v0.2.0 までは `false` の opt-in だった。Core cache を無効化し NotifyUpdate を呼ぶ。**複数マウントを同時に運用するなら事実上必須** — 下の注を参照) |
 
 ### Linux 追加機能の適用状態
 
@@ -118,8 +161,8 @@ FlushInode / FlushDirectory を呼ぶ。Cleanup は void なので失敗を返�
 **裁定済みの仕様**: `mkdir` は `exclusive: false` のまま (**同期化すると pending ディレクトリが生まれず、祖先チェーン INSERT が到達不能になる**ため)。**既定では DB の一意制約が同名 mkdir を弾く**が、**`write_back_metadata` を on にすると pending 採択で衝突が成功に化ける余地が残る** (B-1 のノブは `O_EXCL` の create が対象で、mkdir は対象外)。詳細は [windows-parity.ja.md §`mkdir` を同期にしない](design/windows-parity.ja.md)。~~`write_back_metadata` を on にした Windows 受入は未検証~~ → **2026-09-19 に [wbmeta.ps1](../tests/windows/wbmeta.ps1) で受入済**
 (data write-back = `mount.write_back` on は 6/6 で検証済)。
 
-> **⚠ 複数マウントを同時に使うなら `--notify` を付けること**。各マウントの `InodeCache` / read キャッシュは
-> 独立で、他マウントの変更は LISTEN/NOTIFY でしか伝わらない。既定 (`database.notify_enabled=false`) では、
+> **⚠ 複数マウントを同時に使うなら `--no-notify` にしないこと** (v0.2.1 から既定 on。v0.2.0 までは `--notify` が要った)。各マウントの `InodeCache` / read キャッシュは
+> 独立で、他マウントの変更は LISTEN/NOTIFY でしか伝わらない。通知を切った構成 (`database.notify_enabled=false`) では、
 > **他マウントが行った create / 上書き / delete / 置換 rename がいつまでも見えない**
 > (2026-09-19 に 2 マウントで実測。`--notify` 付きなら数百 ms で追随する)。
 > 排他 (`CREATE_NEW` / `mkdir` の衝突) は DB の一意制約で決まるので notify の有無に関係なく正しく働く。
@@ -225,6 +268,23 @@ POSIX を正準・Windows ACL を **投影ビュー**として実装済み (設�
 - **投影で落とすもの**: deny ACE / ACE 順序 / 継承フラグ は POSIX に等価が無いため採用しない (Windows⇄Windows の ACL 完全一致は保証しない)。
 - Linux 側は `system.posix_acl_access` (setfacl/getfacl) が同じ正準ストアと往復する ([Mount.ja.md](Mount.ja.md))。
 
+### 権限の判定 (v0.2.1〜)
+
+**Dokan は GetFileSecurity が返した SD でアクセス判定をしない**ので、assign が POSIX 順 (所有者 → 名前付きユーザー → グループ → other) に自前で判定する
+(`app.enforce_permissions`・既定 `true`・DB 保存・`pgfsctl config set` で走行中に切り替わる)。設計の正は [permission-interop.ja.md §Windows の判定](design/permission-interop.ja.md)。
+
+- **判定する場所は `CreateFile` と `MoveFile` だけ**。開いたあとの `WriteFile` / 属性変更 / 削除予約 / SD の変更は、Windows の I/O マネージャが**ハンドルに許したアクセス**で止める。
+- **主体**は要求元トークンのユーザー (`UnameOf`) と**有効な**グループ (`GnameOf`)。**Administrators が有効なトークン (昇格済み) は素通し**。主体が取れなければ other の権利で判定する。
+- **作成**は親の w、**削除 / rename の元**は親の w + sticky 規則 (親が `01000` なら対象か親の所有者だけ)、**rename の先**は先の親の w。
+  rename の先の親は、Windows が先に**ディレクトリを書き込み要求で開きにくる**ので、多くは `CreateFile` の時点で止まる (`MoveFile` の判定は二重の守り)。
+- **sticky のディレクトリへの `DeleteChild` は所有者だけ**。Windows はファイルへの `Delete` を断られると**親を `DeleteChild` で開き直し、開けたら消してしまう**
+  (NTFS の FILE_DELETE_CHILD の意味。実測)。POSIX で親の w が子の削除を意味するのは sticky でないときだけなので、sticky では読み替えない。
+- **権限の変更 (WRITE_DAC) は所有者、所有者の変更 (WRITE_OWNER) は素通しの主体だけ** (chmod / chown と同じ)。時刻・属性の変更は所有者か w。
+- 拒否は `STATUS_ACCESS_DENIED` で返し、ログに Information で、権限が無いので拒否した旨をパス・要求・主体・グループを添えて残す。
+- **意図した差**: 途中のディレクトリの x (探索) は見ない (Windows の「走査チェックのバイパス」に合わせる)。
+- **「読み取り専用」属性は、誰も書けない (owner / group / other の w が全部落ちている) ときだけ立つ** (v0.2.1)。誰が書けるかは上の判定が決める。
+  Windows は読み取り専用のファイルの削除を断るので、`chmod a-w` したファイルは Windows からは消せない (Linux では親の w があれば消せる。属性を外せば消せる)。
+
 ### LockFile / UnlockFile
 
 `DokanOptions.UserModeLock` は LockFile / UnlockFile を **userspace で処理する**指定です。pgfs は範囲ロックの台帳を持たないため、付けたままだとコールバックが常に Success を返し、**取れていないロックを「取れた」と返す**状態でした。**オプションを外し、Dokan ドライバに任せる形へ変更**しています (DokanNet の定義: "Enable Lockfile/Unlockfile operations. Otherwise Dokan will take care of it.")。実機で**同一マウント内の byte-range lock が強制されること**を確認済み (`test_byte_range_lock_enforced`: 2 本目のハンドルの `Lock` が `IOException`、`Unlock` 後は取得できる)。万一コールバックが呼ばれたときは `NotImplemented` を返します (嘘の成功を返さない)。
@@ -272,14 +332,15 @@ libfuse が作る残骸を隠す仕組みだが、**Windows では libfuse が�
 | append (`FILE_APPEND_DATA`) | ✅ | **末尾を決めるのは Core** (`Api.AppendData`)。Dokan は `WriteToEndOfFile` で「末尾へ書け」と言ってくるだけなので、FS 側が**解決し直した末尾**へ書く (段階 A まではハンドルが握った古い `Inode.Size` を使い、**他マウントが伸ばしたぶんを上書きして消していた** — [crossclient.ps1](../tests/windows/crossclient.ps1) の `test_x_append_handle_sees_peer_growth` が 11 → 6 バイトの損失で再現)。**不可分性の上限は [Mount.ja.md §append の契約](Mount.ja.md) が正** (write-through のときだけ / 1 回のコールバックに収まるときだけ)。**Windows では 1 回の `WriteFile` は分割されずに 1 回のコールバックとして届く** (2026-09-21 実測) — 64KB / 1MB / 16MB / **64MB** のすべてで `NumberOfBytesToWrite` がそのまま 1 行で来た。生の Win32 `WriteFile` / `FILE_FLAG_WRITE_THROUGH` / `FILE_APPEND_DATA` / .NET `FileStream` の 4 経路とも同じで、`NoCache=False, PagingIo=False` (キャッシュ経由でもページング I/O でもない同期の降り方)。**Linux は `max_write` 超えで切れるので、append の不可分性の上限は OS で違う** — Windows の上限を Linux に持ち込まないこと |
 | SID ↔ uname/gname 解決 | ✅ | [WindowsUserResolver](../src/dokan/src/WindowsUserResolver.cs) で NTAccount.Translate |
 | Truncate のチャンク削減 | ✅ | `Api.TruncateData`（Mount と共通） |
-| ACL (Get/Set FileSecurity) | ✅ | POSIX 正準・Windows 投影ビュー。SD ⇄ st_mode + 正準 ACL (`user.pgfs_acl`)。owner=group は nobody/該当へ。deny/継承は投影で落とす。詳細は [permission-interop.ja.md](design/permission-interop.ja.md)。残: named ACL の厳密 enforce (要件待ち) |
+| ACL (Get/Set FileSecurity) | ✅ | POSIX 正準・Windows 投影ビュー。SD ⇄ st_mode + 正準 ACL (`user.pgfs_acl`)。owner=group は nobody/該当へ。deny/継承は投影で落とす。詳細は [permission-interop.ja.md](design/permission-interop.ja.md) |
+| 権限の判定 (mode + ACL) | ✅ | **v0.2.1〜** POSIX 順の自前判定 (`app.enforce_permissions`・既定 on)。昇格したプロセスは素通し。途中のディレクトリの x は見ない。上記「権限の判定」 |
 | Hidden / System / Archive 属性 | ✅ | xattr `user.win.attrs` に JSON `{hidden,system,archive}` で保存。`ReadOnly` は st_mode の write ビット (従来通り)。Linux で作った dotfile は heuristic fallback で Hidden 表示 |
 | Alternate Data Streams | ❌ | NTFS の ADS は未対応 |
 | アプリケーションの range lock | ⚠️ | **同一マウント内はドライバが強制** ( `UserModeLock` を外した)。**別マウント間は未対応**。Core の tx 排他 (`pgfs_lock`) とは別物 |
 | symlink / hardlink の native 作成・junction | ❌ | **2026-09-19 に PoC 済: 現バインディングでは作成も読みも成立しない**。`IDokanOperations2` に link 系コールバックが無く、reparse データの get/set 入口も無い。実測で `mklink /H` `/J` `/D` と `File.CreateSymbolicLink` が全滅し、**Linux 由来の symlink は列挙から消え、名指しすると空ファイルとして開ける**。詳細は [windows-parity.ja.md §native link の到達性 PoC](design/windows-parity.ja.md) |
 | Notify (他クライアント変更通知) | ⚠️ | **修正**: `Mounted` が申告する実マウント先を前置した絶対パス (`P:\dir\file`) を渡し、bool 戻り値も失敗ログに使う。**消えた対象は `NotifyDelete`** を撃つ (`NotifyUpdate` では属性変更扱いになり、相手側のキャッシュにエントリが残って `Test-Path` が true を返し続ける)。種別はファイル → ディレクトリの順に試す (payload に op / 種別が無いため)。2 マウントでの**可視性は実測済** (create / 上書き / delete / 置換 rename が数百 ms で追随・[crossclient.ps1](../tests/windows/crossclient.ps1))。**他マウントの変更は FileSystemWatcher / Explorer のイベントにならない** (2026-09-21 実測)。**ローカル操作では豊富に出る** (`Created` / `Changed` / `Renamed` / `Deleted` — ドライバが生成する) のに、**他マウント由来は 1 件も出ない**。つまり `NotifyUpdate` / `NotifyDelete` は**キャッシュ無効化としては効く**が (可視性は上記のとおり実測済)、**`ReadDirectoryChangesW` の通知は生まない**。**読み直せば新しい値が見えるが、開いたままのウィンドウは更新されない** (F5 が要る)。**Windows には「通知で画面が直る」経路がそもそも無い**ということであり、[Mount.ja.md](Mount.ja.md) が書く「全破棄のときは OS へ渡せるものが無い」とは層が違う (**渡せたとしても画面は直らない**)。[公式 DokanInstance API](https://dokan-dev.github.io/dokan-dotnet-doc/html/class_dokan_instance.html) / [展開設計](design/windows-parity.ja.md) |
 | 接続失敗時の再接続 | ✅ | [Retry](../src/core/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。任意のクエリの再試行はしない。別途 Core の create / write / flush は 40P01・40001 の bounded tx retry を持つ |
-| OS に存在しない uname / gname のフォールバック | ✅ | `NTAccount.Translate` 失敗時、`mount.fallback_uname` / `mount.fallback_gname` (DB 保存、既定 `nobody` / `nogroup`) を SID 解決して返す。`nobody`/`nogroup` は well-known マッピングで `NT AUTHORITY\ANONYMOUS LOGON` に解決される。それも SID 解決できなければ `WellKnownSidType.AnonymousSid` を hardcode し warning ログ。実装は [src/dokan/src/WindowsUserResolver.cs](../src/dokan/src/WindowsUserResolver.cs) |
+| OS に存在しない uname / gname の見せ方 | ✅ | v0.2.1〜。名前を SID に引けなければ既知の `NT AUTHORITY\ANONYMOUS LOGON` として見せる (設定は持たない。旧 `mount.fallback_*` は廃止)。SID を名前に引けない / 要求元が取れないときは DB に `file_system.unknown_name` (`(unknown)`) と書く。**自分の名乗りは `mount.self_uname` / `self_gname`** — assign プロセス自身の SID で作ったものにこの名前を付け、この名前は自分の SID として見せる (例: Entra ID で自分の SID を名前に引く権限が無い / `AzureAD\...` ではなく短い名前で揃えたい)。他の SID には使わない |
 
 ### 追加の未修正事項（**棚卸し**。取り消し線は修正済み）
 

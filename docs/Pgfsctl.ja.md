@@ -43,6 +43,7 @@ PGFS の **実行時コントロールプレーン CLI** `pgfsctl` の仕様で�
 ## `config` — 設定の参照・変更
 
 ```
+pgfsctl --version                     # 版を表示して終了 (v0.2.1〜)
 pgfsctl config list [--json] [接続オプション]
 pgfsctl config get <scope.key> [--json] [接続オプション]
 pgfsctl config set <scope.key> <value> [接続オプション]
@@ -60,7 +61,7 @@ pgfsctl config set <scope.key> <value> [接続オプション]
 |---|---|---|---|
 | Db, Live | `audit.enabled` / `app.statfs` | `{prefix}settings` 書込み | ✅ 即時（`set` NOTIFY）|
 | File, Live | `logging.level`/`output` / `cache_*` / `retry_*` | **なし（ephemeral）** | ✅ 即時（`set` NOTIFY）|
-| Db, NextMount | `fallback_*` / `tablespace*` / `citus` / `plperlu` | `{prefix}settings` 書込み | 次回マウント |
+| Db, NextMount | `plperlu` | `{prefix}settings` 書込み | 次回マウント |
 | File, NextMount | `mount_point` / `connection` / `schema` / `prefix` / `notify_enabled` | なし（remote toml 不可）| 次回マウント（手元 toml 編集を案内）|
 | Format | `file_system.*` | 拒否 | — |
 | None | `--clean` / `foreground` / `setting.*` | 拒否 | — |
@@ -97,6 +98,9 @@ pgfsctl config set audit.enabled true -c "$CONN" -s pgfs
 
 # 全設定を JSON で
 pgfsctl config list --json -c "$CONN" -s pgfs
+
+# Windows (assign) の権限判定を走行中に切る (v0.2.1〜・既定 true)
+pgfsctl config set app.enforce_permissions false -c "$CONN" -s pgfs
 ```
 
 ---
@@ -110,12 +114,13 @@ pgfsctl status [--json] [接続オプション]
 DB 由来の read-only 情報を 1 コマンドでセクション表示します（mount 不要）。3 層すべて実装済み。
 
 1. **Mounts（クラスタ稼働一覧・Layer 1）** … `{prefix}mounts` 登録表から host / pid / mode（`fuse`/`dokan`）/ mountpoint / uptime / heartbeat 経過 / live?（経過 < 90s）。テーブル不在（Phase 2 前の mkfs）は「table not present」と表示。
-2. **Filesystem（FS 統計・Layer 2）** … schema/prefix/version/volume_label、inode 数、file 数、chunk 数、使用バイト（`sum(length(payload))`）、cluster_size、max_file_size、audit on/off、Citus 有無（+ `pg_dist_node` 数）。集計失敗値は `?`。
+2. **Filesystem（FS 統計・Layer 2）** … **target (接続先 `host:port/db`・v0.2.1〜)**、schema/prefix/version/volume_label、inode 数、file 数、chunk 数、使用バイト（`sum(length(payload))`）、cluster_size、max_file_size、audit on/off、Citus 有無（+ `pg_dist_node` 数と**ノードの一覧** `coordinator host:port` / `worker host:port`・v0.2.1〜。どれも DB の実体から）。集計失敗値は `?`。
+   **`mkfs --clean` / `--purge` の前に「どこを消すか」を確かめる**のに使う (`pgfsctl status -f <toml>` → `mkfs --purge -f <同じ toml>`・[Mkfs.ja.md §--purge](Mkfs.ja.md))。
 3. **Process detail（稼働プロセス詳細・Layer 3）** … 各 mount が直近 heartbeat 時に書いたスナップショット（[P4-2/P4-4](design/runtime-control-plane.ja.md)）。**inode キャッシュ**（entries / capacity / hit率 / hits・misses・evictions）、**content キャッシュ**（chunk 数 / bytes / max / hit率 / hits・misses・evictions）、**write-back**（dirty bytes/files、flush/failure、pending inode/監査、error state 等）、**handles**（開いているハンドル数 / これまでの最大数 / **開かれている実体の数**）、**notify**（listen / data / connected）、**実効 config**（走行中 `RootConfig` の運用関連サブセット = logging/retry/cache/statfs/audit/version 等・values-only・password 非含）。live でない行は `[stale]` 付き。
 
 > 鮮度は「直近 heartbeat 値」。snapshot は register 直後 + 30s heartbeat + `ping` 制御 NOTIFY 受信で更新される（req-rep はしない）。CLI が即時を要するときは `pg_notify('{schema}_{prefix}notify','{"c":"ping"}')` を送って更新を要求できるが、応答待ちをしないため直後の status に反映済みとは限らない。
 
-`--json` 出力は `{ "mounts": { "table_present", "rows": [ { …, "stats": {…}, "config": {…} } ] }, "fs": {…} }`（各 mount 行に `stats`/`config` を入れ子オブジェクトで同梱）。
+`--json` 出力は `{ "mounts": { "table_present", "rows": [ { …, "stats": {…}, "config": {…} } ] }, "fs": {…} }`（各 mount 行に `stats`/`config` を入れ子オブジェクトで同梱。`fs` に `target` / `citus_nodes` も入る）。
 
 ### 例
 

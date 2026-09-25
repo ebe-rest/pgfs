@@ -115,14 +115,13 @@ something (in particular **to enable the audit log**):
 
 | (scope, key) | Default | Note |
 |---|---|---|
-| `(mount, fallback_uname)` | `nobody` | The fallback when name resolution fails |
-| `(mount, fallback_gname)` | `nogroup` | The same |
+| `(file_system, unknown_name)` | `(unknown)` | The name written when the creator's name is unknown (since v0.2.1. The old `(mount, fallback_uname / fallback_gname)` were retired; if left behind they are not read) |
 | `(file_system, version)` | `1.0.0` | Frozen at mkfs time |
 | `(file_system, volume_label)` | `pgfs` | The Windows drive name |
 | `(file_system, cluster_size)` | `4096` | The block size shared by the FS |
 | `(file_system, default_chunk_size)` | `1048576` | The chunk size of new data |
 | `(file_system, max_file_size)` | `1099511627776` | Used for the nominal capacity and so on |
-| `(database, tablespace)` / `(database, tablespace_path)` | `pg_default` / an empty string | The mkfs database-build settings. Separate from the mount settings in the TOML |
+| ~~`(database, tablespace)` / `(database, tablespace_path)` / `(database, citus)`~~ | - | **Not stored since v0.2.1** (instructions only for creation; taken from what is actually in the database, `pg_database` / `pg_tablespace` / `pg_extension`). Rows left on an existing FS are not read |
 | `(audit, enabled)` | `false` | The audit log ([../design/audit-log.md](../design/audit-log.md)). `true` to use it |
 
 An example (enabling the audit log; `value` is JSONB, so a bool is `true`/`false`):

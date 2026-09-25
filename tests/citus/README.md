@@ -12,7 +12,7 @@ Verification scripts for the Citus support (distribution and cross-client lockin
 |---|---|---|
 | [verify.sql](verify.sql) + [verify.cmd](verify.cmd) | Diagnostic SQL for the configuration of an empty PGFS that has been through mkfs --clean --citus (= single-node Citus on pgsql_server). Checks `citus_tables` / the distribution keys / the shard placement / EXPLAIN | a Windows host -> through ssh pgsql_server |
 | [multinode_probe.sh](multinode_probe.sh) | A one-off probe script for confirming Citus's behaviour (auto-sync / DDL propagation / shard placement / citus_add_local_table_to_metadata and so on). Stands up a two-node Citus (coord + worker) in docker and runs 13 sections of probe SQL | linux_client (fine even with the docker daemon not running; cleaned up by a trap) |
-| [test_matrix.sh](test_matrix.sh) | The **18-case** matrix test for mkfs (3 initial x 6 target). Stands up a two-node Citus (coord + worker1) in docker and, for each case, does setup -> mkfs -> a state check -> next | linux_client (as above) |
+| [test_matrix.sh](test_matrix.sh) | The **18-case** matrix test for mkfs (3 initial x 6 target) + **9 added cases** (passing instructions that only apply when creating, against an existing database / the nodes `--clean` drops / `--purge`, the confirmation and what is connected). Stands up a two-node Citus (coord + worker1) in docker and, for each case, does setup -> mkfs -> a state check -> next | linux_client (as above) |
 | [race_multinode.sh](race_multinode.sh) | The remaining verification of the exclusion control. Stands up a two-node Citus in docker with two mount.pgfs processes and confirms, end to end, (i) the Linux e2e 35/35 on multi-node Citus, (ii) the cross-client consistency of a concurrent write race (matching md5/size), (iii) the EEXIST guarantee of a concurrent mkdir race, and (iv) a realistic size for the accumulation of pgfs_lock rows | linux_client (as above) |
 | [audit.sh](audit.sh) | The test dedicated to the audit log ([docs/audit-log.md](../../docs/design/audit-log.md)). Stands up a two-node Citus in docker with one mount.pgfs and confirms (A) the record of each op, (B) caller_* (uid/uname/host/ip), (C) automatic partition creation = the month-crossing mechanism, and (D) 0 rows with `audit.enabled=false`. Citus's same-tx commit is demonstrated at the same time by A/B/C holding | linux_client (as above) |
 | [statfs.sh](statfs.sh) | The test dedicated to df ([docs/df-support.md](../../docs/design/df-support.md)). Stands up a two-node Citus (coord+worker1) in docker on **an image built in-house with plperl** ([tests/docker/Dockerfile.citus-plperl](../docker/Dockerfile.citus-plperl)) and verifies `pgfs_statfs()`'s **worker aggregation** (R1-R5) and the three modes `require`/`auto`/`nominal` (A1/N1). R5 DROPs only the coord-local `fs_free` with `citus.enable_ddl_propagation=off` to prove the aggregation mechanism. No mount is needed (mkfs + psql only) | linux_client (as above) |
@@ -122,6 +122,27 @@ Each case runs setup_I* -> run_mkfs -> verify_state (coord pgfs DB exists / 5 ta
 - mkfs runs on the host (linux_client), connects to coord at localhost:15432, and specifies the worker with `--worker localhost:15433`
 - log at `/tmp/citus_test_matrix.log`
 - on exit, a trap restores containers / image / docker daemon to their original state
+
+### Added cases
+
+| Case | What it looks at | Expected |
+|---|---|---|
+| X1 | Create a **new schema** with `--citus` in an existing non-Citus database | mkfs succeeds, no citus extension, 7 tables in the new schema (it used to exit 1 distributing the new tables) |
+| X2 | `--citus --worker` on an existing one-node Citus database | mkfs succeeds, **no pgfs role is created on the worker**, `pg_dist_node` stays at 1 row (it used to create the role) |
+| X3 | `--clean` alone (no `--citus` / `--worker`) on a coord + worker setup | **the worker's database of the same name is dropped too** (the nodes to drop are decided by `pg_dist_node`; it used to be left behind if `--worker` was forgotten) |
+| X4 | `--clean --purge --yes` | exit 2, the database remains |
+| X5 | `--purge` non-interactively (without `--yes`) | exit 3, the database remains |
+| X6 | `--purge --yes` on coord + worker | exit 0, the coord's and the worker's databases are dropped, **the toml and the role remain** |
+| X7 | `--purge --yes` while there is a live mount (a row with a fresh heartbeat put into `pgfs_mounts`) -> with `--now` | the first run exits 3, the database remains and **the mount appears in the list** -> dropped with `--now` |
+| X8 | `--clean --yes` while there is another connection (`pg_sleep` in `psql`) -> with `--now` | the first run exits 3 -> `--now` cuts it and recreates |
+| X9 | The interactive confirmation (a terminal made with `script`, feeding `n` / `y`) | n exits 3 and the database remains -> y drops it |
+
+**Every one of them fails on a build from before the fix, and after the fix it is 27/27** (2026-09-25, the docker
+Citus on linux_client. X1 / X2 / X3 / X4-X9 were each checked before and after their fix. Before the fix X4-X9
+do not know `--purge` and the rest, so they ignore it, create anyway and fail with exit 0).
+
+**Every script that calls `mkfs --clean` passes `--yes`** (v0.2.1 and later; non-interactively, without it
+nothing is dropped and it exits 3).
 
 ### Result
 

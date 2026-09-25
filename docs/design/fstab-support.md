@@ -176,7 +176,7 @@ other than Linux, getting the parent process comes up empty so it is always trea
 | `-s <name>` / `--schema` / `--schema-name` | `database.schema` | **`-s` is only effective on a direct invocation** (in a helper context it is `--sloppy`). `--schema` always works |
 | `-x` / `--prefix` | `database.prefix` | The table name prefix |
 | `--cache-max-entries <N>` | `mount.cache_max_entries` | |
-| `--fallback-uname <name>` / `--fallback-gname <name>` | `mount.fallback_uname` / `_gname` | The escape when the OS cannot resolve a uname |
+| `--self-uname <name>` / `--self-gname <name>` | `mount.self_uname` / `self_gname` | Its own identity (v0.2.1 and later; the old `--fallback-uname` / `--fallback-gname` were removed) |
 | `--log-level <level>` / `--log-output <spec>` | `logging.level` / `logging.output` | |
 | `--foreground` | `mount.foreground` | Suppresses the daemonization. It deliberately has no short form `-f` because of the collision with setting.file (see [the short-form collisions](#the-short-form-collisions)) |
 | `--retry-max-attempts` / `--retry-initial-delay-ms` / `--retry-max-delay-ms` | `database.retry_*` | Retrying a transient error when opening the connection |

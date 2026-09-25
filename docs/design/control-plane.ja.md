@@ -29,7 +29,7 @@
 **P2-1. `Field` に reload ポリシー (`enum ReloadPolicy { Live, NextMount, Format }`)**
 - [Field.cs](../../src/core/src/Config/Field.cs) の基底 record に `public ReloadPolicy Reload { get; init; } = ReloadPolicy.NextMount;` を追加 (既定は保守的に NextMount)。
 - **Live (走行中に再適用)**: `logging.level`→`Logger.MinLevel` / `logging.output`→`LogSink.Configure` / `database.retry_*`→`Retry.Configure` (いずれも static 再呼出可) / `app.statfs`→`config.Statfs.Mode` を読み直すだけ (GetStatFs が毎回参照) / `mount.cache_max_entries`→**InodeCache に `SetCapacity` を追加** / `mount.cache_data_max_bytes`→**ContentCache に `SetMaxBytes` を追加** / `audit.enabled`→**Api.auditEnabled を mutable 化**。
-- **NextMount (再マウントで反映)**: `database.connection`/`super_connection`/`schema`/`prefix`/`tablespace*`/`citus`/`workers`/`notify_enabled` / `mount.mount_point`/`foreground`/FuseFlags / `mount.fallback_uname`/`fallback_gname` (当面: resolver 再構築が要るので Live 化は後回し)。
+- **NextMount (再マウントで反映)**: `database.connection`/`super_connection`/`schema`/`prefix`/`workers`/`notify_enabled` / `mount.mount_point`/`foreground`/FuseFlags / `mount.self_uname`/`self_gname` (v0.2.1〜。旧 fallback_* は廃止・tablespace / citus は v0.2.1 から DB に保存しない)。
 - **Format (mkfs 専用・以後不変)**: `file_system.version`/`volume_label`/`cluster_size`/`default_chunk_size`/`max_file_size`。
 
 **P2-2. `{prefix}mounts` 登録表 + heartbeat**
@@ -88,11 +88,11 @@
 
 | 種別 | 意味 | 例 |
 |---|---|---|
-| `Live` | 走行中に再適用可 | `logging.level`/`output`, `mount.cache_max_entries`, `mount.fallback_uname`/`gname`, `audit.enabled`, `app.statfs` |
+| `Live` | 走行中に再適用可 | `logging.level`/`output`, `mount.cache_max_entries`, `audit.enabled`, `app.statfs` |
 | `NextMount` | 再マウントで反映 | `mount.mount_point`, FuseFlags, `database.connection`, `schema`/`prefix` |
 | `Format` | mkfs 専用・以後不変 | `file_system.cluster_size`/`chunk_size`/`max_file_size` |
 
-ライブ適用の実体は Core 側の可変ランタイム状態の差し替え (`Logger.MinLevel` / `LogSink.Configure` / InodeCache 容量再設定 / fallback 名 / audit フラグ / statfs フラグ)。FUSE/Dokan の再初期化は不要 (= OS 層は無改修で済む範囲が `Live`)。マトリックスは [settings-matrix.ja.md](settings-matrix.ja.md) に reload 列を追加して正にする。
+ライブ適用の実体は Core 側の可変ランタイム状態の差し替え (`Logger.MinLevel` / `LogSink.Configure` / InodeCache 容量再設定 / audit フラグ / statfs フラグ / Windows の権限判定フラグ)。FUSE/Dokan の再初期化は不要 (= OS 層は無改修で済む範囲が `Live`)。マトリックスは [settings-matrix.ja.md](settings-matrix.ja.md) に reload 列を追加して正にする。
 
 ---
 
@@ -128,7 +128,7 @@
 |---|---|---|---|
 | **Db, Live** (`audit.enabled` / `app.statfs`) | pgfs_settings 書込み | ✅ `set` NOTIFY → 即時 | persisted + applied live to N mounts |
 | **File, Live** (logging/cache/retry の 5) | **なし (ephemeral)** | ✅ `set` NOTIFY → 即時 | applied live to N mounts (ephemeral; edit pgfs.toml to persist) |
-| Db, NextMount (`fallback_*`/`tablespace*`/`citus`/`plperlu`) | pgfs_settings 書込み | 次回マウント | persisted; applies on next mount |
+| Db, NextMount (`plperlu`) | pgfs_settings 書込み | 次回マウント | persisted; applies on next mount |
 | File, NextMount (`mount_point`/`connection`/`schema`/`prefix`/`notify_enabled`/`workers`) | なし (remote toml 不可) | 次回マウント | cannot reach remote toml; edit pgfs.toml locally; applies next mount |
 | Format (`file_system.*`) | 拒否 | — | mkfs-only, immutable after format |
 | None (`--clean`/`foreground`/`super_connection`/`setting.*`) | 拒否 | — | not a settable runtime field |

@@ -21,6 +21,7 @@ The Windows counterpart of the Linux version ([tests/linux/](../linux/README.md)
 | [wbmeta.ps1](wbmeta.ps1) | The contract tests of **metadata write-back plus the B-1 knob** (the occupant is made with a second mount) |
 | [control_plane.ps1](control_plane.ps1) | The acceptance of **`pgfsctl config` / `status`** (live application, the effective values, the two-phase flip) |
 | [prune.ps1](prune.ps1) | The end-to-end run of **`pgfsctl prune`** (C-2's retention -> kill -> orphan data -> the cleanup), and **not deleting a file a user named `.fuse_hidden*`**. **It mounts and kills on its own** |
+| [permissions.ps1](permissions.ps1) | **The permission decision** (`app.enforce_permissions`, v0.2.1). **Run it in an elevated shell**; it plants files owned by someone else and checks them with **a restricted token**. It mounts `P:` on its own and puts the settings back at the end |
 | [wbcross.ps1](wbcross.ps1) | The contract for **another mount writing the same body while a write-back mount is holding dirty data** (two mounts). That the truncate does not roll back, plus **that the trampling happens per chunk** (the latter is **a contract test pinning down the current behaviour, not the desirable one**) |
 
 ## The cross-client tests (two mounts)
@@ -37,7 +38,8 @@ It mounts the same DB-FS from two `assign.pgfs` processes and looks at **the con
 - **Visibility** (runs only when started with `--notify`): one side's create / overwrite / delete / replacement rename is visible from the other
 - **Handle context** (handle-context stage B, `--notify` required): an open **append handle** sees the other mount's growth (not seeing it **overwrites and corrupts what the other side wrote** = the reproduction of problem 2) / it keeps pointing at the first inode across a rename plus a re-create under the same name (the guard for problem 1)
 
-**`database.notify_enabled` defaults to false**, and in that setup another mount's changes **are invisible by design**
+**In a setup with `database.notify_enabled` false** (the default up to v0.2.0; `--no-notify` since v0.2.1)
+another mount's changes **are invisible by design**
 (each mount's `InodeCache` / read cache is independent, and an invalidation only arrives through LISTEN/NOTIFY).
 So the script passes `--notify` to the mounts it starts itself, and when it cannot (reusing an existing mount, or `-NoNotify`)
 it **SKIPs** the visibility tests. Measured: without notify all four of them showed the stale state.
@@ -58,6 +60,26 @@ it **SKIPs** the visibility tests. Measured: without notify all four of them sho
   is updated and the handle's copy becomes fresh along with it, which reduces **the detection power to zero**.
 - **Observe the length through the enumeration (`Get-ChildItem -Filter`).** `Get-Item` / `Test-Path` can be
   answered by the Windows client-side FCB (the same reason as `Wait-Gone`).
+
+## The permission decision tests
+
+```powershell
+pwsh -NoProfile -File tests\windows\permissions.ps1                    # the 13 cases other than sticky
+pwsh -NoProfile -File tests\windows\permissions.ps1 -StickyDir P:\      # sticky too (pass a root-owned 1777 dir)
+pwsh -NoProfile -File tests\windows\permissions.ps1 -AssignBinary <other build's exe>   # e.g. a pre-fix build
+```
+
+- **It creates no users.** The setup is done from an elevated shell through Set-Acl (the reverse projection of
+  SetFileSecurity), passing **the Administrator SID** (= pgfs's `root`) as the owner and **Administrators**
+  (= `root`) / **Users** (= `users`) as the group. The checking operations are done from C# with **a restricted
+  token that has Administrators made deny-only** (`CreateRestrictedToken`) (a PowerShell script block run
+  during impersonation can move to another thread, so each operation lives in C#). **Opening directly from the
+  elevated shell passes straight through and checks nothing.**
+- **Sticky cannot be set from Windows.** It is checked only when a root-owned `1777` directory (for example the
+  FS root after `chmod 1777` from Linux) is passed to `-StickyDir`.
+- **A file nobody can write (all w cleared) looks "read-only" on Windows and cannot be deleted** (because
+  Windows refuses to delete a read-only file; in v0.2.0 someone else's `0644` looked like that too). The cleanup
+  deletes after putting the owner back to yourself (`Clear-TestRoot`).
 
 ## Do not go green on zero tests
 
@@ -482,7 +504,8 @@ pwsh -NoProfile -File tests\windows\control_plane.ps1 -Filter reload
 | `test_cp_write_back_live_flip` | Data is untouched across `mount.write_back`'s **live on -> off (the two-phase flip)** |
 | `test_cp_metadata_flip_completes` | **The metadata write-back flip runs to completion** - turn it off while holding 300 pending entries, and the intake reopens / pending is 0 / all 300 files are untouched |
 
-**Not passing `--notify` to the mount** is the deliberate point. The control channel's LISTEN is always ON, so
+**Starting the mount with `--no-notify`** (on by default since v0.2.1, so it is turned off explicitly) is the
+deliberate point. The control channel's LISTEN is always ON, so
 `config set` reaches a mount with `database.notify_enabled = false` too. That is checked at the same time.
 
 **The application goes through the heartbeat snapshot**, so it takes **up to one period (30 seconds by default)** to appear in `status`'s effective values.

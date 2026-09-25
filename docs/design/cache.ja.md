@@ -29,7 +29,7 @@
 **決定 (判断 1〜3)**:
 
 1. **退避ポリシ = LRU**。既存 `Inode.CacheTime` (Get/Put 毎に `UpdateCacheTime()` 更新済) を recency に使う (新規状態を増やさない)。
-2. **上限は `byId` を権威に 1 本**。`byId.Count > cache_max_entries` で LRU 退避し、退避後に `byPath`/`childrenByParent` から **byId に存在しない id を指すエントリを掃除**して整合させる (3 辞書を byId の 1 上限で間接 bound)。root は `CacheTime = DateTime.MaxValue` 固定なので**決して退避されない**。
+2. **上限は `byId` を権威に 1 本**。`byId.Count > cache_max_entries` で LRU 退避し、退避後に `byPath`/`childrenByParent` から **byId に存在しない id を指すエントリを掃除**して整合させる (3 辞書を byId の 1 上限で間接 bound)。root は `CacheTime = DateTime.MaxValue` 固定なので**決して退避されない**。**root はパス解決の起点として別持ち**していて、`Invalidate(0)` / `InvalidateAll` で「読み直す」印が立ち、次の `GetRoot()` が DB から読み直して差し替える (v0.2.1。それまでは起動時に 1 回読んだきりで、**他クライアントの root の chmod / chown / mtime が再マウントまで見えなかった**。読み直せなければ古い root で続け、次の問い合わせでもう一度読む)。
 3. **スレッド安全は現状維持** (`lock(this)` 配下で退避)。`lock(this)` + ロック内 DB クエリの解消 ([performance.ja.md #2](performance.ja.md)) は **別ステップ**に切る (1a に混ぜない)。
 
 **退避機構 = overflow 時の batch**:

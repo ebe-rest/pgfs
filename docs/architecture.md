@@ -30,7 +30,7 @@ The solution [pgfs.sln](../pgfs.sln) has 8 projects (v0.2.0 split the old `Lib` 
 |---|---|---|---|
 | **Core** | [src/core/](../src/core/) | The core library, independent of the OS and the mechanism (Models / Api / Config / Logging / Collections / Utility / Objects). No `#if` | Cross-platform |
 | **Fuse** | [src/fuse/](../src/fuse/) | The FS mechanism layer for Linux/macOS: the in-house libfuse binding plus the FUSE FileSystem plus the PosixAcl projection | Linux / macOS |
-| **Dokan** | [src/dokan/](../src/dokan/) | The FS mechanism layer for Windows: the Dokan FileSystem plus the Windows SID/ACL projection plus the WindowsUserResolver | Windows |
+| **Dokan** | [src/dokan/](../src/dokan/) | The FS mechanism layer for Windows: the Dokan FileSystem plus the Windows SID/ACL projection plus the permission evaluation (`FileSystem.Access.cs`) plus the WindowsUserResolver | Windows |
 | **Mkfs** | [src/mkfs/](../src/mkfs/) | The CLI that initializes the tables and the rest on the PostgreSQL side (a thin exe -> Core) | Cross-platform |
 | **Mount** | [src/mount/](../src/mount/) | The mount tool for Linux/macOS (a thin exe -> Fuse plus Core) | Linux / macOS |
 | **Assign** | [src/assign/](../src/assign/) | The mount tool for Windows (a thin exe -> Dokan plus Core) | Windows |
@@ -197,6 +197,11 @@ The concrete cases are to be gathered into thin wrappers such as a future `Api.S
   increasing, never reused), and `OpenFileContext` holds "the inode id settled at that open". `OpenInodes` holds
   **the reference count of the bodies**, and the final release in `Api.Handle.cs` drops a body whose name is
   gone (`DropOrphanData`). The design and the as-built are in [handle-context.md](design/handle-context.md).
+- `PermissionEvaluator.cs` / `AccessCaller.cs`: **the permission evaluation in POSIX order** (owner -> named
+  user -> group / named group -> other, plus the sticky deletion rule) and its subject (the name, the groups it
+  belongs to, whether it passes through). Since v0.2.1 Windows (assign) uses it (because Dokan does not evaluate
+  with the SD). Linux stays with the kernel's `default_permissions`. The design is in
+  [permission-interop.md, the decision on Windows](design/permission-interop.md).
 - `PruneAdmin.cs`: **cleaning up what an abnormal exit left behind** (the substance of `pgfsctl prune`). It
   removes the old rows of `{prefix}mounts`, the orphan data and libfuse's `.fuse_hidden*`, **with a different
   liveness decision per kind**. The specification is in [Pgfsctl.md, prune](Pgfsctl.md).

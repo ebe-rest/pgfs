@@ -114,7 +114,7 @@ Explorer / インデクサ / Defender 次第で、実測では **15 秒以上**�
 
 - **排他は DB で決まっている**: 同時 `CREATE_NEW` 6 ラウンドすべてで成功は 1 件のみ、勝者の内容も無傷。
   → 上記 1 (exclusive: true) が cross-client でも効いていることの実証。同時 `mkdir` も実体は 1 つ。
-- **可視性は `database.notify_enabled` に完全に依存する**。既定 (false) では、他マウントの
+- **可視性は `database.notify_enabled` に完全に依存する** (v0.2.1 から既定 true)。false では、他マウントの
   create / 上書き / delete / 置換 rename が**いつまでも見えない** (4 件とも古いまま。`InodeCache` と read キャッシュは
   マウントごとに独立で、invalidate は LISTEN/NOTIFY でしか来ない)。`--notify` を付けた 2 マウントでは 4 件とも
   数百 ms で追随した。→ **Windows で複数マウントを運用するなら notify は事実上必須**。この事実は
@@ -148,7 +148,7 @@ A = `defer` + write-back、B = write-through の **実 2 マウント**で測っ
 |---|---|---|
 | `uname` | **要求元の User SID** (`WindowsIdentity.User`) を `WindowsUserResolver.UnameOf` で正規化 (`DOMAINAlice` → `alice`) | 保存形式は [permission-interop.ja.md](permission-interop.ja.md) の「名前のみ・SID/UID は持たない」規約どおり。`.Owner` は昇格プロセスだと `Administrators` になり得るので使わない |
 | `gname` | **親ディレクトリから継承** (案 B) | Windows の token primary group は実質 `Domain Users` / `None` で権限判定にも使われない。継承なら「同じツリーは同じグループ」になり mode の group ビットが意味を持つ。**Linux の既定 (作成者の primary group) とは意図的に違う** |
-| 取得失敗時 | `fallback_uname` / `fallback_gname` (既定 `nobody`/`nogroup`) + Warning | 現状 pgfs は access/share を強制していないので所有者は表示と監査にしか効かない。create を失敗させるほうが実害が大きい。**enforce を入れる段で「失敗させる」へ切り替える** |
+| 取得失敗時 | `file_system.unknown_name` (`(unknown)`・v0.2.1〜。旧 `fallback_uname` / `fallback_gname` は廃止) + Warning | create を失敗させるほうが実害が大きいので作成は続ける。**v0.2.1 で権限の判定が入った**ので、`(unknown)` の所有者は誰とも一致せず、そのファイルは other の権利で判定される ([permission-interop.ja.md §Windows の判定](permission-interop.ja.md)) |
 | ノブ | **作らなかった** | `mount.owner_from_requestor` を検討したが、Field 追加は `src/core/src/Config/Schema.cs` = Linux 側の担当範囲。既定 on 相当の挙動のみ実装し、退避路が要るなら Core 側に Field を足してもらう |
 
 **落とし穴**: 正規化でドメインが落ちるので **`CORP\alice` と `LOCAL\alice` は同じ `alice` になる**。読み取り投影では以前からそうだったが、**書き込み (所有者の決定) でドメインが潰れるのは今回が初めて**。ドメイン環境での名前解決 (レイテンシ/失敗率) は未検証で PoC 対象。
@@ -267,7 +267,7 @@ handle ベースの識別 (現状はパス優先) / `UserModeLock` の見直し 
 
 | | 動き |
 |---|---|
-| 付ける | **write ビットを全部 (0222) 落とす**。`FileSystemUtils.IsWritable` は **owner / group / other のどれかに +w があれば書ける**と判定するので、owner だけ落としても Windows からは ReadOnly に見えない |
+| 付ける | **write ビットを全部 (0222) 落とす**。`FileSystemUtils.IsReadOnly` は **owner / group / other の w が全部落ちているとき**に ReadOnly を立てるので (v0.2.1。それまでの `IsWritable` も「どれかに +w があれば書ける」だった)、owner だけ落としても Windows からは ReadOnly に見えない |
 | 外す | **owner の write (0200) だけ**戻す |
 
 **実測 (2026-09-21・pgsql_server)**: ディレクトリ `0755` → ReadOnly → **`0555`** (x が残る) → 解除 → **`0755`** (完全に往復)。

@@ -28,7 +28,7 @@ pgfs のソリューション構成・依存パッケージ・Core 内部のフ�
 |---|---|---|---|
 | **Core** | [src/core/](../src/core/) | OS/機構 非依存のコアライブラリ（Models / Api / Config / Logging / Collections / Utility / Objects）。`#if` なし | クロスプラットフォーム |
 | **Fuse** | [src/fuse/](../src/fuse/) | Linux/macOS の FS 機構層: 内製 libfuse バインディング + FUSE FileSystem + PosixAcl 投影 | Linux / macOS |
-| **Dokan** | [src/dokan/](../src/dokan/) | Windows の FS 機構層: Dokan FileSystem + Windows SID/ACL 投影 + WindowsUserResolver | Windows |
+| **Dokan** | [src/dokan/](../src/dokan/) | Windows の FS 機構層: Dokan FileSystem + Windows SID/ACL 投影 + 権限の判定 (`FileSystem.Access.cs`) + WindowsUserResolver | Windows |
 | **Mkfs** | [src/mkfs/](../src/mkfs/) | PostgreSQL 側のテーブル等を初期化する CLI (薄い exe → Core) | クロスプラットフォーム |
 | **Mount** | [src/mount/](../src/mount/) | Linux/macOS 用マウントツール (薄い exe → Fuse + Core) | Linux / macOS |
 | **Assign** | [src/assign/](../src/assign/) | Windows 用マウントツール (薄い exe → Dokan + Core) | Windows |
@@ -113,6 +113,7 @@ DB の 1 行に対応するエンティティ POCO を置く場所。設定モ�
 - `ContentCache.cs` / `DirtySet.cs`: 本体 read LRU と dirty チャンク。`DirtyNamespace.cs` / `IdReservation.cs` / `Api.WriteBackMetadata.cs`: pending inode、ID 予約、メタデータ実体化・監査・終了時 drain。実装契約と未修正事項は [metadata-write-back.ja.md](design/metadata-write-back.ja.md) / [metadata-write-back-reviews.ja.md](design/metadata-write-back-reviews.ja.md) を参照。
 - `NotifyChannel.cs` / `RemoteChangeInfo.cs`: 制御 LISTEN は常時起動し、データ変更通知だけを `database.notify_enabled` で制御する。受信時は inode/path/parent と data_id に応じて InodeCache / ContentCache を無効化する。Linux からカーネルへの能動 invalidation は未実装。Assign の NotifyUpdate にはパスの不備がある ([Windows 設計](design/windows-parity.ja.md))。`attr_timeout=0` だけで Core・本体・他 mount の鮮度を保証しない。
 - `HandleTable.cs` / `OpenFileContext.cs` / `OpenInodes.cs` / `Api.Handle.cs`: **ハンドル文脈** (handle-context 段階 A〜C)。`HandleTable` が open ごとに一意な `fh` を払い出し (1 始まり・単調増加・再利用なし)、`OpenFileContext` が「その open で確定した inode id」を持つ。`OpenInodes` が**実体の参照カウント**を持ち、`Api.Handle.cs` の最終解放が名前の消えた実体を落とす (`DropOrphanData`)。設計と as-built は [handle-context.ja.md](design/handle-context.ja.md)。
+- `PermissionEvaluator.cs` / `AccessCaller.cs`: **POSIX 順の権限判定** (owner → named user → group / named group → other + sticky の削除規則) と、その主体 (名前・所属グループ・素通しか)。v0.2.1 で Windows (assign) が使う (Dokan は SD で判定しないため)。Linux はカーネルの `default_permissions` のまま。設計は [permission-interop.ja.md §Windows の判定](design/permission-interop.ja.md)。
 - `PruneAdmin.cs`: **異常終了が残したものの掃除** (`pgfsctl prune` の実体)。`{prefix}mounts` の古い行 / 孤児 data / libfuse の `.fuse_hidden*` を、**種類ごとに違う live 判定**で消す。仕様は [Pgfsctl.ja.md §prune](Pgfsctl.ja.md)。
 - `ConfigAdmin` (Config) / `StatusAdmin` (Api): pgfsctl と GUI が共用する管理ロジック。mount 登録、30 秒 heartbeat、実効設定・統計の snapshot は Api が担当する。
 

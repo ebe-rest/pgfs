@@ -5,9 +5,9 @@
 > **この doc が正である範囲**: **`mkfs.pgfs` の仕様** — CLI オプション、**mkfs から指定できる設定項目の既定値表**、
 > TOML の書式、DDL の適用フロー。**mkfs から指定できるものの既定値はここが正**で、Mount / Assign 側の抜粋表は本書へ委譲する。
 >
-> **全 44 項目の網羅表は [design/settings-matrix.ja.md](design/settings-matrix.ja.md) が正**である。本書は
+> **全項目の網羅表は [design/settings-matrix.ja.md](design/settings-matrix.ja.md) が正**である。本書は
 > **mkfs の CLI から意味のあるものだけ**を載せており、**マウント時にしか効かないもの**
-> (`mount.max_write` / `mount.fallback_uname` / `mount.fallback_gname` / `mount.foreground` /
+> (`mount.max_write` / `mount.foreground` /
 > `database.retry_*` / `database.notify_enabled` など) は**意図して載せていない**。
 > **「ここに無い = 存在しない」ではない**ので、全項目を確かめるときは matrix を見ること
 > (「全設定項目の既定値表」と書いてあったのを、実態に合わせて範囲を狭めた)。
@@ -54,9 +54,9 @@ PostgreSQL データベースに対し、PGFS が必要とする以下を冪等�
 # 開発ビルド (bin/Debug/mkfs.pgfs.{dll,exe})
 dotnet build src/mkfs/Mkfs.csproj
 # 開発時実行
-dotnet run --project src/mkfs -- [options]
+dotnet run --project src/mkfs -- -f pgfs.toml [options]
 # あるいはビルド済み実行ファイル
-./bin/Debug/mkfs.pgfs [options]
+./bin/Debug/mkfs.pgfs -f pgfs.toml [options]
 
 # 自己完結発行 (bin/Publish/mkfs.pgfs[.exe] — single-file, ホスト RID 自動)
 dotnet publish src/mkfs/Mkfs.csproj -c Release
@@ -114,9 +114,15 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 | `--cluster-size` | クラスタサイズ（バイト） | `4096` |
 | `--default-chunk-size` | bytea チャンクサイズ（バイト） | `1048576` (1 MiB) |
 | `--max-file-size` | 最大ファイルサイズ（バイト、`-1` で無制限） | `1099511627776` (1 TiB) |
-| `--version` | ファイルシステムバージョン | `1.0.0` |
+| `--fs-version` | ファイルシステムバージョン (v0.2.1 で `--version` から改名) | `1.0.0` |
 
-### 機能フラグ (DB 保管、全クライアント共通)
+**root ディレクトリの権限** (v0.2.1〜) は DB にも toml にも残さない、mkfs だけのアクション:
+
+| オプション | 内容 | 既定 |
+|---|---|---|
+| `--root-access owner\|everyone` | root ディレクトリ (inode 0) を**新しく作るとき**の権限。`owner` = `root:root 0755` (Windows からは Administrators が書ける) / `everyone` = `root:root 1777` (誰でも書けて、消せるのは作った本人だけ = `/tmp` と同じ sticky。Windows からは Everyone が書ける)。**既に root があるときは変えず Warning を出す** (変えるならマウントして `sudo chmod`)。Windows は mode を強制しないので、sticky の効き目は Linux だけ | `owner` |
+
+### 機能フラグ (DB 保管、全クライアント共通・作った後に変えるのは `pgfsctl config set`)
 
 これらは `pgfs_settings` に保存され、mount / assign が起動時に DB から読みます (TOML には書きません)。
 
@@ -145,17 +151,41 @@ dotnet publish src/mkfs/Mkfs.csproj -c Release
 
 | オプション | 内容 | 既定 |
 |---|---|---|
-| `-f`, `--setting`, `--setting-file` | 設定ファイルパス | `pgfs.toml` |
-| `--setting-path`, `--setting-search-path`, `--setting-file-path`, `--setting-file-search-path` | 設定ファイル探索パス（複数指定可） | カレント → `~/.config/pgfs` → `~/.config` → `~` → `LocalAppData/pgfs` → `AppData/pgfs` |
+| `-f`, `--setting`, `--setting-file` | **設定ファイルの場所 (mkfs では必須・v0.2.1〜)**。あれば読み込んで終了時にそこへ書き戻し、無ければ新規作成。`--clean` なら読まずに上書き | (必須) |
+| `--setting-path`, `--setting-search-path`, `--setting-file-path`, `--setting-file-search-path` | 設定ファイル探索パス。**mkfs は使わない** (指定すると Warning。mount / assign / pgfsctl 用) | — |
 
 ### その他
 
 | オプション | 内容 |
 |---|---|
 | `-?`, `-h`, `--help` | ヘルプを表示して終了 |
-| `--clean` | 既存の `pgfs.toml` を無視し、`DROP DATABASE` してから再作成する。短縮形なし。テーブルスペースとロール（PGFS ユーザー）は破棄しないので、再作成しても所有者・テーブルスペースは維持される。他のクライアントが接続中の場合は `pg_terminate_backend` で強制切断する。 |
+| `--version` | プログラムの版を表示して終了 (v0.2.1〜。mount / assign / pgfsctl も同じ) |
+| `--clean` | 既存の `pgfs.toml` を無視し、`DROP DATABASE` してから再作成する。短縮形なし。テーブルスペースとロール（PGFS ユーザー）は破棄しないので、再作成しても所有者・テーブルスペースは維持される。**消す前に接続中のものと確認を取る** (下の §消す前の確認・v0.2.1〜) |
+| `--purge` | **消して終わる** (v0.2.1〜)。`-f` の設定ファイルの接続先の DB を、Citus なら全 worker の同名 DB も `DROP DATABASE` する。**作り直さない / 設定ファイルも書かない**。`--clean` と同時には指定できない (exit 2)。下の §`--purge` |
+| `--yes`, `-y` | `--clean` / `--purge` の**確認を省く** (スクリプト用)。**非対話 (stdin が端末でない) で無ければ何も消さずに exit 3** |
+| `--now` | `--clean` / `--purge` のとき、**接続中のもの (生きているマウント / 他の接続) を待たずに切って進む**。無ければ、対話は「再試行しますか」を繰り返し、非対話は exit 3 |
 
 ## 設定ファイル (pgfs.toml)
+
+### mkfs が書き出す配布用 toml に何が入るか (v0.2.1〜)
+
+mkfs は終了時に、他のクライアントへ配るための `pgfs.toml` を書き出す。**入るのは次の 2 種類だけ**:
+
+1. **接続の核** — `database.connection` (Password はそのまま・先頭コメントの mkfs コマンド行ではマスク) / `database.schema` / `database.prefix`。常に書く。
+2. **CLI か読み込んだ TOML で明示された `SaveTo=File` の項目** — `--notify` / `--no-notify`、`-m` (mount_point)、`--write-back` などの mount / assign 向けの項目も含む。
+   **mkfs 自身には効かない項目でも、明示すれば toml に残る** (`mkfs --help` の `[written to pgfs.toml for mount/assign]` が付いた行)。
+   **`database.workers` だけは例外で書かない** (mkfs 専用で配布先には意味が無く、書くと後の `--clean` なしの mkfs が worker を勝手に登録するため)。
+
+**既定値のままの項目は書かない**。書くと既定値が配布先に固定され、後の版で既定を変えても追従しないため
+(例: v0.2.1 で `database.notify_enabled` の既定を true にしたが、v0.2.0 の mkfs が吐いた toml に `false` が入っていたら追従しない)。
+**`mount.mount_point` も明示したときだけ書く** — Linux で吐いた toml を Windows に配っても書き換えずに済む (マウント先は各 OS の既定 `/mnt/pgfs` / `P:`)。
+
+`SaveTo=Db` の項目 (tablespace / file_system のサイズ系 / audit / statfs / plperlu ほか) は DB が正なので toml には出ない。
+
+**書き出し先は `-f` の場所だけ** (v0.2.1〜・必須)。v0.2.0 までは既定の探索パス (カレント → `~/.config/pgfs` → … → `LocalAppData/pgfs`) から toml を探し、
+**見つかった場所に書き戻していた**ため、常駐マウント用の toml (例: `%LOCALAPPDATA%\pgfs\pgfs.toml`) を読んで上書きすることがあった。
+
+### 書式
 
 TOML 形式。ドット記法で階層を表現します。
 
@@ -292,12 +322,12 @@ shard 数と複製数は `--shard-count` / `--shard-replication-factor` (`--rf`)
 
 ```bash
 # 1 ノード構成 (worker なし、coordinator が自分で shard を持つ)
-mkfs.pgfs --clean --citus \
+mkfs.pgfs -f pgfs.toml --clean --citus \
     -c     "Host=coord;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" \
     --super "Host=coord;Port=5432;Username=postgres;Password=postgres;Database=postgres"
 
 # 多ノード構成 (coordinator + worker1 + worker2)
-mkfs.pgfs --clean --citus \
+mkfs.pgfs -f pgfs.toml --clean --citus \
     -c     "Host=coord;Port=5432;Username=pgfs;Password=pgfs;Database=pgfs" \
     --super "Host=coord;Port=5432;Username=postgres;Password=postgres;Database=postgres" \
     --worker "w1:5432,w2:5432"
@@ -305,8 +335,10 @@ mkfs.pgfs --clean --citus \
 
 ### 制約
 
-- `--citus` × カスタム `--tablespace` は **両立可能** (〜)。`CREATE DATABASE WITH TABLESPACE` 継承方式で、tablespace は coordinator + 全 worker に作成される。LOCATION dir は `--allow-plperlu` (既定 allow) なら plperlu が postgres 所有 0700 で自動作成 (`--tablespace-path` 指定時)。詳細 [settings-and-plperlu.ja.md](design/settings-and-plperlu.ja.md)。
-- `--clean --citus` で worker DB を DROP するのは **`--worker` で指定された worker のみ**。worker を構成から外す場合はその worker 上の pgfs DB を手動で DROP する必要あり。
+- `--citus` × カスタム `--tablespace` は **両立可能**。`CREATE DATABASE WITH TABLESPACE` 継承方式で、tablespace は coordinator + 全 worker に作成される。LOCATION dir は `--allow-plperlu` (既定 allow) なら plperlu が postgres 所有 0700 で自動作成 (`--tablespace-path` 指定時)。詳細 [settings-and-plperlu.ja.md](design/settings-and-plperlu.ja.md)。
+- **`--clean` で消す worker は DB の実体 (`pg_dist_node`) で決まる** (v0.2.1〜)。`--worker` を付けなくても、今の構成の worker 全部の同名 DB を消す (v0.2.0 までは `--worker` で指定した worker だけで、付け忘れると worker 側に DB が残った)。
+  **worker に 1 つでも繋がらなければ何も消さずに止まる** (`pg_dist_node` のノード名は coordinator から見た名前なので、mkfs を動かすホストから届く名前である必要がある)。使っていない worker は先に coordinator で `citus_remove_node`。
+  coordinator の DB が既に無いときだけ `--worker` を当てにする。
 - 多ノード構成では worker 側の PG にも `shared_preload_libraries = 'citus'` が設定済みである必要あり。
 
 ### 動作詳細 / 検証
@@ -319,22 +351,70 @@ EnsureDatabaseAsync の Phase 構造 (worker bootstrap → coordinator DB → Ci
 
 | 対象 | 存在確認 | 既存時の動作 |
 |---|---|---|
-| ユーザー | `pg_user.usename` | スキップ（パスワード変更はしない） |
-| テーブルスペース | `pg_tablespace.spcname` | スキップ |
+| ユーザー | `pg_user.usename` | スキップ（パスワード変更はしない）。worker 側は DB を作るとき (`--clean` か DB が無い) だけ確保 |
+| テーブルスペース | `pg_tablespace.spcname` | スキップ。**DB を作るときだけ**確保する (既存の DB には使われないため) |
 | データベース | `pg_database.datname` | スキップ |
 | スキーマ | `pg_namespace.nspname` | スキップ |
 | テーブル | `pg_class + pg_namespace` | スキップ |
 | ルート inode | `INSERT ... ON CONFLICT (parent_id, name) DO NOTHING` | 挿入されない |
-| 設定行 | `INSERT ... ON CONFLICT (scope, key) DO UPDATE SET value = EXCLUDED.value` | 値が上書きされる |
+| 設定行 | `pgfs_settings` に行があれば既存の FS | **FS 固有の設定は DB の値を採る** (v0.2.1〜・下の §既存の FS に打ち直したとき)。後の版で足した項目だけ増える |
+
+### 既存の FS に打ち直したとき (v0.2.1〜)
+
+設定は 3 つに分かれる: **クライアント固有** (toml — 接続先・`mount.*`・notify・ログ・リトライ) / **FS 固有** (DB — `audit.enabled`・`app.statfs`・`app.plperlu`・`file_system.*`) /
+**作るときだけの指示** (どこにも残さない — `--clean`・`--root-access`・`--worker`・`--citus`・`--shard-count`・`--rf`・`--tablespace`・`--tablespace-path`)。
+
+- **FS 固有の設定は FS を作るときに 1 回だけ決める**。`--clean` なしで既存の FS に打ち直すと DB の値を使い、CLI で違う値を渡しても変えずに Warning を出す
+  (「既存の FS には効きません。変えるなら `pgfsctl config set`」)。v0.2.0 までは CLI / 既定値で黙って上書きしていた。
+- **作るときだけの指示**: `--tablespace` / `--tablespace-path` / `--worker` は既存の DB には効かず Warning。**既存の DB のときは worker 側にも tablespace にも何も作らない**
+  (v0.2.1。以前はユーザーと tablespace の確保が DB の存在チェックより前にあり、既存の DB でも `--worker` の各ノードにロールを作っていた)。
+  **Citus かどうかは DB の実体** (`citus` 拡張の有無) で**どちら向きも**判定する — 既に Citus の DB なら `--citus` を付けなくても後から足すテーブルを分散し、
+  **Citus でない DB に `--citus` を付けても Citus にはならない** (Warning。Citus にするなら `--clean` で作り直す。以前は新しい schema のテーブルを分散しようとして落ちた)。
+  worker を足すのは coordinator で `citus_add_node`。statfs 関数が測る tablespace も DB の実体 (`pg_database`) から取る。
+- `--distribute-existing` は既存 FS 向けの指示なので従来どおり効く。
 
 ### `--clean` での再作成
 
 `--clean` を指定すると、データベース作成の前に **`DROP DATABASE`** を実行してから一連の `CREATE` を流します。
 
-- **削除する**: 対象データベース（その中の `pgfs_*` テーブル / ルート inode / 設定行 / bytea チャンクもろとも）
+- **削除する**: 対象データベース（その中の `pgfs_*` テーブル / ルート inode / 設定行 / bytea チャンクもろとも）。Citus なら **`pg_dist_node` の全 worker の同名 DB も** (上の §Citus 分散化 の §制約)
 - **削除しない**: テーブルスペース、PGFS ユーザー（ロール）、スーパーユーザー接続情報
 - **設定ファイル**: 既存の `pgfs.toml` を **読み込まない**（「ファイルが無いもの」として起動）。CLI 引数だけが適用され、終了時に新しい `pgfs.toml` が書き出される。
-- **他クライアント接続**: `pg_terminate_backend` で強制切断してから DROP する。マウントしている mount.pgfs / assign.pgfs は事前に止めておくこと。
+- **他クライアント接続**: **数えて見せ、無くなるまで消さない** (v0.2.1〜・下の §消す前の確認)。v0.2.0 までは黙って `pg_terminate_backend` で切っていた。待たずに切るなら `--now`。
+
+### `--purge` (消して終わる・v0.2.1〜)
+
+`--clean` から「作り直す」を抜いたもの。**消す相手は `-f` の設定ファイルの接続先** (設定ファイルが無ければ exit 2。打ち間違えた接続文字列で別の FS を消さないように、実際に使っている toml を渡させる)。
+
+- **削除する**: 対象データベース。Citus なら `pg_dist_node` の全 worker の同名 DB も (§Citus 分散化 の §制約)。
+- **削除しない**: ロール、テーブルスペース、設定ファイル (`-f` の toml)。
+- `--clean` と同時に指定すると、どちらの意図か分からないので何もせず exit 2。
+- 消す前に、どこを消すかを `pgfsctl status -f <同じ toml>` の `target` / `citus` で確かめられる ([Pgfsctl.ja.md](Pgfsctl.ja.md))。
+
+```bash
+pgfsctl status -f /etc/pgfs.toml          # target : host:port/db と citus のノードを確かめる
+mkfs.pgfs --purge -f /etc/pgfs.toml       # 接続中のもの → 確認 (y/N) → 消す
+```
+
+### 消す前の確認 (`--clean` / `--purge`・v0.2.1〜)
+
+順番は **構成を DB から調べる → worker に届くか → 接続中のもの → 確認 → 消す**。**`--now` は「接続中のもの」だけ、`--yes` は「確認」だけを外す** (両方外すなら `--yes --now`)。
+
+1. **接続中のもの**を数えて一覧で見せる:
+   - **生きているマウント** — 対象 DB の全 schema の `*mounts` 表で heartbeat が 90 秒以内の行 (`pgfsctl status` の live と同じ)。host と mountpoint を出す。
+   - **それ以外の接続** — `pg_stat_activity` の client backend (自分 = application_name `mkfs.pgfs` と、Citus の内部接続を除く)。Citus なら各 worker の同名 DB も。application_name ごとの件数を出す。
+
+   | 指定 | 対話 (端末あり) | 非対話 |
+   |---|---|---|
+   | `--now` あり | 切って進む (消すときに `pg_terminate_backend`) | 同左 |
+   | `--now` なし | **「再試行しますか (y/n)」を繰り返す**。y で数え直し、0 件で次へ。n で何もせず exit 3 | 何もせず exit 3 |
+
+   再試行の間に、マウントを外したり (`umount` / `dokanctl /u`)、`pgfsctl status` で相手を確かめたりできる。
+2. **確認**: 接続先 (`host:port/db`)・**DB の中の schema 全部** (`--clean` / `--purge` は DB ごと消すので、渡した schema 以外も消える)・Citus の worker を見せて「消しますか (y/N)」。
+   `--yes` なら見せるだけ。**非対話で `--yes` が無ければ何も消さずに exit 3**。
+3. 消す。
+
+**終了コード**: 0 = 成功 / 1 = 失敗 / 2 = 引数の誤り (`--clean --purge` / `--purge` で設定ファイルが無い) / **3 = 中止 (何も消していない)**。
 
 ## Linux 固有事項
 

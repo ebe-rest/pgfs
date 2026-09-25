@@ -15,11 +15,11 @@
 > | [../Assign.ja.md](../Assign.ja.md) | **Windows 側**の現行 CLI 契約とオペレーション一覧 |
 > | [windows-parity.ja.md](windows-parity.ja.md) | Windows 展開の **as-built と未実装の段取り** |
 > | [audit-log.ja.md](audit-log.ja.md) | ACL / 所有権**変更の監査行** |
-> | [settings-matrix.ja.md](settings-matrix.ja.md) | `mount.fallback_uname` / `fallback_gname` 等の**設定項目** |
+> | [settings-matrix.ja.md](settings-matrix.ja.md) | `mount.self_uname` / `self_gname` / `file_system.unknown_name` 等の**設定項目** |
 > | [xattr-bytea.ja.md](xattr-bytea.ja.md) | ACL を運ぶ **xattr のバイト列透過** |
 > | [../next.ja.md](../next.ja.md) | 残課題の**優先順位** (punch-list) |
 
-> **ステータス**: 設計合意済 (合意後に**改訂**)。**実装は主目的まで完了** — 即時 5 項目 + ACL 本体 3-0〜3-3 実装済 (回帰 Windows 26/26・Linux 35/35、進捗は下表「合意事項」)。**named ACL の厳密 enforce (3-4) のみ要件待ちで保留**。設計判断は本書を正とし、**実装詳細は [Mount.ja.md](../Mount.ja.md) / [Assign.ja.md](../Assign.ja.md) / [FileSystemUtils.cs](../../src/dokan/src/FileSystemUtils.cs) を参照**。
+> **ステータス**: 設計合意済 (合意後に**改訂**)。**実装は主目的まで完了** — 即時 5 項目 + ACL 本体 3-0〜3-3 実装済 (回帰 Windows 26/26・Linux 35/35、進捗は下表「合意事項」)。**Windows の判定 (3-4 の Windows 側) は v0.2.1 で実装** (§Windows の判定)。**Linux の named ACL の厳密 enforce のみ要件待ちで保留**。設計判断は本書を正とし、**実装詳細は [Mount.ja.md](../Mount.ja.md) / [Assign.ja.md](../Assign.ja.md) / [FileSystemUtils.cs](../../src/dokan/src/FileSystemUtils.cs) を参照**。
 > **改訂点**: 旧版の「双方向フル往復 + `opaque` で Windows 固有 ACL を verbatim 保持」を撤回し、
 > **POSIX 正準 + Windows は投影ビュー (lossy projection)** に変更。併せて名前正規化・principal マッピング表を確定。
 
@@ -40,7 +40,7 @@ PGFS は **認証システムではなく、名前ベース ACL を保持する�
 | 4 | Windows ACL | **投影ビューに格下げ** (opaque/双方向往復は撤回) |
 | 5 | ACL モデル | POSIX-only / allow のみ。`acl[]={principal_type,principal_name,rights}`、`mode + acl[]` 併存 |
 | 6 | Win属性 xattr | `user.win.attrs` (user 名前空間) に JSON `{hidden,system,archive}`。`compressed` は将来 |
-| 7 | ReadOnly | アクセス自身が書込不可なら ReadOnly (owner/group/other writable を正規化済み呼出元で評価) |
+| 7 | ReadOnly | ~~アクセス自身が書込不可なら ReadOnly (owner/group/other writable を正規化済み呼出元で評価)~~ → **v0.2.1 で「誰も書けない (owner / group / other の w が全部落ちている) ときだけ ReadOnly」に変更**。誰が書けるかは権限の判定 (§Windows の判定) が決める |
 | 8 | owner=group | owner=nobody / group=該当 |
 | 9 | 匿名アクセス | ポリシー明記のみ・コード変更なし (pgfs は匿名接続経路を持たない) |
 | 10 | ACL 判定 | クライアントドライバで POSIX 順評価 (Linux もカーネル委譲せず pgfs 層で正規化込み判定) |
@@ -59,7 +59,7 @@ PGFS は **認証システムではなく、名前ベース ACL を保持する�
 |---|---|---|
 | owner (`uname`) | `fuse_get_context()->uid` を `UserResolver.UnameOf` で解決 | 要求元の `WindowsIdentity.User` (SID) を `WindowsUserResolver.UnameOf` で解決 |
 | group (`gname`) | 呼び出し元の **gid** (= 実質 primary group) | **親ディレクトリの `gname` を継承** |
-| 解決できないとき | `mount.fallback_uname` / `fallback_gname` (既定 `nobody` / `nogroup`) | 同左 (**マウントプロセスの user には化かさない**) |
+| 解決できないとき | 見せ方は OS から (Linux: overflowuid / overflowgid)。DB に書くときは `file_system.unknown_name` (`(unknown)`) | 見せ方は `ANONYMOUS LOGON`。DB に書くときは同左 (**マウントプロセスの user には化かさない**。自分の名乗りは `mount.self_uname` / `self_gname` で、自分の SID のときだけ) |
 
 **Windows が group を継承する理由**: Windows の token primary group は実運用でほぼ `Domain Users` / `None` で、
 アクセス判定にも使われない。そのまま保存すると `gname` がノイズ値で埋まり `mode` の group ビットが無意味になる。
@@ -103,7 +103,7 @@ DOMAIN\Alice  /  ALICE  /  alice@example.com  /  Ａlice   →   alice
 
 - **不明名の扱い**: 名前解決に失敗しても **ACL 自体は書き換えない**。保存は元の名前のまま、**評価時のみ**
   `nobody` / `nogroup` (Windows 描画では `ANONYMOUS LOGON`) に解決する。
-- root↔Administrator(s) は既存 [`IsWritable`](../../src/dokan/src/FileSystemUtils.cs) の表示判定だけにあるので、
+- root↔Administrator(s) は当初は表示判定 (旧 `IsWritable`・v0.2.1 で廃止) だけにあったので、
   **保存方向にも拡張**し、nobody/nogroup/other も表に従う。
 
 ## ACL モデル (POSIX-only / allow のみ)
@@ -154,8 +154,9 @@ owner は常に「ユーザー」意味として扱い、グループが来た�
 
 ## Windows 属性
 
-- **ReadOnly のみ mode と連携**: アクセスする自身が書き込み不可 (owner/group/other の writable 判定を
-  §名前正規化済みの呼び出し元に対して評価) なら ReadOnly とする (現行 [`IsWritable`](../../src/dokan/src/FileSystemUtils.cs) の考え方を踏襲)。
+- **ReadOnly のみ mode と連携**: **誰も書けない (owner / group / other の w が全部落ちている) なら ReadOnly** とする ([`IsReadOnly`](../../src/dokan/src/FileSystemUtils.cs)・v0.2.1)。
+  当初は「アクセスする自身が書き込み不可なら ReadOnly」だったが、属性を返す `GetFileInformation` は呼び出し元を持たないので**マウントしたユーザー**で評価するしかなく、
+  **他人の所有の `0644` が読み取り専用に見えて Windows から削除できなかった** (Windows は読み取り専用のファイルの削除を断る。POSIX では削除は親の w で決まる)。
 - **Hidden / System / Archive**: xattr `user.win.attrs` (**user 名前空間 = Linux の `getfattr` からも可視**) に
   **JSON** で保存。
 
@@ -200,13 +201,13 @@ pgfs_inode
 | [2] ドメイン/UPN 除去 | **✅ 実装済** | `NameNormalizer.StripDomain` が `\` と `@` 両対応。Windows 側の旧 `StripDomain` は撤去 |
 | [3] principal マッピング | **✅ 実装済** | [WindowsUserResolver](../../src/dokan/src/WindowsUserResolver.cs) に well-known alias (MapWinUserToPgfs/MapWinGroupToPgfs/MapPgfsUserToWin/MapPgfsGroupToWin)。nobody/nogroup ↔ `NT AUTHORITY\ANONYMOUS LOGON` |
 | [6] Win属性 xattr | **✅ 実装済** | `user.win_attrs` (4byte) → `user.win.attrs` (JSON `{hidden,system,archive}`)。[FileSystemUtils](../../src/dokan/src/FileSystemUtils.cs) の Load/SaveWinAttrs |
-| [7] ReadOnly | **✅ 実装済** | [`IsWritable`](../../src/dokan/src/FileSystemUtils.cs) を正規化済み名比較に簡素化 (root↔Administrator エイリアスはマッピングで吸収) |
+| [7] ReadOnly | **✅ 実装済 (v0.2.1 で条件を変更)** | [`IsReadOnly`](../../src/dokan/src/FileSystemUtils.cs) = w が全部落ちているときだけ。旧 `IsWritable` (マウントしたユーザーが書けるか) は廃止 |
 | [9] 匿名ポリシー | **✅ 記載のみ** | 本書に明記 (コード変更なし) |
 | [5] ACL モデル (正準ドキュメント) | **✅ 3-0 実装済** | [PgfsAcl](../../src/core/src/Models/PgfsAcl.cs) (Lib): `user.pgfs_acl` JSON (entries[]/default[])。allow のみ |
 | [4] 投影ビュー (Windows 読み) | **✅ 3-1 実装済** | [FileSystemUtils.BuildSecurity](../../src/dokan/src/FileSystemUtils.cs) + [GetFileSecurity](../../src/dokan/src/FileSystem.cs)。owner/group SID + mode 由来 ACE + named ACL を SD に投影。Windows e2e に `test_getfilesecurity_projection` 追加 (25/25 PASS) |
 | [4] 投影 (Windows 書き) / [8] owner=group | **✅ 3-2 実装済** | [SetFileSecurity](../../src/dokan/src/FileSystem.cs) + [ApplySecurity](../../src/dokan/src/FileSystemUtils.cs): SD → mode(基本3クラス) + acl[](named) + owner/group。owner が group SID なら nobody/該当へ ([IsGroupSid](../../src/dokan/src/WindowsUserResolver.cs) = LookupAccountSid)。deny は投影で落とす。Windows e2e に `test_setfilesecurity_roundtrip` (26/26)。owner=group の Explorer 操作は SeRestorePrivilege 依存のため e2e 未カバー (ロジックは実装済) |
 | [4][5] Linux POSIX ACL | **✅ 3-3 実装済 (access)** | [PosixAcl](../../src/fuse/src/PosixAcl.cs) コーデック + [mount/FileSystem](../../src/fuse/src/FileSystem.cs) で `system.posix_acl_access` ⇄ st_mode(基本3クラス) + `user.pgfs_acl`(named) + mask 算出。named 無しは ENODATA。Linux e2e に `test_posix_acl_named_user` (35/35)。**`system.posix_acl_default` は現状パススルー** (Linux 内 round-trip のみ、Windows 継承変換は未対応) |
-| [10] ドライバ評価 | **Phase 3-4 (要否再評価)** | 3-1〜3-3 で Get/Set とも mode/ACL が往復・enforcement はカーネル (mode + 返却 SD)。名前正規化は保存名で効くため、各 op の独自判定が本当に要るかは要検討。下記「3-4 の再評価」参照 |
+| [10] ドライバ評価 | **Windows は v0.2.1 で実装 / Linux は保留** | Windows (Dokan) は SD で判定しないので、POSIX 順の自前判定を入れる — 下記「Windows の判定」。Linux は `default_permissions` のカーネル判定のまま (named ACL の厳密 enforce は要件待ち) |
 
 > **回帰**: 即時適用 5 項目 ([1][2][3][6][7]) 実装後、Windows e2e **24/24** (属性系含む) / Linux e2e **34/34** + race **4/4** (chmod/chown/fallback 含む) / 監査専用 [audit.sh](../../tests/citus/audit.sh) **12/12** (caller_uname も正規化経由) すべて PASS。
 >
@@ -221,6 +222,80 @@ pgfs_inode
 - **独自評価が要るのは**: named ACL を **Linux カーネルに enforce させる**には `-o default_permissions` + ACL を効かせるか、ドライバが各 op で判定する必要がある。現状 named ACL は表示・往復はできるが Linux での enforce はカーネル設定依存。
 
 → **3-4 は「named ACL の enforce をどこまで厳密にやるか」の問題に縮小**した。表示・相互運用が主目的なら現状で実用十分。厳密 enforce が要るワークロードが出たら、(a) Linux mount に ACL を効かせる / (b) ドライバ評価、を改めて設計する。**当面 3-4 は保留 (要件が出てから)** とし、3-1〜3-3 で相互運用の主目的は達成とする。
+
+### Windows の判定 (v0.2.1 で実装)
+
+**前提の訂正**: 上の再評価に「Windows はカーネルが返却 SD を見て判定」とあるが、**これは誤り**である。Dokan は
+`GetFileSecurity` が返した SD で**アクセス判定をしない** (判定はユーザーモードのファイルシステムに任されている)。v0.2.0 では
+`root:root 755` の root 直下へ Windows から書けることを実測した ([CHANGELOG.ja.md](../../CHANGELOG.ja.md))。
+Linux は従来どおり `default_permissions` でカーネルが mode を判定する (本節は Linux の挙動を変えない)。
+
+**決めたこと**:
+
+| 項目 | 決定 |
+|---|---|
+| 方式 | **Dokan 側で POSIX 順に自前判定する** (owner → named user → group / named group → other)。Windows の `AccessCheck` に投影 SD を渡す案は、ACE の和集合で判定するので「owner が group より狭い」ときに POSIX と結果が変わるため採らない |
+| 判定する場所 | 評価器 (mode + uname / gname + 正準 ACL + 呼び出し元 → 許される r/w/x) は **Core** に置く (将来 Linux の [10] でも使えるように)。Dokan はアクセスマスク → r/w/x の読み替えと、どのコールバックで何を見るかだけを持つ |
+| 設定 | **`app.enforce_permissions`** (bool・**既定 `true`**・**DB 保存**・`Live`)。FS 全体で揃える項目なので DB に置く ([settings-matrix.ja.md](settings-matrix.ja.md) の「FS 固有は DB」)。切り替えは `pgfsctl config set app.enforce_permissions false` (走行中に反映)。mkfs のフラグは持たない。**Windows (assign) にだけ効く** — Linux の判定はマウントオプション側 |
+| 移行 | v0.2.0 で作った FS には行が無い → 既定の `true` が効く。**上げた時点で Windows から書けていたものが拒否され得る** (CHANGELOG の「移行が必要な変更」に書く) |
+
+**呼び出し元** (`CreateFile` の中だけで取れる — [Assign.ja.md](../Assign.ja.md) の `GetRequestor` の制約):
+
+- ユーザー = トークンの User SID → `WindowsUserResolver.UnameOf` (正規化 + マッピング + `mount.self_uname`)。
+- グループ = トークンの**有効な**グループ SID → `GnameOf` (SID ごとにキャッシュ済み)。
+- **Administrators が有効なトークン (昇格済み) は素通し** (Linux の root 相当)。UAC で制限されたトークンは Administrators が deny-only なので**素通しにならない**。
+- 確定した主体 (uname / gname の集合 / 素通しか) は `OpenFileContext` に載せ、`MoveFile` / `SetFileSecurity` / `SetFileAttributes` / `DeleteFile` はそれを使う (監査の主体と同じ持ち回り)。
+
+**アクセスマスクの読み替え** (`CreateFile` で、開く対象に対して):
+
+| 要求 | 必要なもの |
+|---|---|
+| `ReadData` (= `ListDirectory`) / `ReadExtendedAttributes` / `GenericRead` | r |
+| `WriteData` (= `AddFile`) / `AppendData` (= `AddSubdirectory`) / `WriteExtendedAttributes` / `GenericWrite` | w |
+| `Execute` (= `Traverse`) / `GenericExecute` | x |
+| `WriteAttributes` (時刻・属性) | 所有者 **か** w |
+| `ChangePermissions` (WRITE_DAC) | 所有者 |
+| `SetOwnership` (WRITE_OWNER) | 素通し (Administrators) のみ (POSIX の chown と同じ) |
+| `Delete` / `DeleteOnClose` | 親の w + sticky 規則 (下) |
+| `ReadAttributes` / `ReadPermissions` / `Synchronize` / `MaximumAllowed` | 常に可 (stat に相当) |
+
+**親ディレクトリを見る操作**:
+
+- 作る (`CreateNew` / `Create` / `OpenOrCreate` で無かったとき): 親の w。
+- 消す / rename の元: 親の w。**親が sticky (`01000`) なら、対象の所有者・親の所有者・素通しのどれか**でないと不可。
+- rename の先: 先の親の w。上書きするときは先の対象にも sticky 規則。
+- 中身の切り詰め (`Truncate` / 既存への `Create`): 対象の w。
+
+**判定しないもの (意図した差)**:
+
+- **途中のディレクトリの x (探索)**。Windows は既定で全員が「走査チェックのバイパス」権限を持つので、それに合わせる。Linux (`default_permissions`) は経路の各ディレクトリの x を見るので、**`0700` のディレクトリの奥にある `0644` のファイルは、Windows からだけ読める**。
+- 読み取り専用属性の表示 (決定 [7]) は、呼び出し元の取れない `GetFileInformation` から呼ばれるので、**主体によらない条件** (w が全部落ちているか) で決める (下の as-built)。
+
+**正準 ACL の扱い**: named エントリは mode の group ビットで絞らない (保存形は mask を持たず、Linux の投影で mask を**算出**しているため — 決定 [5])。
+名前の分からない所有者 (`file_system.unknown_name` = `(unknown)`) は誰とも一致しないので、その所有者のファイルは other の権利で判定される。
+
+**拒否のしかた**: `DokanResult.AccessDenied` (= `STATUS_ACCESS_DENIED`。Explorer は「アクセス許可が必要です」を出す)。拒否は Information でログに残す (要求・パス・主体・必要だった権利)。
+
+**検証の計画 (テスト用のユーザーを作らずにできる)**: Windows のテストは**昇格していないシェル**で動くので、呼び出し元は普段のユーザー (素通しにならない)。
+「ほかの人のファイル」は Linux のマウントから `root` / `nobody` の所有で作れば足りる。crossclient に次を足す: `root:root 0644` は読めて書けない /
+`0600` は読めない / named ACL でそのユーザーに rw を付ければ書ける / group `users` の `0664` は group で書ける / `root:root 1777` の中の `root` のファイルは
+消せない (自分のファイルは消せる) / `app.enforce_permissions=false` で全部通る。昇格シェルでの素通しは手動で 1 回確かめる。
+**修正前のビルドで拒否系が「書けてしまう」で落ちることを先に確かめる**。
+
+**as-built**: 評価器は [PermissionEvaluator](../../src/core/src/Api/PermissionEvaluator.cs) + [AccessCaller](../../src/core/src/Api/AccessCaller.cs) (Core)、
+Dokan 側は [FileSystem.Access.cs](../../src/dokan/src/FileSystem.Access.cs)。検証は [tests/windows/permissions.ps1](../../tests/windows/permissions.ps1) (14 件 = 最初の 12 件 + 読み取り専用属性の 2 件 (下の as-built)。**修正前のビルドでは拒否系 7 件が「`ok` だった」で落ちる**ことを確認済み)。
+計画との差分:
+
+- **検証はクロスクライアントではなく単独スイートにした**。仕込み (他人の所有・mode・named ACL) は**昇格したシェルから SetFileSecurity** で作れる (所有者に Administrator の SID を渡せば `root` になる) ので、
+  Linux 側のマウントは要らなかった。確かめる操作は **Administrators を無効にした制限トークン** (`CreateRestrictedToken`) で行う (昇格したシェルは素通しで何も確かめられないため)。
+  sticky だけは Windows から立てられないので、`-StickyDir` に root 所有の `1777` を渡したときだけ見る。
+- **sticky のディレクトリへの `DeleteChild` を所有者だけにした** (計画に無かった)。Windows はファイルへの `Delete` を断られると**親を `DeleteChild` で開き直し、開けたら消す**
+  (NTFS の FILE_DELETE_CHILD。sticky のテストが「消せてしまう」で落ちて判明)。sticky でなければ `DeleteChild` は親の w と同じ意味なのでそのまま。
+- **rename の先の親は `CreateFile` で止まる**ことが多い。Windows は rename の前に先の親を書き込み要求で開きにくる。`MoveFile` の判定は二重の守りとして残した。
+- **「読み取り専用」属性 (決定 [7]) は「誰も書けないときだけ」に変えた**。当初はマウントしたプロセスのユーザー基準のままにしていて、他人の所有で書けないファイルが読み取り専用に見え、
+  **Windows は読み取り専用のファイルの削除を断る**ので昇格しても Windows から消せなかった (v0.2.0 からの挙動。テストの後片付けで判明)。
+  残る差は持ち主が全員の w を落とした (`chmod a-w`) ファイルだけ — Windows では消せず、Linux では親の w があれば消せる。
+  **「消せない」を両 OS で揃えたいなら immutable 属性を別に持つ**案がある (未着手)。テストは permissions.ps1 の 2 件 (修正前のビルドで落ちることを確認済み)。
 
 ## 具体例: Windows で所有者を「Users」に設定
 

@@ -12,7 +12,7 @@ Citus 対応 (Phase 2 = 分散化 / Phase 3 = 排他制御) に関する検証�
 |---|---|---|
 | [verify.sql](verify.sql) + [verify.cmd](verify.cmd) | mkfs --clean --citus 済みの空 PGFS (= 1 ノード Citus on pgsql_server) に対する構成診断 SQL。`citus_tables` / 分散キー / shard 配置 / EXPLAIN を確認 | Windows ホスト → ssh pgsql_server 経由 |
 | [multinode_probe.sh](multinode_probe.sh) | Citus の仕様確認 (auto-sync / DDL 伝搬 / shard 配置 / citus_add_local_table_to_metadata 等) 用 one-off probe スクリプト。docker で 2 ノード Citus (coord + worker) を立てて 13 セクションの probe SQL を流す | linux_client (docker daemon 未起動からでも OK、trap で後始末) |
-| [test_matrix.sh](test_matrix.sh) | mkfs Phase 2 の **18 ケース** マトリックステスト (3 initial × 6 target)。docker で 2 ノード Citus (coord + worker1) を立てて、各 case で setup → mkfs → state 検証 → 次へ | linux_client (同上) |
+| [test_matrix.sh](test_matrix.sh) | mkfs Phase 2 の **18 ケース** マトリックステスト (3 initial × 6 target) + **追加 9 件** (既存の DB に作るときだけの指示を渡したとき / `--clean` が消すノード / `--purge`・確認・接続中のもの)。docker で 2 ノード Citus (coord + worker1) を立てて、各 case で setup → mkfs → state 検証 → 次へ | linux_client (同上) |
 | [race_multinode.sh](race_multinode.sh) | Phase 3 (排他制御) の残検証。docker 2 ノード Citus + mount.pgfs × 2 を立てて (i) 多ノード Citus 上の Linux e2e 35/35、(ii) 並行 write race の cross-client 整合性 (md5/size 一致)、(iii) 並行 mkdir race の EEXIST 保証、(iv) pgfs_lock 行累積の現実的サイズ、を一気通貫で確認 | linux_client (同上) |
 | [audit.sh](audit.sh) | 監査ログ ([docs/audit-log.ja.md](../../docs/design/audit-log.ja.md)) 専用テスト。docker 2 ノード Citus + mount.pgfs × 1 を立てて (A) 各 op の記録、(B) caller_* (uid/uname/host/ip)、(C) パーティション自動作成 = 月跨ぎ機構、(D) `audit.enabled=false` で 0 行、を確認。Citus 同一 tx commit も A/B/C 成立で同時実証 | linux_client (同上) |
 | [statfs.sh](statfs.sh) | df ([docs/df-support.ja.md](../../docs/design/df-support.ja.md)) 専用テスト。**plperl 入り自前イメージ** ([tests/docker/Dockerfile.citus-plperl](../docker/Dockerfile.citus-plperl)) で docker 2 ノード Citus (coord+worker1) を立て、`pgfs_statfs()` の **worker 集約** (R1〜R5) と `require`/`auto`/`nominal` 3 モード (A1/N1) を検証。R5 は `citus.enable_ddl_propagation=off` で coord ローカル `fs_free` だけ DROP して集約機構を証明。mount 不要 (mkfs + psql のみ) | linux_client (同上) |
@@ -122,6 +122,24 @@ bash tests/citus/test_matrix.sh
 - mkfs は host (linux_client) で実行され、localhost:15432 で coord に接続、`--worker localhost:15433` で worker を指定
 - ログは `/tmp/citus_test_matrix.log`
 - 終了時 trap でコンテナ / イメージ / docker daemon を元の状態に戻す
+
+### 追加ケース
+
+| ケース | 見るもの | 期待 |
+|---|---|---|
+| X1 | 非 Citus の既存 DB に `--citus` を付けて**新しい schema** を作る | mkfs 成功・citus 拡張なし・新 schema にテーブル 7 個 (以前は新テーブルの分散で exit 1) |
+| X2 | 1 ノード Citus の既存 DB に `--citus --worker` | mkfs 成功・**worker に pgfs ロールが作られない**・`pg_dist_node` は 1 件のまま (以前はロールを作っていた) |
+| X3 | coord + worker の構成に `--clean` だけ (`--citus` / `--worker` なし) | **worker の同名 DB も消える** (消すノードは `pg_dist_node` で決まる。以前は `--worker` を付け忘れると残った) |
+| X4 | `--clean --purge --yes` | exit 2・DB は残る |
+| X5 | 非対話で `--purge` (`--yes` なし) | exit 3・DB は残る |
+| X6 | coord + worker に `--purge --yes` | exit 0・coord と worker の DB が消える・**toml とロールは残る** |
+| X7 | 生きているマウント (`pgfs_mounts` に heartbeat が新しい行を入れる) があるとき `--purge --yes` → `--now` 付き | 1 回目は exit 3 で DB が残り**一覧にマウントが出る** → `--now` で消える |
+| X8 | 他の接続 (`psql` で `pg_sleep`) があるとき `--clean --yes` → `--now` 付き | 1 回目は exit 3 → `--now` で切って作り直す |
+| X9 | 対話の確認 (`script` で端末を作って `n` / `y` を流す) | n は exit 3 で DB が残る → y で消える |
+
+**修正前のビルドでどれも落ち、修正後に 27/27** (2026-09-25・linux_client の docker Citus。X1 / X2 / X3 / X4〜X9 をそれぞれの修正の前後で確認。X4〜X9 は修正前だと `--purge` などを知らないので、無視して作ってしまい exit 0 で落ちる)。
+
+**`mkfs --clean` を呼ぶスクリプトは全部 `--yes` を付けている** (v0.2.1〜。非対話で無いと何も消さずに exit 3)。
 
 ### 実績
 
