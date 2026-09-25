@@ -9,6 +9,6 @@ public enum SaveTarget
 	None,
 	/// <summary>Saved to pgfs.toml. Written at `mkfs` time, read at `mount`/`assign` startup.</summary>
 	File,
-	/// <summary>Saved to the pgfs_settings table. For values you want a single FS-wide value for (e.g. fallback_uname).</summary>
+	/// <summary>Saved to the pgfs_settings table. For values you want a single FS-wide value for (e.g. volume_label).</summary>
 	Db,
 }

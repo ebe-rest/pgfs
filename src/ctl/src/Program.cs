@@ -39,6 +39,9 @@ public static class Program
 				case "--help":
 					ShowUsage();
 					return 0;
+				case "--version":
+					Console.WriteLine(Pgfs.Core.AppInfo.Banner);
+					return 0;
 			}
 			Console.Error.WriteLine($"unknown subcommand '{sub}'");
 			ShowUsage();

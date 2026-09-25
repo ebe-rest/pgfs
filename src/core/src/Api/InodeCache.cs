@@ -22,7 +22,14 @@ public class InodeCache
 	// it turns into "created it, yet ENOENT". Only the byId entries are exempted from eviction (the children
 	// lists are not pinned - pinning a merged list would make another client's changes invisible forever).
 	private readonly HashSet<long> pinned = new();
-	private readonly Inode root;
+	// The root is kept separately because it is the starting point of path resolution (never evicted; `/` is always
+	// walked from here).
+	// **Reread it when another client changes the root** - it used to be read once at startup, and even after a
+	// notification removed it from byId, `GetRoot()` kept returning the stale object, so a chmod / chown / mtime change
+	// on the root **stayed invisible until remount** (a root chmod to 1777 on one mount stayed 755 on the others).
+	private Inode root;
+	// Whether the root must be reread. Set when <see cref="Invalidate"/> receives id 0, and by <see cref="InvalidateAll"/>.
+	private bool rootStale;
 	private int cacheMaxEntries;
 	private int negativeTtlMs;
 	// Cumulative statistics (for Layer 3 status). All of them are incremented under lock(this).
@@ -93,7 +100,38 @@ public class InodeCache
 
 
 	public Inode GetRoot() {
-		return this.root;
+		lock (this) {
+			if (!this.rootStale) { return this.root; }
+			var fresh = this.ReloadRoot();
+			// If it cannot be read, carry on with the old root (leave the flag set so the next query tries again).
+			if (fresh == null) { return this.root; }
+			this.rootStale = false;
+			this.root = fresh;
+			return fresh;
+		}
+	}
+
+	/// <summary>
+	/// Rereads the root (call under lock(this)). If another path (<see cref="Get(long)"/> etc.) has already loaded it
+	/// since the invalidation, that one is used, **so that byId and the root never become different objects** (this
+	/// client's own updates rewrite the byId object).
+	/// Returns null if it cannot be read.
+	/// </summary>
+	private Inode? ReloadRoot() {
+		try {
+			var inode = this.byId[0] ?? Pg.Query<Inode>(this.connectionString, this.selectInodeByIdQuery, new { id = 0L }).SingleOrDefault();
+			if (inode == null) {
+				Logger.Warning("Could not reread the root (inode 0) (no row in the database). Continuing with the old value");
+				return null;
+			}
+			inode.CacheTime = DateTime.MaxValue;
+			this.byId[0] = inode;
+			this.byPath["/"] = 0;
+			return inode;
+		} catch (Exception ex) {
+			Logger.Warning("Could not reread the root (inode 0). Continuing with the old value: ", ex.Message);
+			return null;
+		}
 	}
 
 	/// <summary>
@@ -151,6 +189,9 @@ public class InodeCache
 			if (id is long targetId) {
 				this.byId.Remove(targetId);
 			}
+			if (id == 0) {
+				this.rootStale = true;
+			}
 			if (path != null) {
 				this.byPath.Remove(path);
 			}
@@ -183,6 +224,7 @@ public class InodeCache
 			this.childrenByParent.Clear();
 			this.negativeByPath.Clear();
 			foreach (var inode in keep) { this.byId[inode.Id] = inode; }
+			this.rootStale = true;
 		}
 	}
 

@@ -155,7 +155,7 @@ public partial class Api : System.IDisposable
 			config.Database.RetryInitialDelayMs,
 			config.Database.RetryMaxDelayMs
 		);
-		// The DB load of mount.fallback_uname / fallback_gname has already been done by [ConfigLoader] via ConfigStore,
+		// The DB load of file_system.unknown_name and the like has already been done by [ConfigLoader] via ConfigStore,
 		// so do nothing here.
 
 		// The control channel (reload/set/ping) always LISTENs, regardless of notify_enabled. That is what
@@ -475,6 +475,7 @@ public partial class Api : System.IDisposable
 			["mount.write_back_max_inodes"] = this.config.Mount.WriteBackMaxInodes,
 			["mount.write_back_flush_timeout_ms"] = this.config.Mount.WriteBackFlushTimeoutMs,
 			["app.statfs"] = this.config.Statfs.Mode,
+			["app.enforce_permissions"] = this.config.App.EnforcePermissions,
 			["audit.enabled"] = this.config.Audit.Enabled,
 			["file_system.version"] = this.config.FileSystem.Version,
 			["file_system.volume_label"] = this.config.FileSystem.VolumeLabel,
@@ -676,6 +677,9 @@ public partial class Api : System.IDisposable
 				break;
 			case "app.statfs":
 				this.config.Statfs.Mode = Schema.Statfs.Mode.Parse(raw);
+				break;
+			case "app.enforce_permissions":
+				this.config.App.EnforcePermissions = Schema.App.EnforcePermissions.Parse(raw);
 				break;
 			case "audit.enabled":
 				this.config.Audit.Enabled = Schema.Audit.Enabled.Parse(raw);
@@ -2851,6 +2855,10 @@ public partial class Api : System.IDisposable
 		if (this.UnflushedCount() > 0) { return; }
 		this.dataDrainPending = false;
 		Logger.Information("write-back: the dirty data left by the live disable has been written out (drain finished)");
+		// **Write the end of the drain to {prefix}mounts right away too** (same idea as stopping acceptance). Waiting for
+		// the heartbeat (30 seconds) makes status keep falsely reporting "unflushed data remains" in the meantime
+		// (found when a write-back test failed against a PG across the network).
+		this.PublishStatsNow();
 	}
 
 	/// <summary>

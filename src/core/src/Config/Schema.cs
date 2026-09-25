@@ -65,6 +65,19 @@ public static class Schema
 		};
 
 		/// <summary>
+		/// Prints the program version and exits (shared by mkfs / mount / assign; pgfsctl takes it on the subcommand side).
+		/// Up to v0.2.0, <c>--version</c> was taken by the filesystem format version (<c>file_system.version</c>), which was moved to <c>--fs-version</c>.
+		/// </summary>
+		public static readonly BoolField PrintVersion = new() {
+			Scope = "root",
+			Key = "print_version",
+			CliOptions = ["--version"],
+			SaveTo = SaveTarget.None,
+			DefaultFn = () => false,
+			Comment = "Show the program version and exit",
+		};
+
+		/// <summary>
 		/// mkfs only. With <c>--clean</c>, ignore the existing <c>pgfs.toml</c> + DROP DATABASE → re-create. It has no short form
 		/// (only an explicit flag, to prevent an unintended `--clean`). Accepted but has no effect on mount / assign.
 		/// </summary>
@@ -76,6 +89,47 @@ public static class Schema
 			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => false,
 			Comment = "Re-create from scratch: ignore existing pgfs.toml and DROP DATABASE before re-init (mkfs only)",
+		};
+
+		/// <summary>
+		/// mkfs only. **Erases and stops there** (<c>--clean</c> erases and re-creates). The target is the connection of the
+		/// toml given by <c>-f</c>; on Citus the same-named database on every worker in <c>pg_dist_node</c> is erased too.
+		/// Cannot be combined with <c>--clean</c>. Roles / tablespaces / the toml are not erased. It has no short form. The spec is docs/Mkfs.md §--purge.
+		/// </summary>
+		public static readonly BoolField Purge = new() {
+			Scope = "root",
+			Key = "purge",
+			CliOptions = ["--purge"],
+			SaveTo = SaveTarget.None,
+			AppliesTo = Tool.Mkfs,
+			DefaultFn = () => false,
+			Comment = "Delete the filesystem and stop: DROP DATABASE on the coordinator and every Citus worker (mkfs only; not with --clean)",
+		};
+
+		/// <summary>mkfs only. **Skips the confirmation prompt** of <c>--clean</c> / <c>--purge</c> (for scripts). Without it, a non-interactive run ends without erasing anything.</summary>
+		public static readonly BoolField Yes = new() {
+			Scope = "root",
+			Key = "yes",
+			CliOptions = ["--yes", "-y"],
+			SaveTo = SaveTarget.None,
+			AppliesTo = Tool.Mkfs,
+			DefaultFn = () => false,
+			Comment = "Do not ask before --clean / --purge deletes (non-interactive runs need this)",
+		};
+
+		/// <summary>
+		/// mkfs only. With <c>--clean</c> / <c>--purge</c>, **disconnects whatever is connected (live mounts / other sessions) and
+		/// proceeds without waiting**. Without it, an interactive run keeps asking "retry?", and a non-interactive run ends doing
+		/// nothing. Separate from skipping the confirmation (<c>--yes</c>).
+		/// </summary>
+		public static readonly BoolField Now = new() {
+			Scope = "root",
+			Key = "now",
+			CliOptions = ["--now"],
+			SaveTo = SaveTarget.None,
+			AppliesTo = Tool.Mkfs,
+			DefaultFn = () => false,
+			Comment = "With --clean / --purge: disconnect live mounts and other sessions instead of waiting",
 		};
 	}
 
@@ -328,30 +382,36 @@ public static class Schema
 		};
 
 		/// <summary>
-		/// The fallback user name when a uname stored in pgfs_inode cannot be resolved by the OS.
-		/// For safety, a resolution failure is not disguised as the running process's uid (the NFS `nobody` convention).
-		/// Stored in the DB because we want a single FS-wide value.
+		/// **The name this client presents for itself (a supplement).** Things created at the request of the user running this
+		/// mount process itself get this name (overriding it whether or not the name can be looked up). Set it when your own
+		/// name cannot be looked up (e.g. no permission to resolve the SID to a name under Entra ID) or when you do not want
+		/// to use it. **Not used for other users' requests.** Unset by default.
+		/// The database is authenticated with the pgfs role shared by everyone, so this is not authentication but a declaration
+		/// that "this client presents itself this way".
+		/// Of the roles of the old <c>mount.fallback_uname</c>, "the id shown on this host" now comes from the OS (overflowuid),
+		/// and "the name written when the name is unknown" moved to <see cref="FileSystem.UnknownName"/>.
 		/// </summary>
-		public static readonly StringField FallbackUname = new() {
+		public static readonly StringField SelfUname = new() {
 			Scope = "mount",
-			Key = "fallback_uname",
-			CliOptions = ["--fallback-uname"],
-			SaveTo = SaveTarget.Db,
+			Key = "self_uname",
+			CliOptions = ["--self-uname"],
+			SaveTo = SaveTarget.File,
 			AppliesTo = Tool.Mount | Tool.Assign,
 			ArgName = "<name>",
-			DefaultFn = () => "nobody",
-			Comment = "Username returned when an inode's uname cannot be resolved by the OS",
+			DefaultFn = () => "",
+			Comment = "Owner name to record for files this mount's own user creates (overrides the OS name; empty = use the OS name)",
 		};
 
-		public static readonly StringField FallbackGname = new() {
+		/// <summary>The group version of the self-presented name (a supplement). If set, the gname of what this client creates becomes this (it takes priority over inheritance from the parent / the primary group).</summary>
+		public static readonly StringField SelfGname = new() {
 			Scope = "mount",
-			Key = "fallback_gname",
-			CliOptions = ["--fallback-gname"],
-			SaveTo = SaveTarget.Db,
+			Key = "self_gname",
+			CliOptions = ["--self-gname"],
+			SaveTo = SaveTarget.File,
 			AppliesTo = Tool.Mount | Tool.Assign,
 			ArgName = "<name>",
-			DefaultFn = () => "nogroup",
-			Comment = "Group name returned when an inode's gname cannot be resolved by the OS",
+			DefaultFn = () => "",
+			Comment = "Group name to record for files this mount's own user creates (empty = the usual rule)",
 		};
 
 		/// <summary>
@@ -440,7 +500,7 @@ public static class Schema
 			Scope = "database",
 			Key = "tablespace",
 			CliOptions = ["--tablespace", "--tablespace-name"],
-			SaveTo = SaveTarget.Db,
+			SaveTo = SaveTarget.None,
 			AppliesTo = Tool.Mkfs,
 			ArgName = "<name>",
 			DefaultFn = () => "pg_default",
@@ -451,7 +511,7 @@ public static class Schema
 			Scope = "database",
 			Key = "tablespace_path",
 			CliOptions = ["--tablespace-path"],
-			SaveTo = SaveTarget.Db,
+			SaveTo = SaveTarget.None,
 			AppliesTo = Tool.Mkfs,
 			ArgName = "<path>",
 			DefaultFn = () => "",
@@ -496,16 +556,19 @@ public static class Schema
 		///   <item>the receiving side invalidates the matching entry in <see cref="Pgfs.Core.Api.InodeCache"/>. Assign
 		///   additionally calls <c>DokanInstance.NotifyUpdate</c> and friends to ask Explorer to redraw</item>
 		/// </list>
-		/// Default <c>false</c> (opt-in). With one PG / one client there is nothing to gain, so OFF; intended to be ON only when sharing over the network.
+		/// Default <c>true</c> (since v0.2.1). With multiple mounts it is effectively required (with the old default off, another
+		/// mount's create / delete / rename stayed invisible indefinitely), so the default was flipped. To save the one LISTEN
+		/// connection and the cost of <c>pg_notify</c> when running a single mount, use <c>--no-notify</c> / <c>notify_enabled = false</c> in TOML.
 		/// </summary>
 		public static readonly BoolField NotifyEnabled = new() {
 			Scope = "database",
 			Key = "notify_enabled",
 			CliOptions = ["--notify", "--notify-enabled"],
+			NegatedCliOptions = ["--no-notify"],
 			SaveTo = SaveTarget.File,
 			AppliesTo = Tool.Mount | Tool.Assign,
-			DefaultFn = () => false,
-			Comment = "Enable cross-client change notifications via PostgreSQL LISTEN/NOTIFY",
+			DefaultFn = () => true,
+			Comment = "Cross-client change notifications via PostgreSQL LISTEN/NOTIFY (--no-notify to disable)",
 		};
 
 		/// <summary>
@@ -519,14 +582,14 @@ public static class Schema
 		/// </list>
 		/// Default <c>false</c> (opt-in). Ignored if received on mount/assign (= the Api is written so the same SQL runs whether the
 		/// target is Citus or not; a cross-shard rename always switches to the INSERT+DELETE path that preserves id, only when the parent changes).
-		/// It is **saved to the DB** (<see cref="SaveTarget.Db"/>), but only for after-the-fact
-		/// confirmation that "this DB is Citus-enabled" (mount/assign do not branch on it).
+		/// **It is not saved** (since v0.2.1, <see cref="SaveTarget.None"/>): it is a creation-only instruction.
+		/// Whether a DB is Citus is decided by what the DB actually is (whether the <c>citus</c> extension exists); passing it for an existing DB has no effect (a Warning).
 		/// </summary>
 		public static readonly BoolField Citus = new() {
 			Scope = "database",
 			Key = "citus",
 			CliOptions = ["--citus"],
-			SaveTo = SaveTarget.Db,
+			SaveTo = SaveTarget.None,
 			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => false,
 			Comment = "Initialize the DB as Citus distributed tables (mkfs only)",
@@ -558,7 +621,7 @@ public static class Schema
 			Scope = "database",
 			Key = "shard_count",
 			CliOptions = ["--shard-count"],
-			SaveTo = SaveTarget.Db,
+			SaveTo = SaveTarget.None,
 			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => 0,
 			Comment = "Citus shard count for distributed tables (0 = cluster default, mkfs only)",
@@ -578,7 +641,7 @@ public static class Schema
 			Scope = "database",
 			Key = "shard_replication_factor",
 			CliOptions = ["--shard-replication-factor", "--rf"],
-			SaveTo = SaveTarget.Db,
+			SaveTo = SaveTarget.None,
 			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => 0,
 			Comment = "Citus copies per shard (0 = cluster default, mkfs only)",
@@ -676,11 +739,47 @@ public static class Schema
 			Reload = ReloadPolicy.Format,
 			Scope = "file_system",
 			Key = "version",
-			CliOptions = ["--version"],
+			CliOptions = ["--fs-version"],
 			SaveTo = SaveTarget.Db,
 			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => "1.0.0",
 			Comment = "Specifies the PGFS version, currently only 1.0.0 is allowed",
+		};
+
+		/// <summary>
+		/// The name written to the database when the creator's name is unknown (on Windows the requester cannot be obtained /
+		/// a SID or uid other than your own cannot be resolved to a name).
+		/// Per filesystem. Used for both uname and gname. On an OS screen it is a name that does not exist on that host, so it
+		/// shows as overflowuid / a well-known SID.
+		/// **It has no CLI for now (effectively a fixed value).** Not changed after the filesystem is created (Format).
+		/// </summary>
+		public static readonly StringField UnknownName = new() {
+			Reload = ReloadPolicy.Format,
+			Scope = "file_system",
+			Key = "unknown_name",
+			CliOptions = [],
+			SaveTo = SaveTarget.Db,
+			DefaultFn = () => "(unknown)",
+			Comment = "Name recorded when the creator's name cannot be determined",
+		};
+
+		/// <summary>
+		/// The permissions of the root directory (inode 0) mkfs creates. <c>owner</c> = <c>root:root 0755</c> (from Windows,
+		/// Administrators can write), <c>everyone</c> = <c>root:root 1777</c> (anyone can write, and only the creator can delete =
+		/// sticky like <c>/tmp</c>; from Windows, Everyone).
+		/// Takes effect **only when the root is newly created** (if it already exists, a Warning is shown and it is not changed;
+		/// to change it, mount and chmod). A mkfs-only action, kept neither in the database nor in the toml.
+		/// </summary>
+		public static readonly EnumField RootAccess = new() {
+			Scope = "file_system",
+			Key = "root_access",
+			CliOptions = ["--root-access"],
+			SaveTo = SaveTarget.None,
+			AppliesTo = Tool.Mkfs,
+			Allowed = ["owner", "everyone"],
+			DefaultFn = () => "owner",
+			ArgName = "owner|everyone",
+			Comment = "Permissions of the root directory when it is created: owner (root:root 0755) or everyone (1777, like /tmp) (mkfs only)",
 		};
 
 		public static readonly StringField VolumeLabel = new() {
@@ -801,6 +900,27 @@ public static class Schema
 			AppliesTo = Tool.Mkfs,
 			DefaultFn = () => true,
 			Comment = "Allow untrusted plperlu (real statfs free-space + tablespace auto-mkdir). --plperlu [true|false] / --allow-plperlu / --deny-plperlu",
+		};
+
+		/// <summary>
+		/// **Whether Windows (assign) checks POSIX permissions (mode + the canonical ACL).** Default <c>true</c>.
+		/// <list type="bullet">
+		///   <item>Dokan does not check access against the security descriptor, so when true, assign checks with <see cref="Api.PermissionEvaluator"/>.
+		///   false is the same "no check" as v0.2.0 and earlier (anyone can read and write).</item>
+		///   <item>It is an item kept uniform across the filesystem, so <see cref="SaveTarget.Db"/>. It has no CLI option; switch it while running with <c>pgfsctl config set app.enforce_permissions false</c>.</item>
+		///   <item><b>It has no effect on Linux</b> - on Linux the kernel checks through the mount option <c>default_permissions</c>.</item>
+		/// </list>
+		/// The design is defined in docs/design/permission-interop.md, the Windows evaluation section.
+		/// </summary>
+		public static readonly BoolField EnforcePermissions = new() {
+			Reload = ReloadPolicy.Live,
+			Scope = "app",
+			Key = "enforce_permissions",
+			CliOptions = [],
+			SaveTo = SaveTarget.Db,
+			AppliesTo = Tool.Assign,
+			DefaultFn = () => true,
+			Comment = "Check POSIX permissions (mode + ACL) for access from Windows (assign). Change with pgfsctl config set",
 		};
 	}
 }

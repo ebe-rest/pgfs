@@ -64,6 +64,10 @@ public static class Program
 				ShowHelp();
 				return 0;
 			}
+			if (liteForHelp.Resolve(Schema.Root.PrintVersion)) {
+				Console.WriteLine(AppInfo.Banner);
+				return 0;
+			}
 
 			// Assemble the RootConfig with the new ConfigLoader. A POCO aggregate that merges CLI / TOML / DB / Default.
 			// The Setting / Logging / Database / Mount / FileSystem scopes have all been turned into Config.

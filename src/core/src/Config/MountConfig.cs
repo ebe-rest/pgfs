@@ -36,8 +36,10 @@ public sealed class MountConfig
 	public int WriteBackMaxInodes { get; set; }
 	/// <summary>The blocking limit for back-pressure / the flush deadline at unmount (in milliseconds). 0 = do not wait.</summary>
 	public int WriteBackFlushTimeoutMs { get; set; }
-	public string FallbackUname { get; set; } = "";
-	public string FallbackGname { get; set; } = "";
+	/// <summary>The name this client presents for itself (a supplement). Empty = the OS name (<see cref="Schema.Mount.SelfUname"/>).</summary>
+	public string SelfUname { get; set; } = "";
+	/// <summary>The group version of the self-presented name (a supplement). Empty = the usual rules.</summary>
+	public string SelfGname { get; set; } = "";
 	public bool Foreground { get; set; }
 
 	/// <summary>

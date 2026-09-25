@@ -22,6 +22,18 @@ public static partial class Pg
 		}
 	);
 
+	/// <summary>
+	/// **Discards the idle connections of every connection pool.** Connections are pooled by a <see cref="NpgsqlDataSource"/>
+	/// per connection string, so <c>NpgsqlConnection.ClearAllPools()</c> does not empty them.
+	/// Called after mkfs <c>--clean</c> has run DROP DATABASE - connections opened to the target database before the drop
+	/// were cut by it, and if they are kept, the first operation on the recreated database picks one up and fails with 57P01.
+	/// </summary>
+	public static void ClearPools() {
+		foreach (var ds in Pg.dataSources.Values) {
+			ds.Clear();
+		}
+	}
+
 	// ---
 	//
 	// Opening a connection is wrapped in [Retry.Sync](Retry.cs) / [Retry.Async](Retry.cs):

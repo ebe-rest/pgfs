@@ -72,6 +72,7 @@ public static class StatusCommand
 		PrintLayer3(mounts);
 		Console.WriteLine();
 		Console.WriteLine("Filesystem:");
+		Console.WriteLine($"  target        : {fs.Target}");
 		Console.WriteLine($"  schema/prefix : {fs.Schema} / {fs.Prefix}");
 		Console.WriteLine($"  version       : {fs.Version}  (label: {fs.VolumeLabel})");
 		Console.WriteLine($"  inodes        : {Count(fs.InodeCount)}");
@@ -82,7 +83,7 @@ public static class StatusCommand
 		Console.WriteLine($"  max_file_size : {FormatBytes(fs.MaxFileSize)} ({fs.MaxFileSize} bytes)");
 		Console.WriteLine($"  audit         : {OnOff(fs.AuditEnabled)}");
 		var citus = fs.Citus switch {
-			true  => $"yes ({fs.CitusNodeCount} nodes)",
+			true  => $"yes ({fs.CitusNodeCount} nodes: {string.Join(", ", fs.CitusNodes)})",
 			false => "no",
 		};
 		Console.WriteLine($"  citus         : {citus}");
@@ -306,6 +307,7 @@ public static class StatusCommand
 				["rows"] = rows,
 			},
 			["fs"] = new Dictionary<string, object?> {
+				["target"] = fs.Target,
 				["schema"] = fs.Schema,
 				["prefix"] = fs.Prefix,
 				["version"] = fs.Version,
@@ -319,6 +321,7 @@ public static class StatusCommand
 				["audit_enabled"] = fs.AuditEnabled,
 				["citus"] = fs.Citus,
 				["citus_node_count"] = fs.CitusNodeCount,
+				["citus_nodes"] = fs.CitusNodes,
 			},
 		};
 	}

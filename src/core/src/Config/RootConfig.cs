@@ -22,6 +22,18 @@ public sealed class RootConfig
 	/// <summary>true with `-?` / `-h` / `--help`. A signal for the receiver to <c>ShowHelp()</c> → exit.</summary>
 	public bool Help { get; set; }
 
+	/// <summary>true with `--version`. The receiver prints the version and exits.</summary>
+	public bool PrintVersion { get; set; }
+
 	/// <summary>true with `--clean`. mkfs only (no effect on mount / assign).</summary>
 	public bool Clean { get; set; }
+
+	/// <summary>mkfs's <c>--purge</c> (erase and stop there).</summary>
+	public bool Purge { get; set; }
+
+	/// <summary>mkfs's <c>--yes</c> / <c>-y</c> (skip the confirmation before erasing).</summary>
+	public bool Yes { get; set; }
+
+	/// <summary>mkfs's <c>--now</c> (disconnect whatever is connected without waiting).</summary>
+	public bool Now { get; set; }
 }

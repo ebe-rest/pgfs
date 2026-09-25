@@ -25,7 +25,7 @@ using FileAccess = DokanNet.FileAccess;
 ///   - LockFile / UnlockFile — return Success and let the kernel handle it via the UserModeLock option.
 /// </summary>
 [SupportedOSPlatform("windows")]
-public sealed class FileSystem : IDokanOperations2, IDisposable
+public sealed partial class FileSystem : IDokanOperations2, IDisposable
 {
 	private readonly Api api;
 	private readonly string mountPoint;
@@ -49,10 +49,10 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 	public FileSystem(Api api, string mountPoint) {
 		this.api = api;
 		this.mountPoint = mountPoint;
-		// Name-resolution fallback is mount.fallback_uname / fallback_gname (stored in the DB).
+		// Names this host cannot resolve are shown as ANONYMOUS LOGON, and names that are not known are written as file_system.unknown_name. Our own name comes from mount.self_*.
 		// Unknown uname/gname should map to a low-privilege account such as Guest / Guests; mapping them to
 		// the running process's user would cause an "others' files = mine" incident.
-		this.users = new WindowsUserResolver(api.Config.Mount.FallbackUname, api.Config.Mount.FallbackGname);
+		this.users = new WindowsUserResolver(api.Config.FileSystem.UnknownName, api.Config.Mount.SelfUname, api.Config.Mount.SelfGname);
 		this.logger = new Logger.Instance();
 		this.dokan = new Dokan(this.logger);
 		// **On Windows `.fuse_hidden*` is not kept out of the enumeration.** libfuse leaves no such leftovers here,
@@ -83,12 +83,12 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 	/// that rebuild it with <see cref="ApplyAuditContext"/>.
 	/// Windows has no numeric uid, so Uid is null, the account name goes into Uname and the domain into Domain.
 	/// </summary>
-	private (AuditContext? Audit, string? OwnerUname) CaptureCaller(ref DokanFileInfo info) {
+	private (AuditContext? Audit, string? OwnerUname, AccessCaller? Caller) CaptureCaller(ref DokanFileInfo info) {
 		try {
 			using var identity = info.GetRequestor();
 			if (identity == null) {
 				Core.Logging.Logger.Warning("could not obtain the caller (GetRequestor)");
-				return (null, null);
+				return (null, null, this.UnknownCaller());
 			}
 			// The owner is decided from **`.User` (the SID of the requesting account)**. `.Owner` can be
 			// Administrators in an elevated process, so it is not used (which would erase the actual creator from the record).
@@ -109,10 +109,15 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 					audit = new AuditContext { Uid = null, Uname = uname, Domain = domain };
 				}
 			}
-			return (audit, owner);
+			// The subject for the permission check is only built when checking (resolving the group names costs something).
+			AccessCaller? caller = null;
+			if (this.Enforcing) {
+				caller = this.BuildCaller(identity, owner);
+			}
+			return (audit, owner, caller);
 		} catch (Exception ex) {
 			Core.Logging.Logger.Warning("failed to resolve the caller: ", ex.Message);
-			return (null, null);
+			return (null, null, this.UnknownCaller());
 		}
 	}
 
@@ -348,8 +353,8 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 	/// close them - and <see cref="Pgfs.Core.Api.OpenFileContext.Counted"/> remembers that they are not counted.
 	/// </para>
 	/// </summary>
-	private void AttachHandle(Inode inode, AuditContext? audit, bool writeThrough, ref DokanFileInfo info) {
-		var open = new OpenFileContext(inode, audit, writeThrough);
+	private void AttachHandle(Inode inode, AuditContext? audit, AccessCaller? caller, bool writeThrough, ref DokanFileInfo info) {
+		var open = new OpenFileContext(inode, audit, writeThrough) { Caller = caller };
 		info.Context = open;
 		this.api.OpenHandle(open);
 	}
@@ -507,7 +512,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 	) {
 		// The caller can only be obtained **inside this CreateFile**. The settled subject is put on the handle
 		// (OpenFile), and the mutating operations after that (Cleanup / MoveFile / SetFileAttributes / SetFileSecurity) use it.
-		var (audit, ownerUname) = this.CaptureCaller(ref info);
+		var (audit, ownerUname, caller) = this.CaptureCaller(ref info);
 		AuditContext.Current = audit;
 		// FILE_FLAG_WRITE_THROUGH is a per-handle durability demand. It is carried along in the handle context so
 		// a full barrier can be raised on every WriteFile (keeping the "once written, it is persisted" contract even with write-back on).
@@ -527,6 +532,10 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 				" (a reserved name, or a trailing space or dot. Existing ones can still be opened)");
 			return DokanResult.InvalidName;
 		}
+		// **The permission check** (app.enforce_permissions, since v0.2.1). Dokan does not check against the SD, so we check it ourselves.
+		if (!this.PermitsOpen(path, existing, mode, access, options, caller)) {
+			return DokanResult.AccessDenied;
+		}
 
 		switch (mode) {
 		case FileMode.CreateNew:
@@ -535,7 +544,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 			if (existing != null) {
 				return DokanResult.FileExists;
 			}
-			return this.DoCreate(path, wantsDirectory, attributes, exclusive: true, audit, ownerUname, writeThrough, ref info);
+			return this.DoCreate(path, wantsDirectory, attributes, exclusive: true, audit, ownerUname, caller, writeThrough, ref info);
 
 		case FileMode.Create:
 			if (existing != null) {
@@ -548,10 +557,10 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 					Core.Logging.Logger.Error("CreateFile(Create): the truncate failed: ", path);
 					return DokanResult.Error;
 				}
-				this.AttachHandle(existing, audit, writeThrough, ref info);
+				this.AttachHandle(existing, audit, caller, writeThrough, ref info);
 				return DokanResult.AlreadyExists;
 			}
-			return this.DoCreate(path, wantsDirectory, attributes, exclusive: false, audit, ownerUname, writeThrough, ref info);
+			return this.DoCreate(path, wantsDirectory, attributes, exclusive: false, audit, ownerUname, caller, writeThrough, ref info);
 
 		case FileMode.Open:
 			if (existing == null) {
@@ -564,7 +573,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 			if (wantsDirectory && !existing.IsDirectory) {
 				return DokanResult.NotADirectory;
 			}
-			this.AttachHandle(existing, audit, writeThrough, ref info);
+			this.AttachHandle(existing, audit, caller, writeThrough, ref info);
 			info.IsDirectory = existing.IsDirectory;
 			return DokanResult.Success;
 
@@ -573,11 +582,11 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 				if (wantsDirectory && !existing.IsDirectory) {
 					return DokanResult.NotADirectory;
 				}
-				this.AttachHandle(existing, audit, writeThrough, ref info);
+				this.AttachHandle(existing, audit, caller, writeThrough, ref info);
 				info.IsDirectory = existing.IsDirectory;
 				return DokanResult.AlreadyExists;
 			}
-			return this.DoCreate(path, wantsDirectory, attributes, exclusive: false, audit, ownerUname, writeThrough, ref info);
+			return this.DoCreate(path, wantsDirectory, attributes, exclusive: false, audit, ownerUname, caller, writeThrough, ref info);
 
 		case FileMode.Truncate:
 			if (existing == null) {
@@ -590,17 +599,17 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 				Core.Logging.Logger.Error("CreateFile(Truncate): the truncate failed: ", path);
 				return DokanResult.Error;
 			}
-			this.AttachHandle(existing, audit, writeThrough, ref info);
+			this.AttachHandle(existing, audit, caller, writeThrough, ref info);
 			return DokanResult.Success;
 
 		case FileMode.Append:
 			if (existing == null) {
-				return this.DoCreate(path, wantsDirectory, attributes, exclusive: false, audit, ownerUname, writeThrough, ref info);
+				return this.DoCreate(path, wantsDirectory, attributes, exclusive: false, audit, ownerUname, caller, writeThrough, ref info);
 			}
 			if (existing.IsDirectory) {
 				return DokanResult.AccessDenied;
 			}
-			this.AttachHandle(existing, audit, writeThrough, ref info);
+			this.AttachHandle(existing, audit, caller, writeThrough, ref info);
 			// info.WriteToEndOfFile is read-only. With FileMode.Append the Dokan kernel side sets the
 			// WriteToEndOfFile flag on the subsequent WriteFile calls for us.
 			return DokanResult.Success;
@@ -616,7 +625,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 	/// another client only one of them succeeds (it falls back to a write-through create even when metadata
 	/// write-back is enabled = synchronization heuristic c).
 	/// </param>
-	private NtStatus DoCreate(string path, bool asDirectory, FileAttributes attributes, bool exclusive, AuditContext? audit, string? ownerUname, bool writeThrough, ref DokanFileInfo info) {
+	private NtStatus DoCreate(string path, bool asDirectory, FileAttributes attributes, bool exclusive, AuditContext? audit, string? ownerUname, AccessCaller? caller, bool writeThrough, ref DokanFileInfo info) {
 		var (parentPath, name) = Pgfs.Core.Utility.PathParser.SplitParent(path);
 		if (string.IsNullOrEmpty(name)) {
 			return DokanResult.InvalidName;
@@ -634,7 +643,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 		// file someone else made looking like one's own.
 		var uname = ownerUname;
 		if (uname == null) {
-			uname = this.users.FallbackUname;
+			uname = this.users.UnknownName;
 			Core.Logging.Logger.Warning("the requester cannot be resolved, falling the owner back to: ", path, " -> ", uname);
 		}
 		// **The group is inherited from the parent directory.** A Windows token's primary group is effectively
@@ -642,9 +651,13 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 		// group bits mean something.
 		// This deliberately differs from the Linux default (the creator's primary group) (docs/design/windows-parity.md).
 		var gname = string.IsNullOrEmpty(parent.gname) switch {
-			true  => this.users.FallbackGname,
+			true  => this.users.UnknownName,
 			false => parent.gname,
 		};
+		// For something created as ourselves (owner = our own name), self_gname, when set, wins over the inherited group.
+		if (this.users.HasSelfGname && string.Equals(uname, this.users.DefaultUname, StringComparison.OrdinalIgnoreCase)) {
+			gname = this.users.DefaultGname;
+		}
 		// The permissions default to a Linux-like 0755 (a directory) / 0644 (a file)
 		Inode? created;
 		if (asDirectory) {
@@ -674,7 +687,7 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 		}
 		// Cache it under the full path so the immediately following getattr does not hit the DB.
 		this.api.InodeCache.Put(created, path);
-		this.AttachHandle(created, audit, writeThrough, ref info);
+		this.AttachHandle(created, audit, caller, writeThrough, ref info);
 		return DokanResult.Success;
 	}
 
@@ -1043,9 +1056,8 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 	/// <summary>
 	/// Reflects the <c>ReadOnly</c> attribute in **the write bits of <c>st_mode</c> and nothing else**.
 	/// <list type="bullet">
-	///   <item><b>Setting it</b>: drops **all** the write bits (0222). <see cref="FileSystemUtils.IsWritable"/>
-	///     judges it writable **if +w is on any of owner / group / other**, so dropping only owner would not
-	///     look ReadOnly from Windows.</item>
+	///   <item><b>Setting it</b>: drops **all** the write bits (0222). <see cref="FileSystemUtils.IsReadOnly"/>
+	///     raises ReadOnly **when the w of owner / group / other are all off**, so it is set under the same condition.</item>
 	///   <item><b>Clearing it</b>: restores **owner's write (0200) only**.</item>
 	/// </list>
 	/// <para>
@@ -1203,6 +1215,9 @@ public sealed class FileSystem : IDokanOperations2, IDisposable
 			Core.Logging.Logger.Warning("rejected a rename to a name Windows cannot handle: ", oldPath, " -> ", newPath,
 				" (a reserved name / a trailing space or dot)");
 			return DokanResult.InvalidName;
+		}
+		if (!this.PermitsMove(newPath, newParent, existing, ref info)) {
+			return DokanResult.AccessDenied;
 		}
 		if (existing != null && existing.Id == inode.Id) {
 			// A different name pointing at the same inode (a link to the same data, for example). Letting it into the replacement delete would delete itself.

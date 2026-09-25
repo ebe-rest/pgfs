@@ -10,30 +10,60 @@ using Tomlyn.Model;
 /// mkfs.pgfs entry point.
 ///
 /// Flow:
-///   1. Build a <see cref="RootConfig"/> from CLI / TOML / defaults via <see cref="ConfigLoader"/>
-///      (mkfs runs even when no database exists yet, so no <see cref="ConfigStore"/> is passed).
-///   2. When <c>--clean</c> is given, skip reading the TOML (= build from CLI / defaults only).
+///   1. <c>-f &lt;path&gt;</c> is required. The default search paths are not used (this prevents reading a toml
+///      meant for another FS and writing back into it).
+///   2. Build a <see cref="RootConfig"/> from CLI / TOML / defaults via <see cref="ConfigLoader"/>
+///      (mkfs runs even when no database exists yet, so no <see cref="ConfigStore"/> is passed). The TOML is
+///      read only when the <c>-f</c> file exists and <c>--clean</c> is not given (a missing file means "create new").
 ///   3. Initialize the PostgreSQL side via <see cref="Initializer.InitializeAsync"/> (create the
 ///      database, create tables, insert the root inode, insert <c>pgfs_settings</c> rows for SaveTo=Db).
-///   4. Write the SaveTo=File settings out to the TOML.
+///   4. Write the SaveTo=File settings out as TOML to the <c>-f</c> location.
+///
+/// <c>--purge</c> only does the deletion part of step 3 and stops (it does not write the TOML either). Before deleting,
+/// <c>--clean</c> / <c>--purge</c> check what is connected and ask for confirmation; if the user aborts, the exit code
+/// is 3 (nothing was deleted). Exit codes: 0 = success / 1 = failure / 2 = bad arguments / 3 = aborted.
 /// </summary>
 public static class Program
 {
 	public static async Task<int> Main(string[] args) {
 		try {
-			// --help prints immediately without touching the database, then exits.
-			var liteForHelp = new ConfigLoader(args, Schema.AllFields, null);
-			if (liteForHelp.Resolve(Schema.Root.Help)) {
+			// --help prints immediately without touching the database or the TOML, then exits.
+			var cliOnly = new ConfigLoader(args, Schema.AllFields, null, skipToml: true);
+			if (cliOnly.Resolve(Schema.Root.Help)) {
 				ShowHelp();
 				return 0;
 			}
+			if (cliOnly.Resolve(Schema.Root.PrintVersion)) {
+				Console.WriteLine(AppInfo.Banner);
+				return 0;
+			}
 
-			// --clean starts "as if no settings file exists": apply CLI args only and skip the TOML.
-			var clean = liteForHelp.Resolve(Schema.Root.Clean);
-			var loader = liteForHelp;
-			if (clean) {
-				Logger.Information("--clean: not reading the existing pgfs.toml");
-				loader = new ConfigLoader(args, Schema.AllFields, null, skipToml: true);
+			// The settings file location is required (-f). mkfs does not use the default search paths - searching would
+			// read a toml meant for another FS (such as the one a resident mount uses) and, worse, write back into it.
+			// If the file exists it is read and written back to the same place; if not, it is treated as a new file.
+			if (!cliOnly.WasProvided(Schema.Setting.File)) {
+				await Console.Error.WriteLineAsync(
+					"Error: mkfs requires the settings file location (-f <path>). An existing file is read and written back; a missing one is created.");
+				return 2;
+			}
+			var tomlPath = Path.GetFullPath(cliOnly.Resolve(Schema.Setting.File));
+			var clean = cliOnly.Resolve(Schema.Root.Clean);
+			var purge = cliOnly.Resolve(Schema.Root.Purge);
+			var exists = File.Exists(tomlPath);
+			// --clean (delete and rebuild) and --purge (delete and stop) cannot be combined. The intent is unclear, so do nothing.
+			if (clean && purge) {
+				await Console.Error.WriteLineAsync("Error: --clean and --purge cannot be combined (use --clean to rebuild, --purge to delete and stop). Nothing was done.");
+				return 2;
+			}
+			// --purge takes the connection of what it deletes from the -f settings file (the toml actually in use is required,
+			// so that a mistyped connection string cannot delete some other FS).
+			if (purge && !exists) {
+				await Console.Error.WriteLineAsync($"Error: --purge takes the connection of what it deletes from the settings file. {tomlPath} does not exist. Nothing was done.");
+				return 2;
+			}
+			var loader = cliOnly;
+			if (exists && !clean) {
+				loader = new ConfigLoader(args, Schema.AllFields, null);
 			}
 			var config = loader.BuildRootConfig();
 
@@ -53,19 +83,32 @@ public static class Program
 			foreach (var warning in loader.Warnings) {
 				Logger.Warning(warning);
 			}
+			if (loader.WasProvided(Schema.Setting.SearchPath)) {
+				Logger.Warning("mkfs does not use --setting-path (it only looks at the settings file given by -f)");
+			}
+			switch (exists, clean) {
+				case (true, false) when purge:
+					Logger.Information($"--purge: deleting what the settings file {tomlPath} connects to (the file itself is kept)");
+					break;
+				case (false, _):
+					Logger.Information($"settings file {tomlPath} does not exist; creating a new one");
+					break;
+				case (true, true):
+					Logger.Information($"--clean: not reading the existing {tomlPath}; it will be overwritten");
+					break;
+				default:
+					Logger.Information($"read the settings file {tomlPath} (it is written back there on exit)");
+					break;
+			}
 
-			var initializer = new Initializer(config);
+			var initializer = new Initializer(config, loader.WasProvided);
 			await initializer.InitializeAsync();
+			if (purge) {
+				Logger.Lifecycle("done (exit 0)");
+				return 0;
+			}
 
-			// Write SaveTo=File settings out to the TOML. The target is (1) the path ConfigLoader read,
-			// (2) the settings file name (`setting.file` from CLI / defaults), or (3) the final fallback `pgfs.toml`.
-			var tomlPath = config.Setting.Path;
-			if (string.IsNullOrEmpty(tomlPath)) {
-				tomlPath = config.Setting.File;
-			}
-			if (string.IsNullOrEmpty(tomlPath)) {
-				tomlPath = "pgfs.toml";
-			}
+			// Write SaveTo=File settings out to the TOML. The target is the -f location (the place it was read from = the place written back to).
 			WriteTomlFile(tomlPath, config, loader);
 			Logger.Information($"wrote the settings file: {tomlPath}");
 			Logger.Information("");
@@ -73,6 +116,11 @@ public static class Program
 
 			Logger.Lifecycle("done (exit 0)");
 			return 0;
+		} catch (MkfsAbortedException ex) {
+			// The user answered No, or could not answer because it is non-interactive. Nothing was deleted, so no stack trace is printed.
+			await Console.Error.WriteLineAsync(ex.Message);
+			Logger.Lifecycle("aborted (exit 3)");
+			return 3;
 		} catch (Exception ex) {
 			await Console.Error.WriteLineAsync($"Error: {ex.Message}");
 			await Console.Error.WriteLineAsync(ex.ToString());
@@ -82,26 +130,43 @@ public static class Program
 	}
 
 	/// <summary>
-	/// Writes the <see cref="SaveTarget.File"/> values of <see cref="RootConfig"/> out to the TOML.
-	/// Each sub-config property is matched against a <see cref="Schema"/> Field and added one line at a time.
+	/// Writes the <see cref="SaveTarget.File"/> values of <see cref="RootConfig"/> out to the TOML (the toml for distribution).
+	/// Only **the connection core (connection / schema / prefix)** and **the items given explicitly on the CLI / in the TOML**
+	/// are written. Items left at their defaults are not written - writing them would pin the defaults on every client,
+	/// so a later version changing a default would not be followed.
+	/// mount_point is also written only when explicit (the Linux default `/mnt/pgfs` then needs no rewrite when distributed to Windows).
 	/// Numbers / bools / strings use native TOML types; everything else (connection string, LogLevel,
 	/// LoggingOutput, StringList) is stringified via <see cref="Field{T}.Format"/>.
 	/// </summary>
 	private static void WriteTomlFile(string path, RootConfig config, ConfigLoader loader) {
 		var doc = new TomlTable();
-		AddField(doc, Schema.Mount.MountPoint, config.Mount.MountPoint);
-		AddField(doc, Schema.Mount.CacheMaxEntries, config.Mount.CacheMaxEntries);
-		AddField(doc, Schema.Database.Connection, config.Database.Connection);
-		AddField(doc, Schema.Database.SchemaName, config.Database.SchemaName);
-		AddField(doc, Schema.Database.Prefix, config.Database.Prefix);
-		// tablespace / tablespace_path became SaveTo=Db, so they are not written to the generated toml (AddField rejects non-File).
-		AddField(doc, Schema.Database.RetryMaxAttempts, config.Database.RetryMaxAttempts);
-		AddField(doc, Schema.Database.RetryInitialDelayMs, config.Database.RetryInitialDelayMs);
-		AddField(doc, Schema.Database.RetryMaxDelayMs, config.Database.RetryMaxDelayMs);
-		AddField(doc, Schema.Logging.MinLevel, config.Logging.MinLevel);
-		AddField(doc, Schema.Logging.Output, config.Logging.Output);
-		// The file_system sizes (cluster_size / default_chunk_size / max_file_size) became SaveTo=Db, so they are not written
-		// to the generated toml (AddField rejects non-File). FS identity is DB-authoritative (docs/settings-and-plperlu.md).
+		var m = config.Mount;
+		AddField(doc, loader, Schema.Mount.MountPoint, m.MountPoint);
+		AddField(doc, loader, Schema.Mount.MaxWrite, m.MaxWrite);
+		AddField(doc, loader, Schema.Mount.CacheMaxEntries, m.CacheMaxEntries);
+		AddField(doc, loader, Schema.Mount.CacheDataMaxBytes, m.CacheDataMaxBytes);
+		AddField(doc, loader, Schema.Mount.NegativeCacheTtlMs, m.NegativeCacheTtlMs);
+		AddField(doc, loader, Schema.Mount.WriteBack, m.WriteBack);
+		AddField(doc, loader, Schema.Mount.WriteBackMaxBytes, m.WriteBackMaxBytes);
+		AddField(doc, loader, Schema.Mount.WriteBackIntervalMs, m.WriteBackIntervalMs);
+		AddField(doc, loader, Schema.Mount.WriteBackMetadata, m.WriteBackMetadata);
+		AddField(doc, loader, Schema.Mount.WriteBackMetadataExclusiveCreate, m.WriteBackMetadataExclusiveCreate);
+		AddField(doc, loader, Schema.Mount.WriteBackMaxInodes, m.WriteBackMaxInodes);
+		AddField(doc, loader, Schema.Mount.WriteBackFlushTimeoutMs, m.WriteBackFlushTimeoutMs);
+		var d = config.Database;
+		AddField(doc, loader, Schema.Database.Connection, d.Connection, always: true);
+		AddField(doc, loader, Schema.Database.SchemaName, d.SchemaName, always: true);
+		AddField(doc, loader, Schema.Database.Prefix, d.Prefix, always: true);
+		// tablespace / tablespace_path / the file_system sizes are SaveTo=Db (DB-authoritative), so AddField rejects them.
+		AddField(doc, loader, Schema.Database.RetryMaxAttempts, d.RetryMaxAttempts);
+		AddField(doc, loader, Schema.Database.RetryInitialDelayMs, d.RetryInitialDelayMs);
+		AddField(doc, loader, Schema.Database.RetryMaxDelayMs, d.RetryMaxDelayMs);
+		AddField(doc, loader, Schema.Database.NotifyEnabled, d.NotifyEnabled);
+		// database.workers is not written. It is mkfs-only and means nothing on other clients; writing it would make a later
+		// mkfs without --clean read it from the toml and register workers on its own (hit in Citus matrix I1+Te).
+		// Up to v0.2.0 it was not written either.
+		AddField(doc, loader, Schema.Logging.MinLevel, config.Logging.MinLevel);
+		AddField(doc, loader, Schema.Logging.Output, config.Logging.Output);
 
 		// For reference when distributing to other clients, keep the mkfs parameters that built this FS as a leading comment.
 		// SaveTo=None items (--clean / --super / setting-file selection etc.) are excluded; the connection-string Password is masked.
@@ -124,8 +189,11 @@ public static class Program
 		return sb.ToString();
 	}
 
-	private static void AddField<T>(TomlTable doc, Field<T> f, T value) {
+	private static void AddField<T>(TomlTable doc, ConfigLoader loader, Field<T> f, T value, bool always = false) {
 		if (f.SaveTo != SaveTarget.File) {
+			return;
+		}
+		if (!always && !loader.WasProvided(f)) {
 			return;
 		}
 		if (!doc.TryGetValue(f.Scope, out var existing) || existing is not TomlTable scope) {

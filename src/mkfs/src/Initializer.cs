@@ -22,9 +22,22 @@ using Npgsql;
 ///
 /// See <c>docs/Mkfs.md</c> for the full specification.
 /// </summary>
-public class Initializer
+public partial class Initializer
 {
 	private readonly RootConfig config;
+
+	/// <summary>Whether a setting was given explicitly on the CLI / in the TOML read (so that an option with no effect on an existing FS can be warned about).</summary>
+	private readonly Func<Field, bool> wasProvided;
+
+	/// <summary>Whether this is an existing FS (<c>pgfs_settings</c> had rows). When true, the FS-specific settings use the DB values and are not overwritten.</summary>
+	private bool existingFs;
+
+	/// <summary>
+	/// **Whether this run creates the database** (<c>--clean</c>, or the target DB is absent on the coordinator).
+	/// <c>--citus</c> / <c>--worker</c> / tablespace are instructions for "build it like this", so they take effect **only when creating** -
+	/// previously the "ensure user / tablespace" steps, which run before the DB existence check, ran on every <c>--worker</c> node even for an existing DB.
+	/// </summary>
+	private bool creatingDatabase;
 
 	/// <summary>Connection string for connecting as a superuser (the target is a maintenance DB such as template1).</summary>
 	private string superConnectionString = "";
@@ -32,8 +45,9 @@ public class Initializer
 	/// <summary>Connection string for connecting to the target DB as the PGFS user.</summary>
 	private string connectionString = "";
 
-	public Initializer(RootConfig config) {
+	public Initializer(RootConfig config, Func<Field, bool>? wasProvided = null) {
 		this.config = config;
+		this.wasProvided = wasProvided ?? (_ => false);
 	}
 
 	public async Task InitializeAsync() {
@@ -41,10 +55,19 @@ public class Initializer
 
 		this.ResolveConnectionStrings();
 		this.ValidateConfigCombinations();
+		this.creatingDatabase = this.config.Clean || !await this.CoordinatorDatabaseExistsAsync();
+
+		// --clean / --purge: look up the topology in the DB -> check the workers are reachable -> what is connected (retry / --now)
+		// -> confirmation (--yes) -> delete. **Delete before ensuring the user / tablespace** (--purge stops without creating
+		// anything, and the deletion only needs the super connection).
+		await this.TeardownAsync();
+		if (this.config.Purge) {
+			Logger.Information("--purge: deleted (roles / tablespaces / the settings file are left in place)");
+			return;
+		}
 
 		await this.EnsureUserAsync();           // coordinator + (when Citus) each worker, inner guard
 		await this.EnsureTablespaceAsync();      // no-op for pg_default; Citus forces pg_default anyway
-		await this.DropDatabaseAsync();          // only acts under --clean (coordinator + each worker), inner guard
 		await this.EnsureDatabaseAsync();         // bundles the create/topology steps internally
 
 		// The database is ready, so finalize the connection string and switch to operating on the target DB.
@@ -61,6 +84,7 @@ public class Initializer
 		await this.CreateDataChunkTableAsync(prefix);
 		await this.CreateLockTableAsync(prefix);
 		await this.CreateSettingsTableAsync(prefix);
+		this.AdoptExistingFsSettings();      // for an existing FS, take the FS-specific settings from the DB (statfs / population below use those values)
 		await this.CreateAuditTableAsync(prefix);
 		await this.CreateMountsTableAsync(prefix);
 		await this.CreateStatfsFunctionsAsync(prefix);
@@ -101,6 +125,11 @@ public class Initializer
 		if (string.IsNullOrEmpty(su.Database)) {
 			su.Database = "template1";
 		}
+		// Name our own connection - so that it can be excluded when --clean / --purge counts "what is connected".
+		if (string.IsNullOrEmpty(su.ApplicationName)) {
+			su.ApplicationName = "mkfs.pgfs";
+		}
+		this.ownApplicationName = su.ApplicationName;
 		this.superConnectionString = su.ConnectionString;
 
 		// Regular user connection: the target DB may not exist yet at this point, so connect to a
@@ -187,6 +216,8 @@ public class Initializer
 	private async Task EnsureUserAsync() {
 		// Create the user on the coordinator + (only under Citus) on each worker too.
 		await this.EnsureUserOnAsync(this.superConnectionString, "coordinator");
+		// Workers only when creating the DB (an existing DB is used as it is, Citus topology included).
+		if (!this.creatingDatabase) { return; }
 		foreach (var worker in this.config.Database.Workers) {
 			if (!this.config.Database.Citus) { break; }
 			await this.EnsureUserOnAsync(this.WorkerSuperConnectionString(worker), $"worker {worker.Host}:{worker.Port}");
@@ -240,6 +271,11 @@ public class Initializer
 		// pg_default always exists.
 		if (tablespaceName == "pg_default") {
 			Logger.Information("  using pg_default (the default)");
+			return;
+		}
+		// The tablespace is used only by CREATE DATABASE. For an existing DB it is not created (EnsureDatabaseAsync warns about the ineffective option).
+		if (!this.creatingDatabase) {
+			Logger.Information("  the database already exists, so the tablespace is not ensured");
 			return;
 		}
 
@@ -323,22 +359,85 @@ public class Initializer
 	// ----------------------------------------------------------------------
 
 	/// <summary>
-	/// DROPs the target database only when <c>--clean</c> is given. In addition to the coordinator itself,
-	/// when Citus + workers are specified the pgfs DB on each worker is dropped too.
-	/// A DB that is absent on a node is skipped (idempotent).
-	/// The tablespace and roles are left untouched (a requirement).
+	/// Under <c>--clean</c> / <c>--purge</c>, DROPs the target database. In addition to the coordinator itself,
+	/// under Citus the same-named DB on every worker in <c>pg_dist_node</c> is dropped too. A DB that is absent on a node is skipped (idempotent).
+	/// The tablespace and roles are left untouched (a requirement). Before deleting, it counts what is connected
+	/// (<see cref="WaitUntilNoConnectionsAsync"/>) and asks for confirmation (<see cref="ConfirmTeardownAsync"/>).
 	/// </summary>
-	private async Task DropDatabaseAsync() {
-		if (!this.config.Clean) {
+	private async Task TeardownAsync() {
+		if (!this.config.Clean && !this.config.Purge) {
 			return;
 		}
+		// **Which nodes to delete is decided by what the DB actually is.** Previously only the `--citus` / `--worker` options were
+		// iterated, so a `--clean` that forgot `--worker` **left the worker-side DBs behind** (the distributed toml does not carry
+		// workers, so forgetting it is ordinary). `--citus` / `--worker` are used only as instructions for the rebuild (EnsureDatabaseAsync).
+		var workers = await this.WorkersToDropAsync();
+		// **Check that every worker is reachable before deleting.** Node names in pg_dist_node are the names as seen from the
+		// coordinator, so the host running mkfs may not resolve them. Stopping halfway would delete only the coordinator and leave
+		// garbage on the workers, so if even one is unreachable, nothing is deleted.
+		var unreachable = new List<string>();
+		foreach (var worker in workers) {
+			if (await this.CanConnectAsync(this.WorkerSuperConnectionString(worker))) { continue; }
+			unreachable.Add($"{worker.Host}:{worker.Port}");
+		}
+		if (unreachable.Count > 0) {
+			throw new InvalidOperationException(
+				$"{this.TeardownFlag}: some workers are unreachable, so nothing is deleted: " + string.Join(", ", unreachable) +
+				" (use names reachable from this host, or, if a worker is no longer used, run citus_remove_node on the coordinator and try again)"
+			);
+		}
+		var coordExists = await this.CoordinatorDatabaseExistsAsync();
+		if (!coordExists && workers.Count == 0) {
+			Logger.Information($"{this.TeardownFlag}: there is no database to delete");
+			return;
+		}
+		await this.WaitUntilNoConnectionsAsync(workers, coordExists);
+		await this.ConfirmTeardownAsync(workers, coordExists);
 		// Drop the workers first (dropping the coordinator also drops pg_dist_node, so the workers must be
 		// reached over their own super connection, independently of the coordinator).
-		foreach (var worker in this.config.Database.Workers) {
-			if (!this.config.Database.Citus) { break; }
+		foreach (var worker in workers) {
 			await this.DropDatabaseOnAsync(this.WorkerSuperConnectionString(worker), $"worker {worker.Host}:{worker.Port}");
 		}
 		await this.DropDatabaseOnAsync(this.superConnectionString, "coordinator");
+		// **Empty the connection pools.** The connections opened to the target DB to look up the topology were cut by the DROP;
+		// leaving them would make the first operation on the rebuilt DB pick up a dead pooled connection and fail with 57P01
+		// (terminating connection due to administrator command) (observed).
+		Pg.ClearPools();
+	}
+
+	/// <summary>
+	/// The workers to delete. If the target DB exists on the coordinator, **that DB's <c>pg_dist_node</c>** (every node except the
+	/// coordinator = groupid 0); otherwise the <c>--worker</c> options (there is no way to look up the topology, so they are all we have). Empty if neither.
+	/// </summary>
+	private async Task<List<(string Host, int Port)>> WorkersToDropAsync() {
+		if (!await this.CoordinatorDatabaseExistsAsync()) {
+			if (this.config.Database.Workers.Count == 0) {
+				Logger.Warning($"{this.TeardownFlag}: the database is absent on the coordinator, so DBs left on workers cannot be checked (pass --worker to delete those too)");
+			}
+			return this.config.Database.Workers;
+		}
+		if (!await this.HasCitusExtensionAsync()) {
+			return new();
+		}
+		var rows = await Pg.QueryAsync<(string NodeName, int NodePort)>(
+			this.CoordinatorSuperPgfsConnectionString(),
+			"SELECT nodename, nodeport FROM pg_dist_node WHERE groupid <> 0 ORDER BY nodeid"
+		);
+		var workers = rows.Select(r => (r.NodeName, r.NodePort)).ToList();
+		Logger.Information($"[coordinator] {this.TeardownFlag}: also deleting the {workers.Count} worker(s) in pg_dist_node" +
+			string.Concat(workers.Select(w => $" {w.NodeName}:{w.NodePort}")));
+		return workers;
+	}
+
+	/// <summary>Tries connecting once over the super connection (a reachability check).</summary>
+	private async Task<bool> CanConnectAsync(string superConn) {
+		try {
+			await Pg.QueryAsync<int>(superConn, "SELECT 1");
+			return true;
+		} catch (Exception ex) {
+			Logger.Warning("  cannot connect: ", ex.Message);
+			return false;
+		}
 	}
 
 	/// <summary>DROP DATABASE on the target DB over the given super connection.</summary>
@@ -347,7 +446,7 @@ public class Initializer
 		if (string.IsNullOrEmpty(databaseName)) {
 			databaseName = "pgfs";
 		}
-		Logger.Information($"[{nodeLabel}] --clean: dropping database '{databaseName}'");
+		Logger.Information($"[{nodeLabel}] {this.TeardownFlag}: dropping database '{databaseName}'");
 
 		var exists = (await Pg.QueryAsync<uint>(
 			superConn,
@@ -406,6 +505,27 @@ public class Initializer
 		var coordExists = await this.CoordinatorDatabaseExistsAsync();
 		if (coordExists) {
 			Logger.Information("[coordinator] database already exists — leaving Citus untouched, only logging the current state");
+			// Instructions that apply only when creating have no effect on an existing DB (the tablespace is used only by CREATE DATABASE).
+			foreach (var f in new Field[] { Schema.Database.TablespaceName, Schema.Database.TablespacePath }) {
+				if (this.wasProvided(f)) {
+					Logger.Warning($"--{f.Key.Replace('_', '-')} has no effect: the database already exists (it only applies when creating)");
+				}
+			}
+			// Whether it is Citus is decided by what the DB actually is, not by the setting (**in both directions**). If it is
+			// already Citus, tables added later are distributed too. Adding --citus to a non-Citus DB does not make it Citus -
+			// previously it stayed true and went on, then failed trying to create_distributed_table the new schema's tables
+			// (the extension is absent).
+			var hasCitus = await this.HasCitusExtensionAsync();
+			if (this.config.Database.Citus && !hasCitus) {
+				Logger.Warning("--citus has no effect: the existing database is not Citus (rebuild with --clean to make it Citus)");
+			}
+			if (this.config.Database.Workers.Count > 0) {
+				Logger.Warning("--worker has no effect: the database already exists (to add a worker, run citus_add_node on the coordinator)");
+			}
+			if (hasCitus && !this.config.Database.Citus) {
+				Logger.Information("[coordinator] the citus extension is present, so this is treated as a Citus FS");
+			}
+			this.config.Database.Citus = hasCitus;
 			if (this.config.Database.Citus) {
 				await this.LogExistingCitusStateAsync();
 			}
@@ -475,6 +595,15 @@ public class Initializer
 				new { host = coordHost, port = coordPort }
 			);
 		}
+	}
+
+	/// <summary>Whether the target DB has the citus extension (Citus is decided by what the DB actually is, not by the setting).</summary>
+	private async Task<bool> HasCitusExtensionAsync() {
+		var n = (await Pg.QueryAsync<long>(
+			this.CoordinatorSuperPgfsConnectionString(),
+			"SELECT count(*) FROM pg_extension WHERE extname = 'citus'"
+		)).FirstOrDefault();
+		return n > 0;
 	}
 
 	/// <summary>Returns whether the target pgfs DB already exists on the coordinator.</summary>
@@ -954,7 +1083,12 @@ public class Initializer
 		var qStatvfs = $"{schemaQ}.{Pg.QuoteIdentifier(prefix + "statvfs")}";
 		var qFsFree = $"{schemaQ}.{Pg.QuoteIdentifier(prefix + "fs_free")}";
 		var qStatfs = $"{schemaQ}.{Pg.QuoteIdentifier(prefix + "statfs")}";
-		var ts = this.config.Database.TablespaceName;
+		// The tablespace df measures is taken from what the DB actually is, not from the setting (so it stays right when mkfs is
+		// re-run on an existing DB without --tablespace).
+		var ts = (await Pg.QueryAsync<string>(
+			this.connectionString,
+			"SELECT t.spcname FROM pg_database d JOIN pg_tablespace t ON t.oid = d.dattablespace WHERE d.datname = current_database()"
+		)).FirstOrDefault();
 		if (string.IsNullOrEmpty(ts)) { ts = "pg_default"; }
 		var tsLit = Pg.QuoteLiteral(ts);
 		var userQ = Pg.QuoteIdentifier(this.config.Database.Connection.Username ?? "pgfs");
@@ -1100,23 +1234,50 @@ public class Initializer
 		var schemaQ = Pg.QuoteIdentifier(schemaName);
 		var tableQ = Pg.QuoteIdentifier(tableName);
 
-		// 16877 = 0o40755 = directory + rwxr-xr-x.
+		// --root-access: owner = 0o40755 (directory + rwxr-xr-x) / everyone = 0o41777 (directory + sticky + rwxrwxrwx, same as /tmp).
+		// It takes effect only when the root is newly created (ON CONFLICT DO NOTHING leaves an existing one unchanged).
+		var rootMode = 0x4000 | Convert.ToInt32("755", 8);
+		if (this.config.FileSystem.RootAccess == "everyone") {
+			rootMode = 0x4000 | Convert.ToInt32("1777", 8);
+		}
 		// ON CONFLICT uses the (parent_id, name) UK. Under Citus the PK is the composite (parent_id, id)
 		// and no standalone `(id)` UNIQUE exists (Citus rejects a UK that does not include the distribution
 		// column parent_id), so the natural (parent_id, name) UK is the conflict-resolution target. The root
 		// is unique at (0, '/').
-		await Pg.ExecuteAsync(
+		var inserted = await Pg.ExecuteAsync(
 			this.connectionString,
 			$@"
 				INSERT INTO {schemaQ}.{tableQ} (
 					id, parent_id, name, uname, gname, st_mode, st_nlink, st_size, is_junction, created_by, updated_by
 				) VALUES (
-					0, 0, '/', 'root', 'root', 16877, 1, 0, FALSE, 'system', 'system'
+					0, 0, '/', 'root', 'root', @mode, 1, 0, FALSE, 'system', 'system'
 				)
 				ON CONFLICT (parent_id, name) DO NOTHING
-			"
+			",
+			new { mode = rootMode }
 		);
-		Logger.Information("  ensured the root directory (inode id=0)");
+		if (inserted > 0) {
+			Logger.Information($"  created the root directory (inode id=0) (root:root {Convert.ToString(rootMode & 0xFFF, 8)})");
+			return;
+		}
+		Logger.Information("  the root directory (inode id=0) already exists");
+		if (!this.config.FileSystem.RootAccessGiven) {
+			return;
+		}
+		// --root-access has no effect on an existing root (it is not rebuilt). Rather than ignoring it silently, show the current permissions and how to change them.
+		var current = (await Pg.QueryAsync<int?>(
+			this.connectionString,
+			$"SELECT st_mode FROM {schemaQ}.{tableQ} WHERE parent_id = 0 AND id = 0"
+		)).FirstOrDefault();
+		var currentText = "?";
+		if (current != null) {
+			currentText = Convert.ToString(current.Value & 0xFFF, 8);
+		}
+		Logger.Warning(
+			$"--root-access {this.config.FileSystem.RootAccess} has no effect: the root directory already exists (current permissions {currentText}). " +
+			"To change them, mount it and chmod (e.g. sudo chmod 1777 <mount point>)."
+		);
+
 	}
 
 	// ----------------------------------------------------------------------
@@ -1124,36 +1285,71 @@ public class Initializer
 	// ----------------------------------------------------------------------
 
 	/// <summary>
-	/// UPSERTs the <see cref="SaveTarget.Db"/> fields of <see cref="Schema.AllFields"/> into
-	/// <c>pgfs_settings</c>. The targets are: mount.fallback_uname / mount.fallback_gname /
-	/// file_system.version / file_system.volume_label / audit.enabled.
+	/// For an existing FS (<c>pgfs_settings</c> has rows), **the FS-specific settings are taken from the DB**. If one was given explicitly
+	/// on the CLI / in the TOML and differs from the DB, a Warning is printed ("no effect on an existing FS; use pgfsctl config set to change it").
+	/// Creating the statfs functions and <see cref="PopulateSettingsRows"/> afterwards run with these values.
+	/// The FS-specific settings are decided once when the FS is created; only pgfsctl changes them later (docs/Mkfs.md).
 	/// </summary>
-	private void PopulateSettingsRows() {
-		Logger.Information("inserting settings rows into pgfs_settings");
-		var store = new ConfigStore(
+	private void AdoptExistingFsSettings() {
+		var store = this.NewSettingsStore();
+		var existing = store.LoadAll(Schema.AllFields).ToDictionary(kv => kv.Key, kv => kv.Value);
+		this.existingFs = existing.Count > 0;
+		if (!this.existingFs) {
+			return;
+		}
+		Logger.Information("existing FS: the FS-specific settings use the DB values (use pgfsctl config set to change them)");
+		var fs = this.config.FileSystem;
+		this.Adopt(existing, Schema.Audit.Enabled, this.config.Audit.Enabled, v => this.config.Audit.Enabled = v);
+		this.Adopt(existing, Schema.Statfs.Mode, this.config.Statfs.Mode, v => this.config.Statfs.Mode = v);
+		this.Adopt(existing, Schema.App.Plperlu, this.config.App.Plperlu, v => this.config.App.Plperlu = v);
+		this.Adopt(existing, Schema.FileSystem.Version, fs.Version, v => fs.Version = v);
+		this.Adopt(existing, Schema.FileSystem.VolumeLabel, fs.VolumeLabel, v => fs.VolumeLabel = v);
+		this.Adopt(existing, Schema.FileSystem.ClusterSize, fs.ClusterSize, v => fs.ClusterSize = v);
+		this.Adopt(existing, Schema.FileSystem.DefaultChunkSize, fs.DefaultChunkSize, v => fs.DefaultChunkSize = v);
+		this.Adopt(existing, Schema.FileSystem.MaxFileSize, fs.MaxFileSize, v => fs.MaxFileSize = v);
+		this.Adopt(existing, Schema.FileSystem.UnknownName, fs.UnknownName, v => fs.UnknownName = v);
+	}
+
+	private void Adopt<T>(Dictionary<string, string> existing, Field<T> field, T current, Action<T> set) {
+		if (!existing.TryGetValue(field.FullKey, out var raw)) {
+			return; // No row in the DB (an item added in a later version) -> it is inserted with the value from this run
+		}
+		var fromDb = field.Parse(raw);
+		if (this.wasProvided(field) && !EqualityComparer<T>.Default.Equals(fromDb, current)) {
+			Logger.Warning($"{field.FullKey} = {field.Format(current)} has no effect: using the existing FS value {field.Format(fromDb)} (use pgfsctl config set to change it)");
+		}
+		set(fromDb);
+	}
+
+	private ConfigStore NewSettingsStore() {
+		return new ConfigStore(
 			this.connectionString,
 			this.SchemaNameOrDefault(),
 			this.config.Database.GetPrefix()
 		);
-		store.Save(Schema.Mount.FallbackUname, this.config.Mount.FallbackUname);
-		store.Save(Schema.Mount.FallbackGname, this.config.Mount.FallbackGname);
-		// The tablespace settings are also FS identity, so DB-authoritative (not overridable via the settings file).
-		store.Save(Schema.Database.TablespaceName, this.config.Database.TablespaceName);
-		store.Save(Schema.Database.TablespacePath, this.config.Database.TablespacePath);
-		store.Save(Schema.FileSystem.Version, this.config.FileSystem.Version);
-		store.Save(Schema.FileSystem.VolumeLabel, this.config.FileSystem.VolumeLabel);
-		// The FS sizes are FS identity, so DB-authoritative.
-		// A value mismatch across clients could corrupt data via inconsistent chunk-boundary interpretation (docs/settings-and-plperlu.md).
-		store.Save(Schema.FileSystem.ClusterSize, this.config.FileSystem.ClusterSize);
-		store.Save(Schema.FileSystem.DefaultChunkSize, this.config.FileSystem.DefaultChunkSize);
-		store.Save(Schema.FileSystem.MaxFileSize, this.config.FileSystem.MaxFileSize);
-		// Audit log on/off (--audit). mount/assign read this row from the DB to enable their hooks.
+	}
+
+	/// <summary>
+	/// Writes the FS-specific settings (<see cref="SaveTarget.Db"/>) to <c>pgfs_settings</c>. On an existing FS this runs after
+	/// <see cref="AdoptExistingFsSettings"/> has taken the DB values, so existing rows are rewritten with the same values and only
+	/// items added in later versions (e.g. file_system.unknown_name) are added.
+	/// Instructions that apply only when creating (citus / shard_count / rf / tablespace / tablespace_path) are not saved since
+	/// v0.2.1 (SaveTo=None; they can be read from what the DB actually is).
+	/// </summary>
+	private void PopulateSettingsRows() {
+		Logger.Information("inserting settings rows into pgfs_settings");
+		var store = this.NewSettingsStore();
+		var fs = this.config.FileSystem;
+		store.Save(Schema.FileSystem.Version, fs.Version);
+		store.Save(Schema.FileSystem.VolumeLabel, fs.VolumeLabel);
+		// The FS sizes are FS identity, so DB-authoritative. A value mismatch across clients could corrupt data via
+		// inconsistent chunk-boundary interpretation.
+		store.Save(Schema.FileSystem.ClusterSize, fs.ClusterSize);
+		store.Save(Schema.FileSystem.DefaultChunkSize, fs.DefaultChunkSize);
+		store.Save(Schema.FileSystem.MaxFileSize, fs.MaxFileSize);
+		store.Save(Schema.FileSystem.UnknownName, fs.UnknownName);
 		store.Save(Schema.Audit.Enabled, this.config.Audit.Enabled);
-		// df (statfs) mode (--statfs, the app.statfs key). Recorded as an FS property common to all clients.
 		store.Save(Schema.Statfs.Mode, this.config.Statfs.Mode);
-		// Whether this FS is Citus-enabled (--citus, the database.citus key, SaveTo=Db). For after-the-fact confirmation.
-		store.Save(Schema.Database.Citus, this.config.Database.Citus);
-		// The plperlu allow gate (app.plperlu). For reuse on a mkfs re-run + a record.
 		store.Save(Schema.App.Plperlu, this.config.App.Plperlu);
 	}
 

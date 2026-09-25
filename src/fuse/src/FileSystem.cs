@@ -38,19 +38,48 @@ public sealed class FileSystem : FuseFileSystemBase
 
 	public FileSystem(Api api) {
 		this.api = api;
-		// Name-resolution fallback is mount.fallback_uname / fallback_gname (stored in the DB).
-		// The owner of a new inode is a separate concept and uses the running process's user
-		// (changeable later via chmod/chown).
-		this.users = new UserResolver(api.Config.Mount.FallbackUname, api.Config.Mount.FallbackGname);
+		// A name this host does not have is shown as overflowuid / gid, and an id without a name is written as file_system.unknown_name (fallback_* was removed in v0.2.1).
+		this.processUid = (uint)getuid();
+		this.users = new UserResolver(api.Config.FileSystem.UnknownName, api.Config.Mount.SelfUname, api.Config.Mount.SelfGname, this.processUid, (uint)getgid());
+		this.selfUname = NameNormalizer.Normalize(api.Config.Mount.SelfUname ?? "");
+		this.selfGname = NameNormalizer.Normalize(api.Config.Mount.SelfGname ?? "");
 		var name = Environment.UserName;
 		if (string.IsNullOrEmpty(name)) {
 			name = "pgfs";
 		}
-		// The owner name of a new inode is normalized before storage too (docs/permission-interop.md).
+		// When the caller cannot be obtained (a request from inside the kernel, for example), the owner is the process itself. Our own name (self_*) when set.
 		this.defaultUname = NameNormalizer.Normalize(name);
-		// The gname for a new inode is resolved from the running process's gid.
+		if (this.selfUname.Length > 0) {
+			this.defaultUname = this.selfUname;
+		}
 		var processGid = (uint)getgid();
 		this.defaultGname = this.users.GnameOf(processGid);
+		if (this.selfGname.Length > 0) {
+			this.defaultGname = this.selfGname;
+		}
+	}
+
+	/// <summary>The uid of the process running the mount (used to decide whether to apply our own name, self_*).</summary>
+	private readonly uint processUid;
+	/// <summary>Our own name (<c>mount.self_uname</c>). Not used when empty.</summary>
+	private readonly string selfUname;
+	/// <summary>Our own group name (<c>mount.self_gname</c>). Not used when empty.</summary>
+	private readonly string selfGname;
+
+	/// <summary>The name for a uid. **For ourselves (the same uid as the process), self_uname when set**, otherwise the OS name (unknown_name if there is none).</summary>
+	private string NameOfCaller(uint uid) {
+		if (uid == this.processUid && this.selfUname.Length > 0) {
+			return this.selfUname;
+		}
+		return this.users.UnameOf(uid);
+	}
+
+	/// <summary>The name for a gid. **For a request from ourselves (the same uid as the process), self_gname when set**, otherwise the OS name.</summary>
+	private string GroupOfCaller(uint uid, uint gid) {
+		if (uid == this.processUid && this.selfGname.Length > 0) {
+			return this.selfGname;
+		}
+		return this.users.GnameOf(gid);
 	}
 
 	public override bool SupportsMultiThreading => true;
@@ -138,9 +167,9 @@ public sealed class FileSystem : FuseFileSystemBase
 	private (string uname, string gname) CurrentUserNames() {
 		if (Fuse.TryGetCallerContext(out var uid, out var gid, out _)) {
 			// Normalize the stored name (docs/permission-interop.md), same rule as defaultUname.
-			var uname = NameNormalizer.Normalize(this.users.UnameOf(uid));
+			var uname = NameNormalizer.Normalize(this.NameOfCaller(uid));
 			if (!string.IsNullOrEmpty(uname)) {
-				return (uname, this.users.GnameOf(gid));
+				return (uname, this.GroupOfCaller(uid, gid));
 			}
 		}
 		return (this.defaultUname, this.defaultGname);
@@ -163,7 +192,7 @@ public sealed class FileSystem : FuseFileSystemBase
 		}
 		AuditContext.Current = new AuditContext {
 			Uid = uid,
-			Uname = this.users.UnameOf(uid),
+			Uname = this.NameOfCaller(uid),
 			Domain = null,
 		};
 	}

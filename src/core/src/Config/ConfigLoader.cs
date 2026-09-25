@@ -208,8 +208,8 @@ public sealed class ConfigLoader
 			WriteBackMetadataExclusiveCreate = this.Resolve(Schema.Mount.WriteBackMetadataExclusiveCreate),
 			WriteBackMaxInodes = this.Resolve(Schema.Mount.WriteBackMaxInodes),
 			WriteBackFlushTimeoutMs = this.Resolve(Schema.Mount.WriteBackFlushTimeoutMs),
-			FallbackUname = this.Resolve(Schema.Mount.FallbackUname),
-			FallbackGname = this.Resolve(Schema.Mount.FallbackGname),
+			SelfUname = this.Resolve(Schema.Mount.SelfUname),
+			SelfGname = this.Resolve(Schema.Mount.SelfGname),
 			Foreground = this.Resolve(Schema.Mount.Foreground),
 			FuseFlags = new List<string>(this.FuseFlags),
 		};
@@ -223,6 +223,9 @@ public sealed class ConfigLoader
 			ClusterSize = this.Resolve(Schema.FileSystem.ClusterSize),
 			DefaultChunkSize = this.Resolve(Schema.FileSystem.DefaultChunkSize),
 			MaxFileSize = this.Resolve(Schema.FileSystem.MaxFileSize),
+			UnknownName = this.Resolve(Schema.FileSystem.UnknownName),
+			RootAccess = this.Resolve(Schema.FileSystem.RootAccess),
+			RootAccessGiven = this.WasProvided(Schema.FileSystem.RootAccess),
 		};
 	}
 
@@ -394,6 +397,7 @@ public sealed class ConfigLoader
 	public AppConfig BuildAppConfig() {
 		return new AppConfig {
 			Plperlu = this.Resolve(Schema.App.Plperlu),
+			EnforcePermissions = this.Resolve(Schema.App.EnforcePermissions),
 		};
 	}
 
@@ -450,7 +454,11 @@ public sealed class ConfigLoader
 			Statfs = this.BuildStatfsConfig(),
 			App = this.BuildAppConfig(),
 			Help = this.Resolve(Schema.Root.Help),
+			PrintVersion = this.Resolve(Schema.Root.PrintVersion),
 			Clean = this.Resolve(Schema.Root.Clean),
+			Purge = this.Resolve(Schema.Root.Purge),
+			Yes = this.Resolve(Schema.Root.Yes),
+			Now = this.Resolve(Schema.Root.Now),
 		};
 		// Having built every sub-Config = we have gone through the resolution path common to all tools. Any Field still
 		// unresolved here is dead config "declared in Schema but not wired into BuildRootConfig", so warn about it (#13).
@@ -491,6 +499,12 @@ public sealed class ConfigLoader
 		} catch (System.Exception ex) {
 			this.Warnings.Add($"failed to parse TOML (path: {tomlPath}): {ex.Message}");
 			return;
+		}
+		foreach (var (fullKey, why) in DeprecatedFields) {
+			var dot = fullKey.IndexOf('.');
+			if (model.TryGetValue(fullKey[..dot], out var depScope) && depScope is TomlTable depTable && depTable.ContainsKey(fullKey[(dot + 1)..])) {
+				this.Warnings.Add($"{fullKey} in the settings file {tomlPath}: {why}");
+			}
 		}
 		foreach (var f in this.fields) {
 			if (!model.TryGetValue(f.Scope, out var scopeObj) || scopeObj is not TomlTable scopeTable) {
@@ -664,6 +678,27 @@ public sealed class ConfigLoader
 	/// </summary>
 	private const string UserspaceOptionPrefix = "x-";
 
+	/// <summary>
+	/// Removed settings (full-key -> guidance text). Whether passed on the CLI (the key part of `--scope-key`,
+	/// `-`-separated), via `-o`, or in TOML, a dedicated Warning is emitted instead of "possible typo", and the value is ignored.
+	/// </summary>
+	private static readonly Dictionary<string, string> DeprecatedFields = new() {
+		["mount.fallback_uname"] = "was removed in v0.2.1. Names that do not exist on this host are shown via the OS overflowuid / well-known SIDs, and when a name is unknown, file_system.unknown_name is written to the database. To set the name this client presents for itself, use mount.self_uname",
+		["mount.fallback_gname"] = "was removed in v0.2.1. Names that do not exist on this host are shown via the OS overflowgid / well-known SIDs, and when a name is unknown, file_system.unknown_name is written to the database. To set the name this client presents for itself, use mount.self_gname",
+	};
+
+	/// <summary>The CLI name / `-o` name of a removed setting (`--fallback-uname` / `fallback-uname`) -> full-key.</summary>
+	private static string? DeprecatedFullKeyOf(string name) {
+		var bare = name.TrimStart('-').Replace('-', '_');
+		foreach (var fullKey in DeprecatedFields.Keys) {
+			var key = fullKey[(fullKey.IndexOf('.') + 1)..];
+			if (bare == key || bare == fullKey) {
+				return fullKey;
+			}
+		}
+		return null;
+	}
+
 	private void ParseCli(string[] args) {
 		if (args.Length == 0) {
 			return;
@@ -725,6 +760,16 @@ public sealed class ConfigLoader
 			if (!arg.StartsWith('-')) {
 				AssignPositional(positionalIndex, arg);
 				++positionalIndex;
+				continue;
+			}
+
+			// A removed setting: emit a dedicated Warning, and skip one value too (so the value does not turn into a positional).
+			var deprecated = DeprecatedFullKeyOf(arg.Split('=')[0]);
+			if (deprecated != null) {
+				this.Warnings.Add($"'{arg}' ({deprecated}) {DeprecatedFields[deprecated]}");
+				if (!arg.Contains('=') && i + 1 < args.Length && !args[i + 1].StartsWith('-')) {
+					++i;
+				}
 				continue;
 			}
 
@@ -839,6 +884,13 @@ public sealed class ConfigLoader
 					continue;
 				}
 				this.rawByFullKey[matched.FullKey] = val;
+				continue;
+			}
+
+			// A removed setting gets a dedicated Warning.
+			var deprecatedKey = DeprecatedFullKeyOf(key);
+			if (deprecatedKey != null) {
+				this.Warnings.Add($"-o '{key}' ({deprecatedKey}) {DeprecatedFields[deprecatedKey]}");
 				continue;
 			}
 

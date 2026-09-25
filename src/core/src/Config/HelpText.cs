@@ -46,7 +46,7 @@ public static class HelpText
 
 		foreach (var (scope, title) in ScopeOrder) {
 			var fields = Schema.AllFields
-				.Where(f => f.Scope == scope && f.AppliesTo.HasFlag(tool))
+				.Where(f => f.Scope == scope && Listed(f, tool))
 				.ToList();
 			if (fields.Count == 0) {
 				continue;
@@ -54,7 +54,7 @@ public static class HelpText
 			sb.AppendLine();
 			sb.AppendLine($"{title}:");
 			foreach (var f in fields) {
-				sb.AppendLine(RenderField(f));
+				sb.AppendLine(RenderField(f, tool));
 			}
 		}
 
@@ -67,8 +67,20 @@ public static class HelpText
 		return sb.ToString();
 	}
 
+	/// <summary>
+	/// Whether to list it in the help. Besides the items that apply to the tool, **mkfs also lists the mount / assign
+	/// items it writes into the distributed toml** (because of uses like `mkfs --notify`, which has no effect on mkfs
+	/// itself but is kept in the toml).
+	/// </summary>
+	private static bool Listed(Field f, Tool tool) {
+		if (f.AppliesTo.HasFlag(tool)) {
+			return true;
+		}
+		return tool == Tool.Mkfs && f.SaveTo == SaveTarget.File;
+	}
+
 	/// <summary>Formats one Field into one option line. If the left side overflows, the description wraps to the next line.</summary>
-	private static string RenderField(Field f) {
+	private static string RenderField(Field f, Tool tool) {
 		var left = new StringBuilder("  ").Append(string.Join(", ", f.CliOptions));
 		var placeholder = Placeholder(f);
 		if (placeholder != null) {
@@ -77,6 +89,9 @@ public static class HelpText
 		var leftStr = left.ToString();
 
 		var desc = f.Comment;
+		if (!f.AppliesTo.HasFlag(tool)) {
+			desc = $"{desc} [written to pgfs.toml for mount/assign]";
+		}
 		var def = f.HelpDefaultRaw();
 		if (def != null && def.Length <= MaxDefaultLen) {
 			desc = $"{desc} (default: {def})";

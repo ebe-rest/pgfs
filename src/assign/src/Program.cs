@@ -35,6 +35,10 @@ public static class Program
 				ShowHelp();
 				return 0;
 			}
+			if (liteForHelp.Resolve(Schema.Root.PrintVersion)) {
+				Console.WriteLine(AppInfo.Banner);
+				return 0;
+			}
 
 			var config = ConfigLoader.BuildRootConfigWithStore(args, out var loader);
 

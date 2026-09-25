@@ -13,4 +13,7 @@ namespace Pgfs.Core.Config;
 public sealed class AppConfig
 {
 	public bool Plperlu { get; set; } = true;
+
+	/// <summary>Whether Windows (assign) checks POSIX permissions (<see cref="Schema.App.EnforcePermissions"/>). Switchable while running.</summary>
+	public bool EnforcePermissions { get; set; } = true;
 }

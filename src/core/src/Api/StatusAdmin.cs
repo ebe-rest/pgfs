@@ -108,7 +108,9 @@ public sealed class StatusAdmin
 	/// <summary>Aggregates the filesystem statistics (Layer 2) from the database. A number that could not be aggregated comes back as -1 (= unknown).</summary>
 	public FsStats GetFsStats() {
 		var settings = this.LoadSettings();
-		var citus = SettingBool(settings, Schema.Database.Citus);
+		// Whether this is Citus is decided by the database itself (whether the citus extension exists), not by a
+		// setting (since v0.2.1, database.citus is not stored in the database).
+		var citus = this.ScalarLong("SELECT count(*) FROM pg_extension WHERE extname = 'citus'") > 0;
 		return new FsStats {
 			Schema = this.schemaName,
 			Prefix = this.tablePrefix,
@@ -126,7 +128,29 @@ public sealed class StatusAdmin
 				true  => (int)this.ScalarLong("SELECT count(*) FROM pg_dist_node"),
 				false => -1,
 			},
+			Target = this.TargetDescription(),
+			CitusNodes = citus switch {
+				true  => this.CitusNodeList(),
+				false => [],
+			},
 		};
+	}
+
+	/// <summary>The connection target as <c>host:port/db</c> (the password is not shown).</summary>
+	private string TargetDescription() {
+		var b = new Npgsql.NpgsqlConnectionStringBuilder(this.connectionString);
+		return $"{b.Host}:{b.Port}/{b.Database}";
+	}
+
+	/// <summary>pg_dist_node as a list of <c>coordinator host:port</c> / <c>worker host:port</c>. Empty if it cannot be read.</summary>
+	private List<string> CitusNodeList() {
+		try {
+			return Pg.Query<string>(this.connectionString,
+				"SELECT CASE WHEN groupid = 0 THEN 'coordinator ' ELSE 'worker ' END || nodename || ':' || nodeport FROM pg_dist_node ORDER BY groupid, nodeid").ToList();
+		} catch (System.Exception ex) {
+			if (Logger.IsTraceEnabled) { Logger.Trace("status: failed to read pg_dist_node: ", ex.Message); }
+			return [];
+		}
 	}
 
 	// ------------------------------------------------------------------
@@ -235,4 +259,13 @@ public sealed record FsStats
 	public required bool Citus { get; init; }
 	/// <summary>The number of rows in Citus's pg_dist_node. -1 when this is not a Citus filesystem or the value could not be read.</summary>
 	public required int CitusNodeCount { get; init; }
+
+	/// <summary>
+	/// **The connection target** (<c>host:port/db</c>, without the password). Used to check "what is going to be
+	/// erased" before <c>mkfs --clean</c> / <c>--purge</c> (v0.2.1).
+	/// </summary>
+	public required string Target { get; init; }
+
+	/// <summary>The Citus nodes (<c>coordinator host:port</c> / <c>worker host:port</c>), taken from **the database itself (<c>pg_dist_node</c>)**. Empty when this is not Citus or they could not be read.</summary>
+	public required IReadOnlyList<string> CitusNodes { get; init; }
 }

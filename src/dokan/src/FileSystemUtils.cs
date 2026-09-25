@@ -100,7 +100,7 @@ public static class FileSystemUtils
 			attr |= FileAttributes.Hidden;
 		}
 
-		if (!IsWritable(inode, users)) {
+		if (IsReadOnly(inode)) {
 			attr |= FileAttributes.ReadOnly;
 		}
 
@@ -166,26 +166,20 @@ public static class FileSystemUtils
 	}
 
 	/// <summary>
-	/// Determines whether the currently running user can write to the inode.
+	/// **Whether to raise the read-only attribute** = whether **nobody can write** (the w of owner / group / other are all off).
+	/// <para>
+	/// **It is not decided by who can write** (since v0.2.1). It used to be decided by "can the user running the mount write it", so
+	/// **a file owned by someone else that we cannot write (someone else's `0644`, for example) looked read-only, and since Windows refuses to delete
+	/// a read-only file, it could not be deleted from Windows even when elevated**. On POSIX, deletion is decided by the parent directory's w; the file's mode does not matter.
+	/// Who can write / delete is decided by the permission check (<c>app.enforce_permissions</c>, FileSystem.Access.cs).
+	/// </para>
+	/// <para>
+	/// The only difference left is a file whose owner dropped everyone's w (`chmod a-w`) - it cannot be deleted on Windows, but can on Linux (given the parent's w).
+	/// It is the same condition as <c>SetFileAttributes</c> uses when setting it (dropping all of 0222), so how it looks and how it is set are symmetric.
+	/// </para>
 	/// </summary>
-	public static bool IsWritable(Inode inode, WindowsUserResolver users) {
-		var mode = inode.Mode;
-		// other +w
-		if ((mode & Mode.S_IWOTH) != 0) {
-			return true;
-		}
-		// owner +w. Both the stored name and DefaultUname are normalized + Linux-name mapped, so compare names directly
-		// (the root <-> Administrator alias is absorbed by the WindowsUserResolver mapping).
-		if (string.Equals(inode.UserName, users.DefaultUname, StringComparison.OrdinalIgnoreCase)
-			&& (mode & Mode.S_IWUSR) != 0) {
-			return true;
-		}
-		// group +w
-		if (string.Equals(inode.GroupName, users.DefaultGname, StringComparison.OrdinalIgnoreCase)
-			&& (mode & Mode.S_IWGRP) != 0) {
-			return true;
-		}
-		return false;
+	public static bool IsReadOnly(Inode inode) {
+		return (inode.Mode & (Mode.S_IWUSR | Mode.S_IWGRP | Mode.S_IWOTH)) == 0;
 	}
 
 	// ------------------------------------------------------------------

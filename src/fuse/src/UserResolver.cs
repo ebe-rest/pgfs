@@ -20,44 +20,52 @@ using Core.Utility;
 /// The Windows side is to get a separate implementation that carries the same responsibility through
 /// <c>WindowsIdentity</c> / <c>NTAccount</c> (handled on the Pgfs.Assign side).
 ///
-/// Unknown user names / uids are recorded in the cache as the "fallback (defaultUid/Gid)".
-/// The fallback names (mount.fallback_uname / fallback_gname) are resolved and cached at startup.
-/// If a fallback name itself cannot be resolved, the NFS convention `65534` (nobody/nogroup) is
-/// hardcoded and a warning is emitted.
+/// A name this host does not have (a uname / gname in the DB) is shown as **the kernel's overflowuid / overflowgid** (the value
+/// "an id without a mapping is shown as"; <c>/proc/sys/kernel/overflowuid</c>, usually 65534 = nobody). There is no setting for it (mount.fallback_* was removed in v0.2.1).
+/// A uid / gid without a name (a container's uid, for example) is written to the DB as <c>file_system.unknown_name</c> (default <c>(unknown)</c>).
 /// </summary>
 internal sealed class UserResolver
 {
-	/// <summary>The final hardcoded uid/gid used when a fallback name itself cannot be resolved (the conventional NFS `nobody` value).</summary>
-	private const uint HardcodedNobodyUid = 65534;
-	private const uint HardcodedNogroupGid = 65534;
+	/// <summary>The value used when <c>/proc/sys/kernel/overflow*</c> cannot be read (65534, the same as the kernel default).</summary>
+	private const uint DefaultOverflowId = 65534;
 
-	private readonly uint defaultUid;
-	private readonly uint defaultGid;
-	private readonly string defaultUname;
-	private readonly string defaultGname;
+	private readonly uint overflowUid;
+	private readonly uint overflowGid;
+	private readonly string unknownName;
+
+	// Our own name (mount.self_uname / self_gname) -> the process's own uid / gid. Even a name this host does not have is shown as our own file.
+	private readonly string selfUname;
+	private readonly string selfGname;
+	private readonly uint selfUid;
+	private readonly uint selfGid;
 
 	private readonly ConcurrentDictionary<string, uint> unameToUid = new();
 	private readonly ConcurrentDictionary<string, uint> gnameToGid = new();
 	private readonly ConcurrentDictionary<uint, string> uidToUname = new();
 	private readonly ConcurrentDictionary<uint, string> gidToGname = new();
 
-	public UserResolver(string fallbackUname, string fallbackGname) {
-		// Name normalization (docs/permission-interop.md). The fallback names are normalized too, for both storage and resolution.
-		this.defaultUname = NameNormalizer.Normalize(fallbackUname);
-		this.defaultGname = NameNormalizer.Normalize(fallbackGname);
-		// Resolve the uid / gid from the fallback names at start-up and pin them, rather than calling getpwnam_r every time at run time.
-		this.defaultUid = ResolveUidNow(this.defaultUname) ?? FallbackUidWithWarning(this.defaultUname);
-		this.defaultGid = ResolveGidNow(this.defaultGname) ?? FallbackGidWithWarning(this.defaultGname);
+	/// <param name="unknownName">The name written to the DB for a uid / gid without a name (<c>file_system.unknown_name</c>).</param>
+	/// <param name="selfUname">Our own name (not used when empty). This name is shown as <paramref name="selfUid"/>.</param>
+	/// <param name="selfGname">Our own group name (not used when empty). This name is shown as <paramref name="selfGid"/>.</param>
+	public UserResolver(string unknownName, string selfUname = "", string selfGname = "", uint selfUid = 0, uint selfGid = 0) {
+		this.unknownName = unknownName;
+		this.selfUname = NameNormalizer.Normalize(selfUname ?? "");
+		this.selfGname = NameNormalizer.Normalize(selfGname ?? "");
+		this.selfUid = selfUid;
+		this.selfGid = selfGid;
+		this.overflowUid = ReadOverflowId("/proc/sys/kernel/overflowuid");
+		this.overflowGid = ReadOverflowId("/proc/sys/kernel/overflowgid");
 	}
 
-	private static uint FallbackUidWithWarning(string uname) {
-		Logger.Warning("UserResolver: fallback uname '", uname, "' cannot be resolved by getpwnam_r, using hardcoded uid ", HardcodedNobodyUid);
-		return HardcodedNobodyUid;
-	}
-
-	private static uint FallbackGidWithWarning(string gname) {
-		Logger.Warning("UserResolver: fallback gname '", gname, "' cannot be resolved by getgrnam_r, using hardcoded gid ", HardcodedNogroupGid);
-		return HardcodedNogroupGid;
+	private static uint ReadOverflowId(string path) {
+		try {
+			if (uint.TryParse(File.ReadAllText(path).Trim(), out var id)) {
+				return id;
+			}
+		} catch (Exception ex) {
+			Logger.Warning("UserResolver: cannot read ", path, " (", ex.Message, "), using ", DefaultOverflowId);
+		}
+		return DefaultOverflowId;
 	}
 
 	private static uint? ResolveUidNow(string uname) {
@@ -74,36 +82,42 @@ internal sealed class UserResolver
 		return gid;
 	}
 
-	/// <summary>uname -&gt; uid. The input name is normalized first. Falls back to defaultUid (the fallback uname's uid) if unresolved.</summary>
+	/// <summary>uname -&gt; uid. The input name is normalized first. overflowuid for a name this host does not have.</summary>
 	public uint UidOf(string uname) {
 		var key = NameNormalizer.Normalize(uname);
-		return this.unameToUid.GetOrAdd(key, n => ResolveUidNow(n) ?? this.defaultUid);
+		if (this.selfUname.Length > 0 && key == this.selfUname) {
+			return this.selfUid;
+		}
+		return this.unameToUid.GetOrAdd(key, n => ResolveUidNow(n) ?? this.overflowUid);
 	}
 
-	/// <summary>gname -&gt; gid. The input name is normalized first. Falls back to defaultGid (the fallback gname's gid) if unresolved.</summary>
+	/// <summary>gname -&gt; gid. The input name is normalized first. overflowgid for a name this host does not have.</summary>
 	public uint GidOf(string gname) {
 		var key = NameNormalizer.Normalize(gname);
-		return this.gnameToGid.GetOrAdd(key, n => ResolveGidNow(n) ?? this.defaultGid);
+		if (this.selfGname.Length > 0 && key == this.selfGname) {
+			return this.selfGid;
+		}
+		return this.gnameToGid.GetOrAdd(key, n => ResolveGidNow(n) ?? this.overflowGid);
 	}
 
-	/// <summary>uid -&gt; uname. The OS-derived name is normalized before returning. Falls back to defaultUname if unresolved.</summary>
+	/// <summary>uid -&gt; uname. The OS-derived name is normalized before returning. unknown_name for a uid without a name.</summary>
 	public string UnameOf(uint uid) {
 		return this.uidToUname.GetOrAdd(uid, id => {
 			// Copy the strings **while the buffer is still alive** (finish it inside pick).
 			if (!TryPasswd((ref passwd pw, nint buf, nuint len, out nint result) => getpwuid_r(id, ref pw, buf, len, out result), p => Marshal.PtrToStringUTF8(p.pw_name), $"getpwuid_r({id})", out var name)) {
-				return this.defaultUname;
+				return this.unknownName;
 			}
-			return NameNormalizer.Normalize(name ?? this.defaultUname);
+			return NameNormalizer.Normalize(name ?? this.unknownName);
 		});
 	}
 
-	/// <summary>gid -&gt; gname. The OS-derived name is normalized before returning. Falls back to defaultGname if unresolved.</summary>
+	/// <summary>gid -&gt; gname. The OS-derived name is normalized before returning. unknown_name for a gid without a name.</summary>
 	public string GnameOf(uint gid) {
 		return this.gidToGname.GetOrAdd(gid, id => {
 			if (!TryGroup((ref group gr, nint buf, nuint len, out nint result) => getgrgid_r(id, ref gr, buf, len, out result), g => Marshal.PtrToStringUTF8(g.gr_name), $"getgrgid_r({id})", out var name)) {
-				return this.defaultGname;
+				return this.unknownName;
 			}
-			return NameNormalizer.Normalize(name ?? this.defaultGname);
+			return NameNormalizer.Normalize(name ?? this.unknownName);
 		});
 	}
 

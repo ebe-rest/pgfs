@@ -19,7 +19,7 @@ public abstract record Field
 	/// <summary>The setting's scope. One of `mount` / `database` / `logging` / `file_system` / `setting`.</summary>
 	public required string Scope { get; init; }
 
-	/// <summary>The key name within the scope. e.g. `mount_point` / `fallback_uname`. snake_case.</summary>
+	/// <summary>The key name within the scope. e.g. `mount_point` / `volume_label`. snake_case.</summary>
 	public required string Key { get; init; }
 
 	/// <summary>The CLI flags accepted. List both the short and long forms (e.g. `["-m", "--mount-point"]`).</summary>

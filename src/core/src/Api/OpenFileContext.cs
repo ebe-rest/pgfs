@@ -63,6 +63,16 @@ public sealed class OpenFileContext
 	public AuditContext? Audit { get; }
 
 	/// <summary>
+	/// The **subject of permission checks** that opened this handle (<see cref="PermissionEvaluator"/>). null when it
+	/// could not be obtained or on paths that do not check.
+	/// <para>
+	/// Carried on the handle for the same reason as <see cref="Audit"/> - on Windows the caller can only be obtained
+	/// inside <c>CreateFile</c>, so a later <c>MoveFile</c> (the check on the destination parent) looks here.
+	/// </para>
+	/// </summary>
+	public AccessCaller? Caller { get; init; }
+
+	/// <summary>
 	/// Whether the handle was opened with <c>FILE_FLAG_WRITE_THROUGH</c>.
 	/// In that case **every write must be durable by the time it returns**, so a full barrier
 	/// (<see cref="Api.FlushInode"/>) is placed after each write even when write-back is enabled.
