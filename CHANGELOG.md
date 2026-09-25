@@ -17,7 +17,7 @@ This file records the changes **per release tag**. The granularity is "a differe
 internal refactors are not listed as a rule ([docs/history.md](docs/history.md) and the design documents are
 authoritative for how things came about).
 
-## [Unreleased] v0.2.1
+## [v0.2.1] - 2026-09-25
 
 ### ⚠ Changes that require a migration
 
