@@ -3,7 +3,7 @@
 # Test matrix for mkfs multi-node Citus.
 # Runs on linux_client (docker daemon assumed not running).
 #
-# Matrix: 3 initial states x 6 target operations = 18 cases
+# Matrix: 3 initial states x 6 target operations = 18 cases + 9 additional (X1-X9, at the end)
 #   initial:
 #     I1  new (no DB)
 #     I2  existing (after mkfs --clean --citus, coordinator only = 1-node Citus)
@@ -70,17 +70,19 @@ sqlcpg()  { docker exec -i "$COORD_NAME"   psql -h localhost -p "$COORD_PORT"   
 sqlwpg()  { docker exec -i "$COORD_NAME"   psql -h localhost -p "$WORKER1_PORT" -U "$SUPER_USER" -d "$PGFS_DB" "$@" 2>&1; }
 
 # Run mkfs against the containerized coordinator with a coordinator/worker config
-# Args: $1=clean(yes|no) $2=citus_level(none|coord|coord_worker)
+# Args: $1=clean(yes|no) $2=citus_level(none|coord|coord_worker) [$3=schema (default pgfs)]
 run_mkfs() {
     local clean=$1
     local citus=$2
+    local schema=${3:-pgfs}
 
     local args=()
     if [ "$clean" = "yes" ]; then
-        args+=(--clean)
+        args+=(--clean --yes)  # non-interactive, so skip the confirmation (since v0.2.1; without it nothing is dropped and it exits 3)
     fi
     args+=(-c "$COORD_CONN")
-    args+=(-s pgfs)
+    args+=(-f pgfs.toml)  # mkfs requires the settings file location (since v0.2.1; created if missing)
+    args+=(-s "$schema")
     args+=(--super "$SUPER_CONN")
     case "$citus" in
         none)         ;;
@@ -364,6 +366,125 @@ for entry in "${CASES[@]}"; do
     fi
 done
 
+# === Additional cases: passing create-only instructions to an existing DB ===
+# --citus / --worker are "create it like this" instructions, so they have no effect on a DB that already exists (whether it is Citus is decided by the DB itself).
+#   X1: create a **new schema** in an existing non-Citus DB with --citus → it does not become Citus, and the tables are created normally
+#       (previously --citus stayed true, and it failed trying to create_distributed_table the new tables)
+#   X2: pass --worker to an existing 1-node Citus DB → nothing is created on the worker (not even the pgfs role)
+#       (previously "ensure the user", which runs before the DB existence check, also ran on the worker)
+sec "Case X1: existing non-Citus DB → no-clean --citus with a new schema"
+reset_cluster
+run_mkfs yes none >/dev/null || die "X1 setup mkfs failed"
+run_mkfs no coord pgfs_x1
+x1_rc=$?
+x1_ext=$(sqlcpg -tA -c "SELECT count(*) FROM pg_extension WHERE extname='citus'" | tr -d '[:space:]')
+x1_tables=$(sqlcpg -tA -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='pgfs_x1'" | tr -d '[:space:]')
+if [ "$x1_rc" -eq 0 ] && [ "$x1_ext" = "0" ] && [ "$x1_tables" = "7" ]; then
+    log "  ✓ X1 PASS"
+    PASS_COUNT=$((PASS_COUNT+1))
+else
+    log "  ✗ X1 FAIL: mkfs exit=$x1_rc citus_ext=$x1_ext tables(pgfs_x1)=$x1_tables (expected 0 / 0 / 7)"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    FAILED_CASES+=("X1: existing non-Citus DB + --citus")
+fi
+
+sec "Case X2: existing 1-node Citus DB → no-clean --citus --worker"
+reset_cluster
+run_mkfs yes coord >/dev/null || die "X2 setup mkfs failed"
+run_mkfs no coord_worker
+x2_rc=$?
+x2_role=$(sqlw -tA -c "SELECT count(*) FROM pg_roles WHERE rolname='$PGFS_USER'" | tr -d '[:space:]')
+x2_nodes=$(sqlcpg -tA -c "SELECT count(*) FROM pg_dist_node" | tr -d '[:space:]')
+if [ "$x2_rc" -eq 0 ] && [ "$x2_role" = "0" ] && [ "$x2_nodes" = "1" ]; then
+    log "  ✓ X2 PASS"
+    PASS_COUNT=$((PASS_COUNT+1))
+else
+    log "  ✗ X2 FAIL: mkfs exit=$x2_rc pgfs role on worker=$x2_role pg_dist_node=$x2_nodes (expected 0 / 0 / 1)"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    FAILED_CASES+=("X2: existing DB + --worker")
+fi
+
+sec "Case X3: coord + worker → --clean only (no --citus / --worker)"
+# The nodes to drop are decided by the DB itself (pg_dist_node). Previously, forgetting --worker left the worker's DB behind.
+reset_cluster
+run_mkfs yes coord_worker >/dev/null || die "X3 setup mkfs failed"
+run_mkfs yes none
+x3_rc=$?
+x3_wdb=$(sqlw -tA -c "SELECT count(*) FROM pg_database WHERE datname='$PGFS_DB'" | tr -d '[:space:]')
+x3_ext=$(sqlcpg -tA -c "SELECT count(*) FROM pg_extension WHERE extname='citus'" | tr -d '[:space:]')
+if [ "$x3_rc" -eq 0 ] && [ "$x3_wdb" = "0" ] && [ "$x3_ext" = "0" ]; then
+    log "  ✓ X3 PASS"
+    PASS_COUNT=$((PASS_COUNT+1))
+else
+    log "  ✗ X3 FAIL: mkfs exit=$x3_rc $PGFS_DB on worker=$x3_wdb citus_ext=$x3_ext (expected 0 / 0 / 0)"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    FAILED_CASES+=("X3: --clean alone also drops the worker's DB")
+fi
+
+# === Additional cases: --purge / confirmation prompt (--yes) / live connections (--now) ===
+# Call mkfs directly (run_mkfs is for --clean). -f pgfs.toml is the one written by the previous mkfs (--purge takes the connection from it).
+mkfs_raw() {
+    log ">>> mkfs.pgfs $*"
+    "$MKFS_BIN" -f pgfs.toml -c "$COORD_CONN" -s pgfs --super "$SUPER_CONN" "$@" 2>&1 | tee -a "$LOG" >/dev/null
+    return ${PIPESTATUS[0]}
+}
+coord_db() { sqlc -tA -c "SELECT count(*) FROM pg_database WHERE datname='$PGFS_DB'" | tr -d '[:space:]'; }
+worker_db() { sqlw -tA -c "SELECT count(*) FROM pg_database WHERE datname='$PGFS_DB'" | tr -d '[:space:]'; }
+# Judge one case. $1=name $2=description of the condition (expected vs actual) $3..=test expression to evaluate (PASS if all true)
+check() {
+    local name=$1 desc=$2; shift 2
+    if eval "$*"; then
+        log "  ✓ $name PASS"; PASS_COUNT=$((PASS_COUNT+1)); return
+    fi
+    log "  ✗ $name FAIL: $desc"; FAIL_COUNT=$((FAIL_COUNT+1)); FAILED_CASES+=("$name")
+}
+
+sec "Case X4: --clean together with --purge does nothing"
+reset_cluster
+run_mkfs yes coord >/dev/null || die "X4 setup mkfs failed"
+mkfs_raw --clean --purge --yes; rc=$?
+check X4 "exit=$rc db=$(coord_db) (expected 2 / 1)" '[ "$rc" -eq 2 ] && [ "$(coord_db)" = "1" ]'
+
+sec "Case X5: --purge without --yes in non-interactive mode does nothing"
+mkfs_raw --purge; rc=$?
+check X5 "exit=$rc db=$(coord_db) (expected 3 / 1)" '[ "$rc" -eq 3 ] && [ "$(coord_db)" = "1" ]'
+
+sec "Case X6: --purge --yes drops the coord + worker DBs and stops (keeps the toml and the role)"
+reset_cluster
+run_mkfs yes coord_worker >/dev/null || die "X6 setup mkfs failed"
+mkfs_raw --purge --yes; rc=$?
+role=$(sqlc -tA -c "SELECT count(*) FROM pg_roles WHERE rolname='$PGFS_USER'" | tr -d '[:space:]')
+check X6 "exit=$rc coord=$(coord_db) worker=$(worker_db) toml=$([ -f pgfs.toml ] && echo 1 || echo 0) role=$role (expected 0 / 0 / 0 / 1 / 1)" \
+    '[ "$rc" -eq 0 ] && [ "$(coord_db)" = "0" ] && [ "$(worker_db)" = "0" ] && [ -f pgfs.toml ] && [ "$role" = "1" ]'
+
+sec "Case X7: a live mount blocks the drop without --now / --now drops it"
+reset_cluster
+run_mkfs yes coord >/dev/null || die "X7 setup mkfs failed"
+sqlcpg -c "INSERT INTO pgfs.pgfs_mounts (mount_id, host, pid, mountpoint, mode) VALUES ('x7', 'fakehost', 1, '/fake/x7', 'fuse')" >/dev/null
+mkfs_raw --purge --yes; rc1=$?; db1=$(coord_db)
+grep -q 'fakehost /fake/x7' "$LOG"; seen=$?
+mkfs_raw --purge --yes --now; rc2=$?
+check X7 "exit=$rc1 db=$db1 listed=$([ $seen -eq 0 ] && echo yes || echo no) → --now: exit=$rc2 db=$(coord_db) (expected 3 / 1 / yes → 0 / 0)" \
+    '[ "$rc1" -eq 3 ] && [ "$db1" = "1" ] && [ $seen -eq 0 ] && [ "$rc2" -eq 0 ] && [ "$(coord_db)" = "0" ]'
+
+sec "Case X8: another connection (psql) blocks the drop without --now / --now cuts it and recreates"
+reset_cluster
+run_mkfs yes coord >/dev/null || die "X8 setup mkfs failed"
+docker exec -d "$COORD_NAME" psql -h localhost -p "$COORD_PORT" -U "$SUPER_USER" -d "$PGFS_DB" -c "SELECT pg_sleep(120)"
+sleep 1
+mkfs_raw --clean --yes --citus; rc1=$?
+mkfs_raw --clean --yes --now --citus; rc2=$?
+check X8 "exit=$rc1 → --now: exit=$rc2 db=$(coord_db) (expected 3 → 0 / 1)" '[ "$rc1" -eq 3 ] && [ "$rc2" -eq 0 ] && [ "$(coord_db)" = "1" ]'
+
+sec "Case X9: interactive confirmation (n aborts / y drops)"
+# Create a terminal with script(1) and feed the answers (with a piped stdin it is judged non-interactive).
+reset_cluster
+run_mkfs yes coord >/dev/null || die "X9 setup mkfs failed"
+cmd="'$MKFS_BIN' -f pgfs.toml -c '$COORD_CONN' -s pgfs --super '$SUPER_CONN' --purge"
+printf 'n\n' | script -qec "$cmd" /dev/null >>"$LOG" 2>&1; rc1=$?; db1=$(coord_db)
+printf 'y\n' | script -qec "$cmd" /dev/null >>"$LOG" 2>&1; rc2=$?
+check X9 "n: exit=$rc1 db=$db1 → y: exit=$rc2 db=$(coord_db) (expected 3 / 1 → 0 / 0)" '[ "$rc1" -eq 3 ] && [ "$db1" = "1" ] && [ "$rc2" -eq 0 ] && [ "$(coord_db)" = "0" ]'
+
 # === Summary ===
 sec "Summary"
 log "Total: $((PASS_COUNT+FAIL_COUNT))   PASS: $PASS_COUNT   FAIL: $FAIL_COUNT"
@@ -374,4 +495,4 @@ if [ $FAIL_COUNT -gt 0 ]; then
     done
     exit 1
 fi
-log "all 18 cases PASS"
+log "all 27 cases PASS (matrix 18 + additional 9)"

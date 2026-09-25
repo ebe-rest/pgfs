@@ -89,7 +89,7 @@ function Start-Mount($point) {
 	$log = Join-Path $env:TEMP ("pgfs-cross-" + $point.Replace(':', '') + ".log")
 	$err = Join-Path $env:TEMP ("pgfs-cross-" + $point.Replace(':', '') + ".err.log")
 	$notifyArg = " --notify"
-	if ($NoNotify) { $notifyArg = "" }
+	if ($NoNotify) { $notifyArg = " --no-notify" }  # on by default since v0.2.1, so turn it off explicitly
 	$proc = Start-Process -FilePath $AssignBinary `
 		-ArgumentList "-f `"$SettingFile`" -m `"$point`"$notifyArg" `
 		-PassThru -NoNewWindow -RedirectStandardOutput $log -RedirectStandardError $err

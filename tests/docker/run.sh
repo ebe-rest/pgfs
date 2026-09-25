@@ -17,7 +17,7 @@
 #   PGFS_DOCKER_SDK_IMAGE  the SDK image for the build stage (default mcr.../sdk:10.0)
 #   SUPER_USER / SUPER_PASSWORD       the postgres superuser
 #   PGFS_USER / PGFS_PASSWORD / PGFS_DB   the pgfs role / DB
-#   PGFS_SCHEMA            the schema (default pgfs. The fallback test looks up pgfs.pgfs_inode)
+#   PGFS_SCHEMA            the schema (default pgfs. Also passed to e2e.sh - the fallback test looks up <schema>.pgfs_inode)
 #   MOUNT_POINT            the mount target inside the container (default /mnt/pgfs)
 #   TEST_FILTER            the test-name filter for e2e
 #   CACHE_MAX_ENTRIES      the cap on the mount's inode metadata cache. The default (1024) when unset.
@@ -93,7 +93,7 @@ PGFS_CONN="Host=coord;Port=5432;Username=$PGFS_USER;Password=$PGFS_PASSWORD;Data
 
 # === mkfs ===
 log "mkfs --clean (schema=$PGFS_SCHEMA)"
-dexec sh -c "mkfs.pgfs --clean -c '$PGFS_CONN' --super '$SUPER_CONN' -s '$PGFS_SCHEMA'" \
+dexec sh -c "mkfs.pgfs -f pgfs.toml --clean --yes -c '$PGFS_CONN' --super '$SUPER_CONN' -s '$PGFS_SCHEMA'" \
     || die "mkfs failed"
 
 # === pgfs.toml + mount point ===
@@ -145,7 +145,7 @@ fi
 log "running tests/linux/e2e.sh in the mount container (filter='${TEST_FILTER}')"
 PG_EXEC="PGPASSWORD=$PGFS_PASSWORD psql -h coord -U $PGFS_USER -d $PGFS_DB -tA -q"
 rc=0
-dexec env TEST_FILTER="$TEST_FILTER" PGFS_TEST_PG_EXEC="$PG_EXEC" \
+dexec env TEST_FILTER="$TEST_FILTER" PGFS_TEST_PG_EXEC="$PG_EXEC" PGFS_SCHEMA="$PGFS_SCHEMA" \
     bash /tests/linux/e2e.sh "$MOUNT_POINT" || rc=$?
 
 # === unmount ===

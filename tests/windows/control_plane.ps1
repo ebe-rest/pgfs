@@ -124,8 +124,8 @@ function Start-Mount {
 		Say "  $MountRoot is already mounted (this test mounts and remounts on its own)" "Red"
 		return $false
 	}
-	# **notify is deliberately not passed** - the control channel's LISTEN is always ON, so config set still reaches it.
-	$proc = Start-Process -FilePath $AssignBinary -ArgumentList "-f `"$SettingFile`" -m `"$MountPoint`"" `
+	# **Data notifications are turned off (--no-notify; on by default since v0.2.1)** - the control channel's LISTEN is always ON, so config set still reaches it.
+	$proc = Start-Process -FilePath $AssignBinary -ArgumentList "-f `"$SettingFile`" -m `"$MountPoint`" --no-notify" `
 		-PassThru -NoNewWindow -RedirectStandardOutput "$env:TEMP\pgfs-cp-out.log" -RedirectStandardError "$env:TEMP\pgfs-cp-err.log"
 	$deadline = (Get-Date).AddSeconds(20)
 	while ((Get-Date) -lt $deadline) {

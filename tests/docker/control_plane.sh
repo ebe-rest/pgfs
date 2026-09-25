@@ -76,7 +76,7 @@ PGFS_CONN="Host=coord;Port=5432;Username=$PGFS_USER;Password=$PGFS_PASSWORD;Data
 
 # === mkfs (without --audit = starting with audit.enabled false) ===
 log "mkfs --clean (schema=$PGFS_SCHEMA, starting with audit disabled)"
-dexec sh -c "mkfs.pgfs --clean -c '$PGFS_CONN' --super '$SUPER_CONN' -s '$PGFS_SCHEMA'" || die "mkfs failed"
+dexec sh -c "mkfs.pgfs -f pgfs.toml --clean --yes -c '$PGFS_CONN' --super '$SUPER_CONN' -s '$PGFS_SCHEMA'" || die "mkfs failed"
 
 # === pgfs.toml (notify_enabled=true) + mount point ===
 log "writing out pgfs.toml (notify_enabled=true) + mkdir $MOUNT_POINT"

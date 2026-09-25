@@ -398,8 +398,17 @@ test_live_off_flushes_and_publishes_effective_mode() {
 		fail "the live off was not applied"
 		return
 	fi
+	# What could not be written out within the second phase's deadline continues in the background as a drain (by design). **The end of the drain
+	# is written immediately**, so wait until it clears. Previously there was no wait, and against a PG over the network the drain still had a few
+	# hundred ms left, so it always failed (and the end of the drain was not written until the heartbeat). If it still remains after waiting, it really did not write everything out.
+	i=0
+	while [ $i -lt 600 ]; do
+		[ "$(q "select count(*) from ${SCHEMA}.${PREFIX}mounts where $live_where and stats->'writeBack'->>'drainPending' = 'true'")" = "0" ] && break
+		sleep 0.1
+		i=$((i+1))
+	done
 	if [ "$(q "select count(*) from ${SCHEMA}.${PREFIX}mounts where $live_where and stats->'writeBack'->>'drainPending' = 'true'")" != "0" ]; then
-		fail "something is still unflushed after the flip (the second phase's FlushAll did not write everything out)"
+		fail "something is still unflushed 60 seconds after the flip (the second phase's FlushAll and the drain did not write everything out)"
 		return
 	fi
 	if [ "$seen" != "yes" ]; then

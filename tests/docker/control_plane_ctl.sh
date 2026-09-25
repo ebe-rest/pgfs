@@ -8,7 +8,7 @@
 #   - Db+Live is persisted and live; File+Live is an ephemeral live set carried inline on the NOTIFY.
 #
 # The flow:
-#   1) mkfs (without --audit) -> mount with audit.enabled=false. pgfs.toml **does not write** notify_enabled (= OFF by default).
+#   1) mkfs (without --audit) -> mount with audit.enabled=false. pgfs.toml writes **notify_enabled = false** (on by default since v0.2.1, so it is turned off explicitly).
 #   2) mkdir -> no audit row is added (audit is disabled). The baseline is A0.
 #   3) pgfsctl config set audit.enabled true  (Db+Live) -> persisted + a set NOTIFY.
 #   4) mkdir -> A1 > A0 is the evidence that the notify-OFF mount received the control set and enabled audit live.
@@ -80,15 +80,16 @@ PGFS_CONN="Host=coord;Port=5432;Username=$PGFS_USER;Password=$PGFS_PASSWORD;Data
 
 # === mkfs (without --audit = starting with audit.enabled false) ===
 log "mkfs --clean (schema=$PGFS_SCHEMA, starting with audit disabled)"
-dexec sh -c "mkfs.pgfs --clean -c '$PGFS_CONN' --super '$SUPER_CONN' -s '$PGFS_SCHEMA'" || die "mkfs failed"
+dexec sh -c "mkfs.pgfs -f pgfs.toml --clean --yes -c '$PGFS_CONN' --super '$SUPER_CONN' -s '$PGFS_SCHEMA'" || die "mkfs failed"
 
-# === pgfs.toml (without notify_enabled = OFF by default) + the mount point ===
-log "writing out pgfs.toml (no notify_enabled = OFF) + mkdir $MOUNT_POINT"
+# === pgfs.toml (notify_enabled = false set explicitly = OFF; the default is on since v0.2.1) + the mount point ===
+log "writing out pgfs.toml (notify_enabled = false) + mkdir $MOUNT_POINT"
 dexec sh -c "mkdir -p '$MOUNT_POINT'"
 printf '%s\n' \
     "[database]" \
     "schema = \"$PGFS_SCHEMA\"" \
     "connection = \"$PGFS_CONN\"" \
+    "notify_enabled = false" \
     | dexec sh -c "cat > /tmp/pgfs.toml"
 
 # === mount (foreground, in the background inside the container) ===

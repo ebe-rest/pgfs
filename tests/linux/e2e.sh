@@ -1002,10 +1002,24 @@ test_concurrent_mkdir_diff_dirs() {
 # --- name resolution fallback (direct DB INSERT) ---
 #
 # Directly INSERT an inode with a user/group name that does not exist on the OS into
-# pgfs_inode, then confirm that stat-ing that inode resolves to mount.fallback_uname /
-# fallback_gname (defaults: nobody / nogroup). The operation goes through psql on the
-# database host (pgsql_server); the source-built psql is used explicitly because the
-# distro psql can fail on a libpq version mismatch.
+# pgfs_inode, then confirm that stat-ing that inode shows the names of the kernel's
+# overflowuid / overflowgid (/proc/sys/kernel/overflow*, usually 65534) (nobody / nogroup on
+# Debian-like systems, nobody / nobody on RHEL-like ones) (mount.fallback_* was removed in v0.2.1).
+# The operation goes through psql on the database host (pgsql_server); the source-built psql is
+# used explicitly because the distro psql can fail on a libpq version mismatch.
+
+# **Which FS to look at** is decided from environment variables, then the settings file (previously it was
+# hardcoded to DB `pgfs` / schema `pgfs`, so mounting another DB / schema looked at a different FS and failed).
+#   PGFS_SCHEMA / PGFS_PREFIX / PGFS_DB   explicit (the docker / race_multinode paths use these)
+#   PGFS_SETTING_FILE                     the settings file used for the mount (default $HOME/pgfs_test.toml)
+E2E_SETTING_FILE="${PGFS_SETTING_FILE:-$HOME/pgfs_test.toml}"
+toml_get() { grep -E "^$1 *=" "$E2E_SETTING_FILE" 2>/dev/null | head -1 | sed -e "s/^$1 *= *//" -e 's/^"//' -e 's/"$//'; }
+E2E_SCHEMA="${PGFS_SCHEMA:-$(toml_get schema)}"
+E2E_PREFIX="${PGFS_PREFIX:-$(toml_get prefix)}"
+E2E_DB="${PGFS_DB:-$(toml_get connection | tr ';' '\n' | grep -i '^Database=' | head -1 | cut -d= -f2-)}"
+[ -n "$E2E_SCHEMA" ] || E2E_SCHEMA=public
+[ -n "$E2E_PREFIX" ] || E2E_PREFIX=pgfs_
+E2E_INODE="${E2E_SCHEMA}.${E2E_PREFIX}inode"
 
 pg_exec() {
 	# Stream SQL on stdin. -tA is tuples-only + unaligned output, returning one ${name}\n per row.
@@ -1014,37 +1028,49 @@ pg_exec() {
 	# libpq version mismatch, so this one is used explicitly).
 	if [ -n "${PGFS_TEST_PG_EXEC:-}" ]; then
 		eval "$PGFS_TEST_PG_EXEC"
-	else
-		ssh -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR pgsql_server \
-			"LD_LIBRARY_PATH=/usr/local/pgsql/lib PGPASSWORD=pgfs /usr/local/pgsql/bin/psql -h localhost -U pgfs -d pgfs -tA -q"
+		return
 	fi
+	# Do not fire at a default DB when the DB name is unknown (it would rewrite a different FS).
+	if [ -z "$E2E_DB" ]; then
+		return 1
+	fi
+	ssh -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR pgsql_server \
+		"LD_LIBRARY_PATH=/usr/local/pgsql/lib PGPASSWORD=pgfs /usr/local/pgsql/bin/psql -h localhost -U pgfs -d $E2E_DB -tA -q"
 }
 
 test_fallback_uname_gname() {
 	# Skip if the DB is unreachable (e.g. CI without an external DB).
 	if ! echo "SELECT 1" | pg_exec >/dev/null 2>&1; then
-		skip "psql via ssh pgsql_server not reachable"
+		skip "psql not reachable (the DB name comes from PGFS_DB or Database= in $E2E_SETTING_FILE; currently '${E2E_DB:-unknown}')"
+		return
+	fi
+	# Is the FS being looked at the same as the mount: if the table is missing, it is looking at a different DB / schema
+	if [ "$(echo "SELECT to_regclass('$E2E_INODE') IS NOT NULL" | pg_exec | head -1)" != "t" ]; then
+		fail "$E2E_INODE does not exist (check PGFS_SCHEMA / PGFS_PREFIX or $E2E_SETTING_FILE)"
 		return
 	fi
 	# Look up the inode id of the test directory (directly under the mount root, parent_id=0).
 	local test_id
-	test_id=$(echo "SELECT id FROM pgfs.pgfs_inode WHERE name='test' AND parent_id=0" | pg_exec | head -1)
+	test_id=$(echo "SELECT id FROM $E2E_INODE WHERE name='test' AND parent_id=0" | pg_exec | head -1)
 	if ! [[ "$test_id" =~ ^[0-9]+$ ]]; then
 		fail "could not look up test/ dir id: '$test_id'"
 		return
 	fi
 	# Directly INSERT an inode with a user/group name that does not exist on the OS.
 	local ghost="t100_ghost_$$"
-	echo "INSERT INTO pgfs.pgfs_inode (parent_id, name, uname, gname, st_mode, st_nlink, st_size, is_junction, xattr_names, xattr_values, created_by, updated_by) VALUES ($test_id, '$ghost', '__no_such_user_xyz__', '__no_such_group_xyz__', 33188, 1, 0, false, '{}'::text[], '{}'::bytea[], 'pgfs', 'pgfs')" | pg_exec >/dev/null
+	echo "INSERT INTO $E2E_INODE (parent_id, name, uname, gname, st_mode, st_nlink, st_size, is_junction, xattr_names, xattr_values, created_by, updated_by) VALUES ($test_id, '$ghost', '__no_such_user_xyz__', '__no_such_group_xyz__', 33188, 1, 0, false, '{}'::text[], '{}'::bytea[], 'pgfs', 'pgfs')" | pg_exec >/dev/null
 	# stat -> GetByPath -> child (cache miss) -> DB fetch -> uname resolution fails -> fallback.
 	# Note: the childrenByParent cache is stale, but a direct-path stat goes through byPath/byId,
 	#       so the freshly inserted row is still visible (ListChildren is not called).
 	local owner=$(stat -c '%U' "$TEST_ROOT/$ghost" 2>/dev/null)
 	local group=$(stat -c '%G' "$TEST_ROOT/$ghost" 2>/dev/null)
 	# Cleanup: always DELETE (even on failure).
-	echo "DELETE FROM pgfs.pgfs_inode WHERE parent_id=$test_id AND name='$ghost'" | pg_exec >/dev/null
-	assert_eq "nobody" "$owner" "fallback uname" || return
-	assert_eq "nogroup" "$group" "fallback gname" || return
+	echo "DELETE FROM $E2E_INODE WHERE parent_id=$test_id AND name='$ghost'" | pg_exec >/dev/null
+	local want_u want_g
+	want_u=$(getent passwd "$(cat /proc/sys/kernel/overflowuid)" | cut -d: -f1)
+	want_g=$(getent group "$(cat /proc/sys/kernel/overflowgid)" | cut -d: -f1)
+	assert_eq "$want_u" "$owner" "unknown uname -> overflowuid" || return
+	assert_eq "$want_g" "$group" "unknown gname -> overflowgid" || return
 	pass
 }
 

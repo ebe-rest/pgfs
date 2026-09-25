@@ -161,7 +161,7 @@ done
 
 # === mkfs --clean --citus --worker ===
 sec "mkfs --clean --citus --worker $WORKER1_SPEC"
-"$MKFS_BIN" --clean --citus \
+"$MKFS_BIN" -f pgfs.toml --clean --yes --citus \
     -c "$COORD_CONN" \
     -s pgfs \
     --super "$SUPER_CONN" \
@@ -216,11 +216,13 @@ fi
 # === Test 1: Linux e2e 34/34 on multi-node Citus ===
 sec "Test 1: Linux e2e 34/34 against $MOUNT1 (multinode Citus)"
 TESTS_E2E_RC=0
-# test_fallback_uname_gname uses the pgsql_server-hardcoded ssh+psql path.
+# test_fallback_uname_gname uses the ssh+psql path to pgsql_server by default.
 # To point it at docker Citus, it must be overridden with PGFS_TEST_PG_EXEC.
 export PGFS_TEST_PG_EXEC="docker exec -i $COORD_NAME psql -h localhost -p $COORD_PORT -U $SUPER_USER -d $PGFS_DB -tA -q"
+# Match the schema of the toml written above (without PGFS_SCHEMA, e2e.sh reads ~/pgfs_test.toml).
+export PGFS_SCHEMA=pgfs
 bash "$(dirname "$0")/../linux/e2e.sh" "$MOUNT1" 2>&1 | tee -a "$LOG" || TESTS_E2E_RC=$?
-unset PGFS_TEST_PG_EXEC
+unset PGFS_TEST_PG_EXEC PGFS_SCHEMA
 if [ "$TESTS_E2E_RC" -eq 0 ]; then
     pass "Linux e2e on multinode Citus"
 else

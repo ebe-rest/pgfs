@@ -78,7 +78,7 @@ SUPER_CONN="Host=coord;Port=5432;Username=$SUPER_USER;Password=$SUPER_PASSWORD;D
 PGFS_CONN="Host=coord;Port=5432;Username=$PGFS_USER;Password=$PGFS_PASSWORD;Database=$PGFS_DB;SSL Mode=Disable"
 
 log "mkfs --clean (schema=$PGFS_SCHEMA)"
-dexec sh -c "mkfs.pgfs --clean -c '$PGFS_CONN' --super '$SUPER_CONN' -s '$PGFS_SCHEMA'" || die "mkfs failed"
+dexec sh -c "mkfs.pgfs -f pgfs.toml --clean --yes -c '$PGFS_CONN' --super '$SUPER_CONN' -s '$PGFS_SCHEMA'" || die "mkfs failed"
 
 dexec sh -c "mkdir -p '$MOUNT_POINT'"
 printf '%s\n' "[database]" "schema = \"$PGFS_SCHEMA\"" "connection = \"$PGFS_CONN\"" \

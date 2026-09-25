@@ -200,18 +200,18 @@ unmount_client() {
 # Part 1: audit.enabled=true (mkfs --audit)
 # ====================================================================
 sec "mkfs --clean --citus --audit --worker $WORKER1_SPEC"
-"$MKFS_BIN" --clean --citus --audit \
+"$MKFS_BIN" -f pgfs.toml --clean --yes --citus --audit \
     -c "$COORD_CONN" \
     -s pgfs \
     --super "$SUPER_CONN" \
     --worker "$WORKER1_SPEC" 2>&1 | tee -a "$LOG" >/dev/null \
     || die "mkfs (--audit) failed"
 
-# Sanity: the audit table is among the distributed tables (inode/data/data_chunk/lock/audit = 5).
+# Sanity: the audit table is among the distributed tables (inode/data/data_chunk/audit = 4; lock is local because of row locks = not distributed).
 dist_count=$(scalar "SELECT count(*) FROM citus_tables WHERE citus_table_type='distributed';")
 audit_dist=$(scalar "SELECT count(*) FROM citus_tables WHERE table_name::text='pgfs.pgfs_audit' AND citus_table_type='distributed';")
 log "  citus_tables distributed=$dist_count, pgfs_audit distributed=$audit_dist"
-[ "$dist_count" = "5" ] || die "unexpected distributed table count: $dist_count (should be 5)"
+[ "$dist_count" = "4" ] || die "unexpected distributed table count: $dist_count (should be 4 - inode / data / data_chunk / audit)"
 if [ "$audit_dist" = "1" ]; then
     pass "pgfs_audit is registered as an occurred_at-distributed table"
 else
@@ -346,7 +346,7 @@ sqlcpg -c "DROP TABLE IF EXISTS pgfs.$FUT_PART;" >/dev/null 2>&1 || true
 # ====================================================================
 sec "D: re-run mkfs without --audit to verify enabled=false"
 unmount_client
-"$MKFS_BIN" --clean --citus \
+"$MKFS_BIN" -f pgfs.toml --clean --yes --citus \
     -c "$COORD_CONN" \
     -s pgfs \
     --super "$SUPER_CONN" \

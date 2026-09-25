@@ -80,6 +80,24 @@ q() {
 	"$PSQL" -U "$DB_USER" -h "$DB_HOST" -p "$DB_PORT" -d "$DB_NAME" -At -c "$1" 2>/dev/null
 }
 
+# Set audit.enabled to true temporarily (the mount reads the setting from the database at start-up). Returns **whether it really became true**.
+# **created_by / updated_by are NOT NULL** - previously the columns were not passed, and since the NOT NULL check runs before the conflict
+# check, the INSERT always failed whether the row existed or not (it was only a meaningful check where `audit.enabled` was already true,
+# and B-4 passed silently as "auditing stays off, 0 gravestones").
+audit_on() {
+	q "insert into ${SCHEMA}.${PREFIX}settings (scope, key, value, created_by, updated_by) values ('audit','enabled','true'::jsonb,'wbmeta','wbmeta') on conflict (scope, key) do update set value = 'true'::jsonb" >/dev/null
+	[ "$(q "select value::text from ${SCHEMA}.${PREFIX}settings where scope = 'audit' and key = 'enabled'")" = "true" ]
+}
+
+# Put audit.enabled back. $1 = the value before the change (empty if there was no row = the default false, so delete the added row).
+audit_restore() {
+	if [ -n "$1" ]; then
+		q "update ${SCHEMA}.${PREFIX}settings set value = '$1'::jsonb where scope = 'audit' and key = 'enabled'" >/dev/null
+		return
+	fi
+	q "delete from ${SCHEMA}.${PREFIX}settings where scope = 'audit' and key = 'enabled'" >/dev/null
+}
+
 db_ready() {
 	[ -n "$DB_NAME" ] && [ -n "$DB_USER" ] && command -v "$PSQL" >/dev/null 2>&1 && [ "$(q 'select 1')" = "1" ]
 }
@@ -1184,7 +1202,7 @@ test_meta_audit_live_off_does_not_fake_loss() {
 	fi
 	q "delete from ${SCHEMA}.${PREFIX}mounts where (stats->>'unflushedLoss')::int > 0" >/dev/null
 	local prev=$(q "select value::text from ${SCHEMA}.${PREFIX}settings where scope = 'audit' and key = 'enabled'")
-	q "insert into ${SCHEMA}.${PREFIX}settings (scope, key, value) values ('audit','enabled','true'::jsonb) on conflict (scope, key) do update set value = 'true'::jsonb" >/dev/null
+	audit_on || { fail "could not set audit.enabled to true (the test's premise no longer holds)"; return; }
 	mount_meta --write-back-interval-ms 0 --write-back-flush-timeout-ms 3000 || { fail "mount"; return; }
 	local dir="$TEST_ROOT/b4"
 	rm -rf "$dir" 2>/dev/null
@@ -1204,9 +1222,7 @@ test_meta_audit_live_off_does_not_fake_loss() {
 	# cleanup
 	q "delete from ${SCHEMA}.${PREFIX}mounts where (stats->>'unflushedLoss')::int > 0" >/dev/null
 	q "delete from ${SCHEMA}.${audit_table} where name in ('tmp1.txt','tmp2.txt')" >/dev/null
-	if [ -n "$prev" ]; then
-		q "update ${SCHEMA}.${PREFIX}settings set value = '${prev}'::jsonb where scope = 'audit' and key = 'enabled'" >/dev/null
-	fi
+	audit_restore "$prev"
 	if [ "$set_rc" != "0" ]; then
 		fail "the live off of audit.enabled failed (rc=$set_rc = the test's premise no longer holds)"
 		return
@@ -1242,7 +1258,7 @@ test_meta_cancel_audit_is_written_immediately() {
 	q "delete from ${SCHEMA}.${audit_table} where name = 'ghost.txt'" >/dev/null
 	# Turn audit.enabled on temporarily (the mount reads the setting from the database at start-up). The cleanup always puts it back.
 	local prev=$(q "select value::text from ${SCHEMA}.${PREFIX}settings where scope = 'audit' and key = 'enabled'")
-	q "insert into ${SCHEMA}.${PREFIX}settings (scope, key, value) values ('audit','enabled','true'::jsonb) on conflict (scope, key) do update set value = 'true'::jsonb" >/dev/null
+	audit_on || { fail "could not set audit.enabled to true (the test's premise no longer holds)"; return; }
 	mount_meta --write-back-interval-ms 0 || { fail "mount"; return; }
 	local dir="$TEST_ROOT/b3"
 	rm -rf "$dir" 2>/dev/null
@@ -1259,9 +1275,7 @@ test_meta_cancel_audit_is_written_immediately() {
 	local n_after=$(q "select count(*) from ${SCHEMA}.${audit_table} where name = 'ghost.txt'")
 	# Cleanup: put the audit rows and the setting back
 	q "delete from ${SCHEMA}.${audit_table} where name = 'ghost.txt'" >/dev/null
-	if [ -n "$prev" ]; then
-		q "update ${SCHEMA}.${PREFIX}settings set value = '${prev}'::jsonb where scope = 'audit' and key = 'enabled'" >/dev/null
-	fi
+	audit_restore "$prev"
 	if [ "$body" != "secret" ]; then
 		fail "it could not be read while pending ('$body' / expected 'secret' = the test's premise no longer holds)"
 		return

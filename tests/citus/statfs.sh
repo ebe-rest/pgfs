@@ -85,7 +85,7 @@ scalarw1() { sqlcw1 -tA -c "$1" | tr -d ' '; }
 do_mkfs() {
 	local mode="$1"
 	sec "mkfs --clean --citus --worker $WORKER1_SPEC --statfs $mode"
-	"$MKFS_BIN" --clean --citus \
+	"$MKFS_BIN" -f pgfs.toml --clean --yes --citus \
 		-c "$COORD_CONN" \
 		-s pgfs \
 		--super "$SUPER_CONN" \

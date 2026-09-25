@@ -83,7 +83,7 @@ umount_all() {
 	return 0
 }
 
-# Establish A and B. **notify is mandatory** (with the default off, another mount's changes are invisible).
+# Establish A and B. **notify is mandatory** (turned off, another mount's changes are invisible. It is on by default since v0.2.1, but it is a premise here, so pass it explicitly).
 mount_both() {
 	mkdir -p "$MOUNT_A" "$MOUNT_B" 2>/dev/null
 	"$BIN/mount.pgfs" --setting-file "$SETTING_FILE" --notify >/dev/null 2>&1
@@ -127,8 +127,8 @@ mount_a_writeback() {
 mount_both_nonotify() {
 	umount_all
 	mkdir -p "$MOUNT_A" "$MOUNT_B" 2>/dev/null
-	"$BIN/mount.pgfs" --setting-file "$SETTING_FILE" >/dev/null 2>&1
-	"$BIN/mount.pgfs" --setting-file "$SETTING_FILE" --mount-point "$MOUNT_B" >/dev/null 2>&1
+	"$BIN/mount.pgfs" --setting-file "$SETTING_FILE" --no-notify >/dev/null 2>&1
+	"$BIN/mount.pgfs" --setting-file "$SETTING_FILE" --mount-point "$MOUNT_B" --no-notify >/dev/null 2>&1
 	local i=0
 	while [ $i -lt 100 ]; do
 		if mountpoint -q "$MOUNT_A" 2>/dev/null && mountpoint -q "$MOUNT_B" 2>/dev/null; then
@@ -818,6 +818,32 @@ test_xc_write_after_remote_truncate_keeps_size() {
 	pass
 }
 
+test_xc_root_attr_propagates() {
+	# **A change to the root (`/`) attributes must be visible on the other mount** (a regression).
+	# The root is held separately as the starting point of path resolution, and it used to be read only once at startup -
+	# even after a notification dropped it from byId, `stat /` kept returning the old value and **it was invisible until a remount**
+	# (after setting the root to 1777, every host other than the one that changed it still saw 755).
+	# What is checked is the root's mode. Children coming and going (the listing) arrive by another path, so they are not checked here.
+	local orig=$(stat -c '%a' "$MOUNT_A")
+	local want=775
+	[ "$orig" = "775" ] && want=755
+	# Make B read the root beforehand (create the state where B caches the value from right after startup)
+	stat -c '%a' "$MOUNT_B" >/dev/null
+	if ! chmod "$want" "$MOUNT_A" 2>/dev/null; then
+		skip "cannot chmod the root (not the owner + default_permissions, etc.)"
+		return
+	fi
+	local ok=0
+	wait_until '[ "$(stat -c %a "$MOUNT_B")" = "$want" ]' || ok=1
+	local got=$(stat -c '%a' "$MOUNT_B")
+	chmod "$orig" "$MOUNT_A" 2>/dev/null
+	if [ $ok -ne 0 ]; then
+		fail "B's root did not become $want after waiting ${WAIT_MAX} seconds (still '$got' = it keeps holding the root from startup)"
+		return
+	fi
+	pass
+}
+
 test_xc_create_under_removed_parent_fails() {
 	# * Being able to **create a child** under a directory another client deleted leaves
 	#   **an unreachable orphan** in the database that **cannot be removed through the FS** (only SQL can clean it up).
@@ -916,6 +942,7 @@ run test_xc_fuse_hidden_not_listed
 run test_xc_user_named_fuse_hidden_is_listed
 run test_xc_resync_drops_stale_cache
 run test_xc_relisten_drops_stale_cache
+run test_xc_root_attr_propagates
 # * This one **re-establishes them with notify off**, so it goes last (so the tests after it do not break on assuming notify).
 run test_xc_write_after_remote_truncate_keeps_size
 # * This one **re-establishes with write-back**, so it sits at the end next to the no-notify group.
