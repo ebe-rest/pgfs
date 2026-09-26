@@ -19,7 +19,7 @@
   -->
   <PropertyGroup>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
-    <Version>0.2.1</Version>
+    <Version>0.2.2</Version>
     <Product>pgfs</Product>
     <Company>ebe-rest</Company>
     <Authors>ebe-rest</Authors>
