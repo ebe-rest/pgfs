@@ -266,8 +266,7 @@ takes effect on a representative bulk copy. `defer` makes it take effect at the 
    run offset by the timezone) on its `stats`, and with `audit.enabled` an audit row with
    `op = writeback_loss` is written too. **The next mount warns on the parent process's stderr**, and it shows
    in red in `pgfsctl status` too. The gravestone **does not go away automatically**, so once it has been seen,
-   remove it with
-   `DELETE FROM <schema>.<prefix>mounts WHERE (stats->>'unflushedLoss')::int > 0`.
+   remove it with `pgfsctl prune --forget-tombstone <mount_id> --apply` (v0.2.2 onwards, [Pgfsctl.md](Pgfsctl.md)).
    **The deadline is checked inside one sweep too**, but one transaction in flight cannot be aborted so it can
    overshoot the given time somewhat. The loss log is at most 32 entries each for the pending inodes and the
    dirty data plus the audit row count, not a complete listing. The exit code 4 at the end does not reach the

@@ -220,6 +220,19 @@ public sealed class PruneAdmin
 	}
 
 	/// <summary>
+	/// **Removes one gravestone** (<c>pgfsctl prune --forget-tombstone</c>, v0.2.2), for an operator who has reviewed
+	/// the loss to clear it away explicitly. **The condition includes "loss &gt; 0"**, so a mistaken id never removes a
+	/// live row or an ordinary old row (removing registry rows by name is not made possible). Returns the number of
+	/// rows removed (0 or 1).
+	/// </summary>
+	public int ForgetTombstone(string mountId) {
+		return Pg.Execute(
+			this.connectionString,
+			$"DELETE FROM {this.QualifiedTable("mounts")} WHERE mount_id = @id AND COALESCE((stats->>'unflushedLoss')::int, 0) > 0",
+			new { id = mountId });
+	}
+
+	/// <summary>
 	/// Collects **data rows that no inode references**.
 	/// <para>
 	/// **Two queries are issued and the difference is taken on the client.** `data` and `inode` have

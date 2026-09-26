@@ -83,7 +83,7 @@ pgfsctl config set <scope.key> <value> [接続オプション]
   `inodes` (実体数) が別々に見えると、**ハンドルだけ漏れているのかカウントだけ漏れているのかを切り分けられる**
   (Linux 側と合意)。
 - **エラーステートの鮮度** (追加): 赤行に `[heartbeat 42s 前の情報]` を併記する。エラーステートは heartbeat 経由でしか届かないので、**DB に書けない障害では赤が出ないまま緑に見える**。Layer 3 のホスト行の `[stale: heartbeat 5m 前]` (赤) が唯一の手掛かりになるので、そこを先に見ること。遷移そのものは heartbeat 周期 (30 秒) を待たず即書きされる。
-- **喪失した unmount の墓標** (追加): `{prefix}mounts` に残った行を Layer 1 の `LIVE` 欄で `ENDED` と表示し、続けて赤で `!! write-back UNFLUSHED LOSS (N mount(s))` と内訳を出す。**自動では消えない**ので、確認したら `DELETE FROM <schema>.<prefix>mounts WHERE (stats->>'unflushedLoss')::int > 0` で消す。
+- **喪失した unmount の墓標** (追加): `{prefix}mounts` に残った行を Layer 1 の `LIVE` 欄で `ENDED` と表示し、続けて赤で `!! write-back UNFLUSHED LOSS (N mount(s))` と内訳を出す。**自動では消えない**ので、確認したら `pgfsctl prune --forget-tombstone <mount_id> --apply` で消す (v0.2.2〜。`mount_id` は赤の内訳に出る。全部なら `all`・[§prune](#prune--異常終了が残したものの掃除-追加))。
 
 reload ポリシー（Live / NextMount / Format）の全項目割り当ては [settings-matrix.ja.md §reload ポリシー](design/settings-matrix.ja.md)。
 
@@ -136,6 +136,7 @@ pgfsctl status --json -c "$CONN" -s pgfs     # GUI / スクリプト用
 
 ```
 pgfsctl prune [--check | --apply] [--force] [--mounts-older-than <sec>] [--json] [接続オプション]
+pgfsctl prune --forget-tombstone <mount_id|all> [--forget-tombstone ...] [--apply] [--json] [接続オプション]
 ```
 
 **既定は dry-run**。数えて見せるだけで何も消しません。`--apply` で実行します。
@@ -190,7 +191,7 @@ pgfsctl prune [--check | --apply] [--force] [--mounts-older-than <sec>] [--json]
   瞬断で登録に失敗したマウントも同じです。以前は一度消えると以後ずっと見えず、上の「生きている
   マウントが居れば触らない」の数に入りませんでした。
 - **喪失を記録した行 (墓標) は消しません。** 書き戻せなかった件数を運用に伝えるために残してあります
-  (B-2)。確認したら手で消してください。
+  (B-2)。確認したら **`--forget-tombstone`** (下記) で消してください。
 
 > **なぜ「heartbeat が古い」だけで消さないのか**: **DB 障害で heartbeat を落とした生きているマウント**の
 > 行を消すと、**次の実行からそのマウントが見えなくなり、「使用中の実体」を消すカスケード**になります。
@@ -232,6 +233,24 @@ pgfsctl prune [--check | --apply] [--force] [--mounts-older-than <sec>] [--json]
 > `status` は「いま動いていそうか」を 90 秒で見せれば足りますが、`prune` は**間違えるとデータが消える**ので、
 > 同じしきい値を流用しません。
 
+### 墓標を名指しで消す: `--forget-tombstone` (v0.2.2〜)
+
+通常の `prune` は墓標を消しません。喪失を確認したあとで片付けるのがこのオプションです (以前は SQL でしか消せず、
+psql の無い Windows では片付けられませんでした)。
+
+- **`--forget-tombstone <mount_id>`** は複数回指定できます。**`--forget-tombstone all`** は墓標を全部。
+  `mount_id` は `pgfsctl status` の赤い喪失表示 (と `--json` の各行) に出ます。
+- **既定は dry-run** で、消す墓標を一覧で見せるだけです。`--apply` で消します。
+- **消すのは墓標だけ**です。同じ実行で古い行・孤児 data・`.fuse_hidden*` は触りません (通常の掃除とは混ぜない)。
+  **名指しの中に墓標でない id (live な行・普通の古い行・存在しない id) が 1 つでもあれば、何も消さずに exit 1** —
+  打ち間違いを「合っている分だけ消す」にはしません。DELETE の条件にも「喪失 > 0」を入れてあるので、
+  この道で墓標以外の行が消えることはありません。
+- `--check` / `--force` とは同時に指定できません (exit 2)。
+
+> **注意**: `pgfsctl` は**未知のオプションを黙って無視します**。v0.2.1 以前の `pgfsctl` に
+> `--forget-tombstone ... --apply` を渡すと、**墓標は消えずに通常の `prune --apply` が走ります**
+> (古い行と、live が居なければ孤児 data / `.fuse_hidden*` を消す)。版を確かめてから使ってください。
+
 ### 例
 
 ```bash
@@ -241,6 +260,8 @@ pgfsctl prune --apply --force      # 全マウントを止めたうえで、デ�
 pgfsctl prune --mounts-older-than 86400 --apply   # mounts の行は 1 日より古いものだけ
 pgfsctl prune --json               # 機械可読 (dry_run / mounts / orphan_data / fuse_hidden / applied)
 pgfsctl prune --check -f /etc/pgfs.toml >/dev/null || echo "掃除するものがある"   # 監視用
+pgfsctl prune --forget-tombstone all                 # 墓標の一覧 (dry-run)
+pgfsctl prune --forget-tombstone <mount_id> --apply  # 確認した墓標を消す
 ```
 
 ## 終了コード

@@ -44,7 +44,7 @@ public static class StatusCommand
 		foreach (var m in lost) {
 			Console.WriteLine($"     {m.Host} {m.Mountpoint}: {m.UnflushedLoss} item(s) were lost (endedAt {Pgfs.Core.Api.Api.FormatUtcStamp(m.EndedAt)} / mount_id {m.MountId})");
 		}
-		Console.WriteLine("     delete them once they have been seen: DELETE FROM <schema>.<prefix>mounts WHERE (stats->>'unflushedLoss')::int > 0");
+		Console.WriteLine("     delete them once they have been seen: pgfsctl prune --forget-tombstone <mount_id> --apply (all for every one)");
 	}
 
 	/// <summary>

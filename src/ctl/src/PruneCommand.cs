@@ -23,6 +23,7 @@ public static class PruneCommand
 		var apply = false;
 		var force = false;
 		var check = false;
+		var forget = new System.Collections.Generic.List<string>();
 		var grace = PruneAdmin.DefaultMountsGraceSeconds;
 		var rest = new System.Collections.Generic.List<string>();
 		for (var i = 0; i < opts.Length; i++) {
@@ -36,6 +37,15 @@ public static class PruneCommand
 			}
 			if (opts[i] == "--check") {
 				check = true;
+				continue;
+			}
+			if (opts[i] == "--forget-tombstone") {
+				if (i + 1 >= opts.Length) {
+					Console.Error.WriteLine("--forget-tombstone: give a mount_id (or all).");
+					return 2;
+				}
+				forget.Add(opts[i + 1]);
+				i++;
 				continue;
 			}
 			if (opts[i] == "--mounts-older-than" && i + 1 < opts.Length) {
@@ -62,9 +72,19 @@ public static class PruneCommand
 			return 2;
 		}
 
+		// **Removing gravestones by name is not mixed with the ordinary cleanup** (v0.2.2). It is a separate action
+		// that looks only at gravestones and removes only gravestones.
+		if (forget.Count > 0 && (check || force)) {
+			Console.Error.WriteLine("--forget-tombstone cannot be given together with --check / --force (it only removes gravestones; use --apply to remove them).");
+			return 2;
+		}
+
 		var (json, _, conn, schema, prefix) = CliUtil.Resolve(rest.ToArray());
 		var admin = new PruneAdmin(conn, schema, prefix);
 		var report = admin.Scan(grace);
+		if (forget.Count > 0) {
+			return ForgetTombstones(admin, report, forget, apply, json);
+		}
 		PruneResult? result = null;
 		if (apply) { result = admin.Apply(report, force); }
 
@@ -83,6 +103,78 @@ public static class PruneCommand
 	}
 
 	private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = true };
+
+	/// <summary>
+	/// <c>--forget-tombstone &lt;mount_id&gt;</c> (repeatable) / <c>--forget-tombstone all</c>. **The default is a dry run**
+	/// (it only shows the gravestones it would remove); <c>--apply</c> removes them. **If even one of the named ids is
+	/// not a gravestone, nothing is removed and the exit code is 1** - a typo is a sign that "which ones to remove" has
+	/// gone wrong, so the correct ones are not removed on their own. Rows that are not gravestones (live / ordinary old
+	/// rows) cannot be removed this way.
+	/// </summary>
+	private static int ForgetTombstones(PruneAdmin admin, PruneReport report, System.Collections.Generic.List<string> forget, bool apply, bool json) {
+		var targets = new System.Collections.Generic.List<PruneMount>();
+		var unknown = new System.Collections.Generic.List<string>();
+		var all = forget.Contains("all");
+		foreach (var tomb in report.Tombstones) {
+			if (all || forget.Contains(tomb.MountId)) { targets.Add(tomb); }
+		}
+		foreach (var id in forget) {
+			if (id == "all") { continue; }
+			if (targets.Exists(t => t.MountId == id)) { continue; }
+			unknown.Add(id);
+		}
+		var deleted = 0;
+		var refused = !report.MountsTablePresent || unknown.Count > 0;
+		if (apply && !refused) {
+			foreach (var tomb in targets) { deleted += admin.ForgetTombstone(tomb.MountId); }
+		}
+
+		if (json) {
+			Console.WriteLine(JsonSerializer.Serialize(new {
+				dry_run = !apply,
+				mounts_table_present = report.MountsTablePresent,
+				forget_tombstones = targets.ConvertAll(t => new { mount_id = t.MountId, host = t.Host, mountpoint = t.Mountpoint, unflushed_loss = t.UnflushedLoss }),
+				not_tombstone = unknown,
+				deleted,
+			}, JsonOpts));
+		}
+		if (!json) {
+			PrintForget(report, targets, unknown, apply, refused, deleted);
+		}
+		if (refused) { return 1; }
+		return 0;
+	}
+
+	private static void PrintForget(PruneReport report, System.Collections.Generic.List<PruneMount> targets, System.Collections.Generic.List<string> unknown, bool apply, bool refused, int deleted) {
+		if (!apply) {
+			Console.WriteLine("prune --forget-tombstone (dry run - nothing has been deleted. Use --apply to delete)");
+		}
+		if (apply) {
+			Console.WriteLine("prune --forget-tombstone --apply");
+		}
+		Console.WriteLine();
+		if (!report.MountsTablePresent) {
+			Console.WriteLine("* {prefix}mounts cannot be read, so the gravestones cannot be found.");
+			return;
+		}
+		Console.WriteLine($"gravestones to delete: {targets.Count}");
+		foreach (var t in targets) {
+			Console.WriteLine($"  {t.MountId}  {t.Host} {t.Mountpoint} - {t.UnflushedLoss} unflushed item(s)");
+		}
+		foreach (var id in unknown) {
+			// **Rows that are not gravestones are not removed this way** (live rows and ordinary old rows cannot be removed by name).
+			Console.WriteLine($"  not a gravestone (or not found): {id}");
+		}
+		if (refused) {
+			Console.WriteLine();
+			Console.WriteLine("An id that is not a gravestone was given, so nothing is deleted. Check the ids in the loss lines of `pgfsctl status`.");
+			return;
+		}
+		if (apply) {
+			Console.WriteLine();
+			Console.WriteLine($"deleted: {deleted} gravestone row(s)");
+		}
+	}
 
 	private static void PrintText(PruneReport report, PruneResult? result, bool apply, bool force) {
 		if (!apply) {

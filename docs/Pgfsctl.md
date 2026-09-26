@@ -114,7 +114,8 @@ The provenance (source) is one of three values: `config` (the CLI or the TOML), 
 - **The gravestone of a lost unmount**: a row left in `{prefix}mounts` is shown as `ENDED` in
   the `LIVE` column of Layer 1, followed in red by `!! write-back UNFLUSHED LOSS (N mount(s))` and the
   breakdown. **It is not removed automatically**, so once it has been seen, remove it with
-  `DELETE FROM <schema>.<prefix>mounts WHERE (stats->>'unflushedLoss')::int > 0`.
+  `pgfsctl prune --forget-tombstone <mount_id> --apply` (v0.2.2 onwards; the `mount_id` is in the red breakdown,
+  and `all` removes every one - [the `prune` section](#prune---cleaning-up-what-an-abnormal-exit-left-behind)).
 
 The assignment of the reload policy (Live / NextMount / Format) to every setting is in
 [settings-matrix.md, the reload policy](design/settings-matrix.md).
@@ -194,6 +195,7 @@ pgfsctl status --json -c "$CONN" -s pgfs     # for the GUI or a script
 
 ```
 pgfsctl prune [--check | --apply] [--force] [--mounts-older-than <sec>] [--json] [the connection options]
+pgfsctl prune --forget-tombstone <mount_id|all> [--forget-tombstone ...] [--apply] [--json] [the connection options]
 ```
 
 **The default is a dry run.** It only counts and shows; it removes nothing. `--apply` carries it out.
@@ -253,7 +255,7 @@ behind and nobody cleans it up"** (the design is in
   Before, a row once gone stayed invisible for good and did not count towards "leave it alone while any mount
   is alive" above.
 - **A row that recorded a loss (a gravestone) is not removed.** It is kept in order to tell the operators how
-  much could not be written back (B-2). Remove it by hand once it has been seen.
+  much could not be written back (B-2). Once it has been seen, remove it with **`--forget-tombstone`** (below).
 
 > **Why "the heartbeat is old" alone is not enough to remove something**: removing the row of
 > **a living mount whose heartbeat went down because of a database failure** makes that mount invisible from the
@@ -301,6 +303,25 @@ The decision was changed to **split on the host**.
 > questions.** For `status` it is enough to show "does it look like it is running now" at 90 seconds, but
 > `prune` **removes data when it gets it wrong**, so it does not reuse the same threshold.
 
+### Removing gravestones by name: `--forget-tombstone` (v0.2.2 onwards)
+
+The ordinary `prune` does not remove gravestones. This option is for clearing them away after the loss has been
+reviewed (before, they could only be removed with SQL, and could not be cleared on Windows, where there is no psql).
+
+- **`--forget-tombstone <mount_id>`** can be given more than once. **`--forget-tombstone all`** means every gravestone.
+  The `mount_id` is in the red loss lines of `pgfsctl status` (and in each row of `--json`).
+- **The default is a dry run**: it only lists the gravestones it would remove. `--apply` removes them.
+- **Only gravestones are removed.** Old rows, orphan data and `.fuse_hidden*` are not touched in the same run (it is
+  not mixed with the ordinary cleanup). **If even one of the named ids is not a gravestone (a live row / an ordinary
+  old row / an id that does not exist), nothing is removed and the exit code is 1** - a typo is not turned into
+  "remove the correct ones only". The DELETE condition also contains "loss > 0", so no row other than a gravestone
+  can be removed this way.
+- It cannot be given together with `--check` / `--force` (exit 2).
+
+> **Note**: `pgfsctl` **silently ignores unknown options**. Given `--forget-tombstone ... --apply`, a `pgfsctl` of
+> v0.2.1 or earlier **removes no gravestone and runs the ordinary `prune --apply`** (it removes old rows and, when
+> nothing is live, orphan data / `.fuse_hidden*`). Check the version before using it.
+
 ### Examples
 
 ```bash
@@ -310,6 +331,8 @@ pgfsctl prune --apply --force      # after stopping every mount, force the data 
 pgfsctl prune --mounts-older-than 86400 --apply   # only rows in mounts older than a day
 pgfsctl prune --json               # machine-readable (dry_run / mounts / orphan_data / fuse_hidden / applied)
 pgfsctl prune --check -f /etc/pgfs.toml >/dev/null || echo "there is something to clean up"   # for monitoring
+pgfsctl prune --forget-tombstone all                 # list the gravestones (dry run)
+pgfsctl prune --forget-tombstone <mount_id> --apply  # remove a gravestone that has been reviewed
 ```
 
 ## The exit codes

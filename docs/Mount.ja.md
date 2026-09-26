@@ -231,7 +231,7 @@ persisted への上書きを同期 close に戻した後は未実測)。詳細�
    DELETE せず `stats` に `unflushedLoss` / `endedAt` (**UTC・末尾 `Z`**。ログ行の時刻はローカルなので、印が無いと時差ぶんずれた別の実行に見える) を載せて墓標として残し、`audit.enabled` なら
    `op = writeback_loss` の監査行も書く。**次回マウント時に親プロセスの stderr で警告**し、
    `pgfsctl status` にも赤で出る。墓標は**自動では消えない**ので、確認したら
-   `DELETE FROM <schema>.<prefix>mounts WHERE (stats->>'unflushedLoss')::int > 0` で消すこと。**期限は sweep の 1 巡の中でも見る**が、実行中の 1 トランザクションは打ち切れないので
+   `pgfsctl prune --forget-tombstone <mount_id> --apply` で消すこと (v0.2.2〜・[Pgfsctl.ja.md](Pgfsctl.ja.md))。**期限は sweep の 1 巡の中でも見る**が、実行中の 1 トランザクションは打ち切れないので
    指定時間を多少超過し得る。喪失ログは pending inode / dirty データそれぞれ最大 32 件と監査行件数で、全件一覧ではない。デーモン起動の親の終了コードには終了時の 4 は伝わらない。`fusermount3 -u` / `umount(8)` はカーネル側で完了するので FS 側から EBUSY で拒否はできない
    (拒否すると「絶対に unmount できないマウント」になる) — ログと exit code が最後の報告経路。
 3. **flush が 5 回連続で失敗すると mount がエラーステート**になり、**新規の write / create に加えて

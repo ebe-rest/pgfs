@@ -26,6 +26,9 @@
 
 - **`pgfsctl prune --check`**: dry-run と同じ表示をして、掃除できるもの (生きていない `{prefix}mounts` の行 / 孤児 data / `.fuse_hidden*` / 墓標) が
   あれば exit 1、無ければ exit 0。監視から「ゴミが溜まっているか」を見るため。`--apply` とは併用できない (exit 2)。
+- **`pgfsctl prune --forget-tombstone <mount_id>` (複数可) / `all`**: 墓標 (未 flush を残して終わった記録) を名指しで消す。既定は dry-run、`--apply` で消す。
+  墓標以外は消さず、名指しに墓標でない id が混じれば何も消さずに exit 1。以前は SQL でしか消せなかった (psql の無い Windows では片付けられなかった)。
+  `status` の喪失表示の案内もこのコマンドに変えた。
 - **マウントは起動時に、同じホストの死んだ `{prefix}mounts` の行を消す**。判定は `prune` と同じ (pid の生存 + プロセス名)。墓標・自分の行・別ホストの行は残す。
   同じマシンで `kill -9` と再マウントを繰り返しても行が溜まらない。
 

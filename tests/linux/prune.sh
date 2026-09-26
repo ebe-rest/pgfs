@@ -232,6 +232,53 @@ test_status_folds_old_rows() {
 	pass
 }
 
+test_forget_tombstone_by_id() {
+	# ★ **`--forget-tombstone <mount_id>` removes only gravestones, by name** (v0.2.2). The default is a dry run;
+	#   `--apply` removes. It is not mixed with the ordinary cleanup (old rows are not removed in the same run).
+	#   Before the fix they could only be removed with SQL (an unknown option is silently ignored, so it is just a dry run).
+	umount_all
+	drop_dead_rows
+	make_stale_rows
+	local out rc
+	out=$(prune --forget-tombstone "$MARK_TOMB"); rc=$?
+	if [ "$rc" != "0" ]; then fail "the dry run exits $rc"; cleanup_rows; return; fi
+	if ! echo "$out" | grep -q "$MARK_TOMB"; then fail "the gravestone is not in the dry run's list"; cleanup_rows; return; fi
+	if ! row_exists "$MARK_TOMB"; then fail "the gravestone was removed by a dry run"; cleanup_rows; return; fi
+	out=$(prune --forget-tombstone "$MARK_TOMB" --apply); rc=$?
+	local tomb plain
+	tomb=$(row_exists "$MARK_TOMB" && echo 1 || echo 0)
+	plain=$(row_exists "$MARK_PLAIN" && echo 1 || echo 0)
+	cleanup_rows
+	if [ "$rc" != "0" ]; then fail "--apply exits $rc"; return; fi
+	if [ "$tomb" != "0" ]; then fail "--apply did not remove the gravestone"; return; fi
+	if [ "$plain" != "1" ]; then fail "removing a gravestone by name also removed an ordinary old row"; return; fi
+	pass
+}
+
+test_forget_tombstone_refuses_non_tombstone() {
+	# ★ **When an id that is not a gravestone is among the names, nothing is removed and it exits 1** (v0.2.2).
+	#   Live rows and ordinary rows cannot be removed this way. Together with `--check` it exits 2.
+	#   `all` removes every gravestone and only gravestones (ordinary old rows are kept).
+	umount_all
+	drop_dead_rows
+	make_stale_rows
+	local rc
+	prune --forget-tombstone "$MARK_TOMB" --forget-tombstone "$MARK_PLAIN" --apply >/dev/null; rc=$?
+	if [ "$rc" != "1" ]; then fail "exits $rc although an id that is not a gravestone was given (expected 1)"; cleanup_rows; return; fi
+	if ! row_exists "$MARK_TOMB" || ! row_exists "$MARK_PLAIN"; then fail "a row was removed although the run was refused"; cleanup_rows; return; fi
+	"$BIN/pgfsctl" prune --forget-tombstone "$MARK_TOMB" --check -c "$CONN" -s "$SCHEMA" >/dev/null 2>&1; rc=$?
+	if [ "$rc" != "2" ]; then fail "--forget-tombstone --check exits $rc (expected 2)"; cleanup_rows; return; fi
+	prune --forget-tombstone all --apply >/dev/null; rc=$?
+	local tomb plain
+	tomb=$(row_exists "$MARK_TOMB" && echo 1 || echo 0)
+	plain=$(row_exists "$MARK_PLAIN" && echo 1 || echo 0)
+	cleanup_rows
+	if [ "$rc" != "0" ]; then fail "all --apply exits $rc"; return; fi
+	if [ "$tomb" != "0" ]; then fail "all did not remove the gravestone"; return; fi
+	if [ "$plain" != "1" ]; then fail "all also removed an ordinary old row"; return; fi
+	pass
+}
+
 test_prune_dry_run_changes_nothing() {
 	# **The default is a dry run.** It counts and shows, and not a single row is deleted.
 	umount_all
@@ -588,6 +635,8 @@ run test_mount_start_reaps_same_host_dead_rows
 run test_prune_treats_same_host_dead_row_as_stale
 run test_prune_check_exit_code
 run test_status_folds_old_rows
+run test_forget_tombstone_by_id
+run test_forget_tombstone_refuses_non_tombstone
 
 cleanup_rows
 rm -rf "$MNT/prunetest" "$MNT/prunetest2" 2>/dev/null

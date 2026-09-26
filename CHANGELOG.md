@@ -29,6 +29,11 @@ authoritative for how things came about).
 - **`pgfsctl prune --check`**: prints the same report as the dry run and exits 1 when there is something to clean up
   (`{prefix}mounts` rows that are not alive / orphan data / `.fuse_hidden*` / gravestones), 0 otherwise. For monitoring
   to see whether rubbish has piled up. It cannot be combined with `--apply` (exit 2).
+- **`pgfsctl prune --forget-tombstone <mount_id>` (repeatable) / `all`**: removes gravestones (the record of an exit that
+  left unflushed work) by name. A dry run by default; `--apply` removes. Nothing but gravestones is removed, and when an
+  id that is not a gravestone is among the names nothing is removed and the exit code is 1. Before, they could only be
+  removed with SQL (and could not be cleared on Windows, where there is no psql). The hint in the loss lines of
+  `status` now points to this command.
 - **At startup a mount removes the dead `{prefix}mounts` rows of its own host.** The decision is the same as `prune`'s
   (the liveness of the pid plus the process name). Gravestones, its own row and rows of other hosts are kept.
   Repeating `kill -9` and mounting again on the same machine no longer piles up rows.

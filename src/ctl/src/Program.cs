@@ -62,6 +62,7 @@ public static class Program
 			  pgfsctl config set <scope.key> <value> [connection opts]
 			  pgfsctl status [--json] [connection opts]
 			  pgfsctl prune [--check | --apply] [--force] [--mounts-older-than <sec>] [--json] [conn opts]
+			  pgfsctl prune --forget-tombstone <mount_id|all> [...] [--apply] [--json] [conn opts]
 
 			Connection opts are resolved like mount.pgfs:
 			  -c/--connection <connstr>   -s/--schema <name>   -x/--prefix <prefix>
@@ -82,6 +83,8 @@ public static class Program
 			mount is live (--force overrides; stop every mount first). --check prints the
 			same report and exits 1 when there is anything to clean up (tombstones included),
 			0 otherwise - for cron / monitoring. Argument errors exit 2.
+			--forget-tombstone <mount_id> (repeatable, or 'all') deletes tombstones only
+			(dry run unless --apply). If any id is not a tombstone, nothing is deleted (exit 1).
 			""");
 	}
 }
