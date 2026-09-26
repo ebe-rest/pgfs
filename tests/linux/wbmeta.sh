@@ -118,7 +118,7 @@ stat_field() {
 # `pgrep -f` would also match **the calling shell**, which contains the same command line
 # (measured: it matched 3 times and head -1 returned the shell's pid).
 # unmount_crash kills this, so getting it wrong takes an unrelated process down.
-mount_pid() { pgrep -x mount.pgfs | head -1; }
+mount_pid() { pgrep -u "$(id -u)" -x mount.pgfs | head -1; }
 
 unmount_clean() {
 	if mountpoint -q "$MOUNT_ROOT" 2>/dev/null; then

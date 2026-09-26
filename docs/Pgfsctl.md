@@ -149,6 +149,10 @@ layers are implemented.
 1. **Mounts (the list of what is running in the cluster, Layer 1)** ... from the `{prefix}mounts` registry: the
    host / pid / mode (`fuse` or `dokan`) / mountpoint / uptime / time since the heartbeat / live? (under 90 s).
    An absent table (an FS mkfs'd before Phase 2) shows as "table not present".
+   **From v0.2.2, rows that are neither live nor gravestones and whose heartbeat is at least 10 minutes old are
+   left out of the list and of Layer 3**, and only their number is shown as `+N old row(s)` (`--json` still has all
+   of them). **When there is something to clean up (rows not alive / gravestones), one line
+   `can be cleaned up: ... -> check with pgfsctl prune` is printed.**
 2. **Filesystem (the FS statistics, Layer 2)** ... **the target (the connection target `host:port/db`; since
    v0.2.1)**, the schema/prefix/version/volume_label, the number of inodes,
    of files and of chunks, the bytes used (`sum(length(payload))`), the cluster_size, the max_file_size, audit
@@ -189,12 +193,26 @@ pgfsctl status --json -c "$CONN" -s pgfs     # for the GUI or a script
 ## `prune` - cleaning up what an abnormal exit left behind
 
 ```
-pgfsctl prune [--apply] [--force] [--mounts-older-than <sec>] [--json] [the connection options]
+pgfsctl prune [--check | --apply] [--force] [--mounts-older-than <sec>] [--json] [the connection options]
 ```
 
 **The default is a dry run.** It only counts and shows; it removes nothing. `--apply` carries it out.
 **A cleanup command that does not let you look at what it is about to remove first is dangerous**, so this
 default does not change.
+
+**`--check` (v0.2.2 onwards)** prints the same report as the dry run and **exits 1 when there is anything to clean
+up**, 0 when there is nothing. It is for monitoring (cron / a systemd timer / a monitoring agent) to see "has
+rubbish piled up". **Gravestones (below) count as "something" too** - `prune` does not remove them, but they are
+something a person should review. It cannot be given together with `--apply` (exit 2).
+
+| The exit code | What it means |
+|---|---|
+| 0 | Success (for `--check`: "nothing to clean up") |
+| 1 | `--check` found something to clean up / a gravestone. Or a run-time error such as a failed connection |
+| 2 | An invalid argument (an unknown option / `--check` together with `--apply` / `--mounts-older-than` under 600) - **1 up to v0.2.1** |
+
+> **A failed connection is exit 1 too**, so to be sure that a 1 from `--check` means "there is rubbish", look at
+> the standard error as well (with `--json`, output that parses as JSON means the run itself succeeded).
 
 There are three targets, and all of them have the same shape of **"an abnormally terminated mount left something
 behind and nobody cleans it up"** (the design is in
@@ -213,8 +231,10 @@ behind and nobody cleans it up"** (the design is in
 
 ### The safety valves (**the liveness decision differs per kind**)
 
-- **A row in `{prefix}mounts`** is removed if its heartbeat is older than `--mounts-older-than`
-  (**3600 seconds** by default). **This is also the ceiling on treating a row from another host as alive**
+- **A row in `{prefix}mounts`** is removed **right away when it is from the same host and its process is gone**,
+  and **when it is from another host** if its heartbeat is older than `--mounts-older-than` (**3600 seconds** by
+  default; the same-host decision is described below, "Right after a `kill -9`"). **This is also the ceiling on
+  treating a row from another host as alive**
   (below). **The lower bound is 600 seconds**, and a smaller value (0 and negative values included) is
   refused - a small value **treats mounts alive on other hosts as dead and removes the bodies they are using**.
 - **The side that removes data (the orphan data rows and the `.fuse_hidden*` files) is not touched at all if
@@ -223,6 +243,11 @@ behind and nobody cleans it up"** (the design is in
   that removes data is not touched even with `--force`.** Who is alive is unknown = "cannot be seen", not
   "there are none". Run the migration ([CHANGELOG.md](../CHANGELOG.md), the changes that require a migration)
   first. In JSON this is `applied.skipped_because_unknown = true`.
+- **At startup a mount removes the dead rows of its own host itself (v0.2.2 onwards).** The decision is the
+  same as `prune`'s (the liveness of the pid plus the process name), and **gravestones and its own row are kept**.
+  Repeating `kill -9` and mounting again on the same machine no longer piles up rows. Rows of other hosts are
+  not touched (there is no way to check whether they are alive; those are left to `prune`'s grace period).
+  A failure only prints a warning and the mount goes on.
 - **A mount registers itself again at the heartbeat interval (30 seconds) when its registry row has
   disappeared.** The same goes for a mount whose registration failed at startup because of a database blip.
   Before, a row once gone stayed invisible for good and did not count towards "leave it alone while any mount
@@ -284,6 +309,7 @@ pgfsctl prune --apply              # clean up (the data side is skipped if anyth
 pgfsctl prune --apply --force      # after stopping every mount, force the data side to be cleaned too
 pgfsctl prune --mounts-older-than 86400 --apply   # only rows in mounts older than a day
 pgfsctl prune --json               # machine-readable (dry_run / mounts / orphan_data / fuse_hidden / applied)
+pgfsctl prune --check -f /etc/pgfs.toml >/dev/null || echo "there is something to clean up"   # for monitoring
 ```
 
 ## The exit codes
@@ -292,3 +318,6 @@ pgfsctl prune --json               # machine-readable (dry_run / mounts / orphan
 |---|---|
 | 0 | Success |
 | 1 | An invalid argument / an unknown subcommand / a refused `config set` (Format / File+NextMount / an unknown key / failed validation) / a failed connection and so on |
+| 2 | An invalid argument of `prune` (v0.2.2 onwards; invalid arguments of the other subcommands stay 1) |
+
+For the 0 / 1 of `prune --check`, see [the `prune` section](#prune---cleaning-up-what-an-abnormal-exit-left-behind).

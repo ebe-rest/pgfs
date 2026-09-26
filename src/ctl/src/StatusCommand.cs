@@ -47,12 +47,30 @@ public static class StatusCommand
 		Console.WriteLine("     delete them once they have been seen: DELETE FROM <schema>.<prefix>mounts WHERE (stats->>'unflushedLoss')::int > 0");
 	}
 
+	/// <summary>
+	/// Whether a row is **folded away** in the list and in Layer 3 (v0.2.2): a row whose heartbeat is older than
+	/// <see cref="PruneAdmin.MinMountsGraceSeconds"/> (10 minutes) and that is not a tombstone = a row that is most likely
+	/// no longer running. **Rows that stopped recently are not folded** - they are the clue for finding a live mount whose
+	/// heartbeat has only stopped because of a database failure, so they are still shown with the red [stale].
+	/// Every row used to be listed, so once the leftovers of `kill -9` piled up Layer 3 became unreadable.
+	/// </summary>
+	private static bool Folded(MountInfo m) {
+		if (m.Live || m.UnflushedLoss > 0) { return false; }
+		return m.HeartbeatAgeSeconds >= PruneAdmin.MinMountsGraceSeconds;
+	}
+
 	private static void PrintText(MountsStatus mounts, FsStats fs) {
 		var liveCount = 0;
+		var folded = 0;
+		var notLive = 0;
+		var tombstones = 0;
 		foreach (var m in mounts.Mounts) {
 			if (m.Live) {
 				liveCount++;
 			}
+			if (Folded(m)) { folded++; }
+			if (!m.Live && m.UnflushedLoss == 0) { notLive++; }
+			if (m.UnflushedLoss > 0) { tombstones++; }
 		}
 		Console.WriteLine($"Mounts ({liveCount} live / {mounts.Mounts.Count} total):");
 		if (!mounts.TablePresent) {
@@ -62,12 +80,23 @@ public static class StatusCommand
 		} else {
 			Console.WriteLine($"  {"HOST",-16} {"PID",-7} {"MODE",-6} {"MOUNTPOINT",-20} {"UPTIME",-9} {"HB-AGE",-8} LIVE");
 			foreach (var m in mounts.Mounts) {
+				if (Folded(m)) { continue; }
 				var live = YesNo(m.Live);
 				// A gravestone (a row left by an exit with a loss) cannot be told apart by live/hb-age, so it is stated explicitly.
 				if (m.UnflushedLoss > 0) { live = "ENDED"; }
 				Console.WriteLine($"  {m.Host,-16} {m.Pid,-7} {m.Mode,-6} {m.Mountpoint,-20} {FormatDuration(m.UptimeSeconds),-9} {FormatDuration(m.HeartbeatAgeSeconds),-8} {live}");
 			}
+			if (folded > 0) {
+				Console.WriteLine($"  +{folded} old row(s) (heartbeat at least {PruneAdmin.MinMountsGraceSeconds / 60} minutes ago; left out of the list and the detail - --json has them all)");
+			}
 			PrintLossRows(mounts);
+			// **Say it in one line only when there is something to clean up** (v0.2.2). Only the cheap things are
+			// counted (the registry rows). Orphaned data and .fuse_hidden* need data / inode matching, which is heavy,
+			// so status does not count them (the GUI calls status every 3 seconds).
+			if (notLive + tombstones > 0) {
+				Console.WriteLine();
+				Console.WriteLine($"  can be cleaned up: rows not alive {notLive} / tombstones {tombstones} -> check with `pgfsctl prune` (it also counts orphaned data and .fuse_hidden*)");
+			}
 		}
 		PrintLayer3(mounts);
 		Console.WriteLine();
@@ -100,6 +129,7 @@ public static class StatusCommand
 		Console.WriteLine();
 		Console.WriteLine("Process detail (Layer 3 — last heartbeat snapshot):");
 		foreach (var m in mounts.Mounts) {
+			if (Folded(m)) { continue; }
 			// The heartbeat has stopped = **every number below is as of that moment**.
 			// On a failure that cannot write to the database even the error state does not reach here, so the staleness is made to stand out in red.
 			var stale = "";

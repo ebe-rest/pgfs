@@ -19,7 +19,27 @@ authoritative for how things came about).
 
 ## [Unreleased] v0.2.2
 
-(nothing yet)
+### ⚠ Changes that require a migration
+
+- **Invalid arguments to `pgfsctl prune` now exit 2** (1 up to v0.2.1), for example `--mounts-older-than` under 600.
+  If a script reads a 1 from `prune` as "bad arguments", change it to 2.
+
+### Added
+
+- **`pgfsctl prune --check`**: prints the same report as the dry run and exits 1 when there is something to clean up
+  (`{prefix}mounts` rows that are not alive / orphan data / `.fuse_hidden*` / gravestones), 0 otherwise. For monitoring
+  to see whether rubbish has piled up. It cannot be combined with `--apply` (exit 2).
+- **At startup a mount removes the dead `{prefix}mounts` rows of its own host.** The decision is the same as `prune`'s
+  (the liveness of the pid plus the process name). Gravestones, its own row and rows of other hosts are kept.
+  Repeating `kill -9` and mounting again on the same machine no longer piles up rows.
+
+### Changed
+
+- **`pgfsctl status` leaves rows that are neither live nor gravestones and whose heartbeat is at least 10 minutes old
+  out of the list and the detail** (it prints only their count as `+N old row(s)`; `--json` still has them all).
+  When there is something to clean up it prints one line, `can be cleaned up: ... -> check with pgfsctl prune`.
+- **`pgfsctl prune` counts a dead row of the same host as an "old row" regardless of how fresh its heartbeat is**
+  (it used to wait until `--mounts-older-than` had passed).
 
 ## [v0.2.1] - 2026-09-25
 

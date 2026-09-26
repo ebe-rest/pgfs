@@ -58,7 +58,7 @@ db_ready() { [ -n "$DB_NAME" ] && [ -n "$DB_USER" ] && command -v "$PSQL_BIN" >/
 
 # ===== mount operations =====
 
-mount_pid() { pgrep -x mount.pgfs | head -1; }
+mount_pid() { pgrep -u "$(id -u)" -x mount.pgfs | head -1; }
 
 unmount_clean() {
 	if mountpoint -q "$MOUNT_ROOT" 2>/dev/null; then

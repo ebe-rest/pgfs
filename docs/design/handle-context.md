@@ -654,7 +654,7 @@ up"**.
 |---|---|---|
 | `.fuse_hidden*` (Linux) | A `kill -9` leaves it **forever, contents and all**. It appears in another mount's `ls` | **After stage C nobody creates them**, so it is a one-off. **It cannot be removed while a mount currently has it open** |
 | Orphan data rows (the remnants of O-3) | They can be born in stage C | **Referenced by no inode** and **the owning mount is not alive** |
-| The remnants in `{prefix}mounts` | They accumulate with every `kill -9` (11 rows accumulated during testing). **The harm is only cosmetic** | **The heartbeat has stopped** and **it is not a loss gravestone (B-2)** |
+| The remnants in `{prefix}mounts` | They accumulate with every `kill -9` (11 rows accumulated during testing). **The harm is only cosmetic** | **The heartbeat has stopped** and **it is not a loss gravestone (B-2)** (as-built v0.2.2: a row of the same host is decided by the liveness of its pid, and **a mount also removes the dead rows of its own host at startup**. `status` folds dead rows older than 10 minutes into a count - [Pgfsctl.md, the prune section](../Pgfsctl.md)) |
 
 **There is one common danger**: **removing something a living mount is using breaks it.**
 All of them therefore have to be **cross-checked against the liveness in `{prefix}mounts`**.

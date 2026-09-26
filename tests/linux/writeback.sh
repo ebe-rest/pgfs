@@ -66,7 +66,7 @@ mount_pid() {
 	# Look it up by process name (`pgrep -f` also matches the calling shell, which contains the same command
 	# line. Measured: it matched 3 times and head -1 returned the shell's pid).
 	# This decides what gets kill -9'd, so getting it wrong takes an unrelated process down.
-	pgrep -x mount.pgfs | head -1
+	pgrep -u "$(id -u)" -x mount.pgfs | head -1
 }
 
 # Bring the mount down (a clean unmount). With no process around, it only cleans up.

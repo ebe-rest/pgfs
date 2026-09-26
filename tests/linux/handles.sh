@@ -72,7 +72,7 @@ umount_all() {
 	if mountpoint -q "$MNT" 2>/dev/null; then fusermount3 -u "$MNT" 2>/dev/null; fi
 	local i=0
 	while [ $i -lt 600 ]; do
-		pgrep -x mount.pgfs >/dev/null 2>&1 || return 0
+		pgrep -u "$(id -u)" -x mount.pgfs >/dev/null 2>&1 || return 0
 		sleep 0.1; i=$((i+1))
 	done
 	return 1
@@ -86,7 +86,7 @@ mount_fs() {
 	while [ $i -lt 100 ]; do
 		if mountpoint -q "$MNT" 2>/dev/null; then
 			# **The pid is taken from the registry as "the newest row for this mount point".**
-			# With `pgrep -x mount.pgfs | head -1` it would **grab a daemon running on a different
+			# With `pgrep -u "$(id -u)" -x mount.pgfs | head -1` it would **grab a daemon running on a different
 			# mount point** (crossclient's B side, or one left behind), and every status read after
 			# that would be looking at someone else's row entirely (this was actually hit and turned 6 tests into mysterious FAILs).
 			MOUNT_PID=$(q "select pid from ${SCHEMA}.${PREFIX}mounts

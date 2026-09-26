@@ -14,13 +14,22 @@ End-to-end tests that exercise the implemented features ([docs/Mount.md](../../d
 | [writeback.sh](writeback.sh) | **Dedicated to write-back** (9 tests). It **mounts and remounts on its own** in order to look at `mount.write_back`'s durability contract |
 | [wbmeta.sh](wbmeta.sh) | **Dedicated to metadata write-back** (**27 tests**, all green after the round A fixes and B-1 to B-9). The contract of `mount.write_back_metadata`. It mounts and remounts on its own, and checks the database side directly with psql |
 | [startup.sh](startup.sh) | **Dedicated to the start-up contracts** (10 tests). The treatment of `-o` / `started (pid N)` / the fallback of owner resolution. It mounts and remounts on its own |
-| [prune.sh](prune.sh) | **Dedicated to `pgfsctl prune`** (11 tests). Cleaning up what an abnormal exit left behind. **psql is required** (to make the artificial leftovers). It mounts and remounts on its own and also makes a real `.fuse_hidden` leftover with `kill -9` |
+| [prune.sh](prune.sh) | **Dedicated to `pgfsctl prune`** (15 tests). Cleaning up what an abnormal exit left behind. **psql is required** (to make the artificial leftovers). It mounts and remounts on its own and also makes a real `.fuse_hidden` leftover with `kill -9` |
 | [handles.sh](handles.sh) | **Dedicated to handle leaks** (**11 tests**). It reads the `handles` line of `pgfsctl status` and confirms that every borrowed handle comes back. **psql is required** (to fire a ping that makes a snapshot be written). It mounts and remounts on its own |
 | [crossclient.sh](crossclient.sh) | **Dedicated to cross-client** (**19 tests**). Mounts the same DB-FS **twice** and looks at visibility (the Linux version of Windows's [crossclient.ps1](../windows/crossclient.ps1)). It establishes both mounts itself |
 | [negcache.sh](negcache.sh) | **Dedicated to the negative lookup cache** (7 tests). The visibility contract of `mount.negative_cache_ttl_ms`. It mounts and remounts on its own, and a direct psql INSERT stands in for the other client |
 | [run.cmd](run.cmd) | Runs **only** the tests (assuming it is already mounted) |
 | [flow.ps1](flow.ps1) | **The whole flow**: rsync -> publish -> mount -> test -> unmount (PowerShell) |
 | [flow.cmd](flow.cmd) | The cmd wrapper around `flow.ps1` |
+
+## Another mount.pgfs may be running on the same host (v0.2.2)
+
+Each suite looks for the `mount.pgfs` it started itself with **`pgrep -u "$(id -u)" -x mount.pgfs` (only the ones
+of its own user)**. It used to be `pgrep -x mount.pgfs`, so **when the everyday FS was mounted permanently as root
+on the same host** (`/mnt/pgfs` from fstab, say), the teardown waited "until mount.pgfs is gone" and stalled for
+60 seconds every time, and the tests that pick up a pid could grab that permanent process (some tests `kill -9`
+it, but a root process cannot be killed by an ordinary user, so there was no actual harm). **Run the tests as an
+ordinary user.**
 
 ## Do not go green on zero tests
 

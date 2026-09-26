@@ -66,7 +66,7 @@ sql() { "$PSQL_BIN" "${PG_ARGS[@]}" -c "$1"; }
 
 # Look it up by process name (`pgrep -f` also matches the calling shell, which contains the same command line.
 # Measured: it matched 3 times and head -1 returned the shell's pid).
-mount_pid() { pgrep -x mount.pgfs | head -1; }
+mount_pid() { pgrep -u "$(id -u)" -x mount.pgfs | head -1; }
 
 unmount_clean() {
 	if mountpoint -q "$MOUNT_ROOT" 2>/dev/null; then

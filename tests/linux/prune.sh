@@ -66,7 +66,7 @@ print('' if d is None else d)
 umount_all() {
 	if mountpoint -q "$MNT" 2>/dev/null; then fusermount3 -u "$MNT" 2>/dev/null; fi
 	local i=0
-	while [ $i -lt 600 ]; do pgrep -x mount.pgfs >/dev/null 2>&1 || return 0; sleep 0.1; i=$((i+1)); done
+	while [ $i -lt 600 ]; do pgrep -u "$(id -u)" -x mount.pgfs >/dev/null 2>&1 || return 0; sleep 0.1; i=$((i+1)); done
 	return 1
 }
 mount_fs() {
@@ -132,6 +132,105 @@ run() {
 }
 
 # ===== tests =====
+
+# ----- v0.2.2: the cleanup at startup / --check / folding in status -----
+
+# Take this host's name **as the mount wrote it into the registry** (Dns.GetHostName() can be an FQDN and differ from hostname).
+this_host() {
+	mount_fs || return 1
+	local pid; pid=$(pgrep -u "$(id -u)" -x mount.pgfs | head -1)
+	q "select host from ${SCHEMA}.${PREFIX}mounts where pid = ${pid:-0} limit 1"
+}
+MARK_DEAD="PRUNETEST-DEADHERE"
+MARK_DEADTOMB="PRUNETEST-DEADHERE-TOMB"
+MARK_OTHER="PRUNETEST-OTHERHOST"
+cleanup_here_rows() { q "delete from ${SCHEMA}.${PREFIX}mounts where mount_id in ('$MARK_DEAD','$MARK_DEADTOMB','$MARK_OTHER')" >/dev/null; }
+# $1 = mount_id, $2 = host, $3 = pid, $4 = stats json
+insert_fresh_row() {
+	q "insert into ${SCHEMA}.${PREFIX}mounts (mount_id, host, pid, mountpoint, mode, started_at, heartbeat_at, config, stats)
+	   values ('$1', '$2', $3, '/tmp/prunetest-here', 'fuse',
+	           (now() at time zone 'UTC'), (now() at time zone 'UTC'), '{}'::jsonb, '$4'::jsonb)" >/dev/null
+}
+
+test_mount_start_reaps_same_host_dead_rows() {
+	# ★ **At mount startup, the dead rows of the same host are removed** (v0.2.2). Even with a fresh heartbeat,
+	#   a row whose pid is gone is dead. **Tombstones and rows of other hosts are kept** (a tombstone is the record
+	#   of a loss / the pid of another host cannot be checked).
+	#   Before the fix nothing happens at startup, so the dead row stays.
+	umount_all
+	local host; host=$(this_host)
+	umount_all
+	if [ -z "$host" ]; then fail "cannot get the name this host registers with (broken premise)"; return; fi
+	cleanup_here_rows
+	insert_fresh_row "$MARK_DEAD" "$host" 999101 '{}'
+	insert_fresh_row "$MARK_DEADTOMB" "$host" 999102 '{"unflushedLoss": 2}'
+	insert_fresh_row "$MARK_OTHER" "prunetest-other" 999103 '{}'
+	mount_fs || { fail "mount"; cleanup_here_rows; return; }
+	sleep 1
+	local dead tomb other
+	dead=$(row_exists "$MARK_DEAD" && echo 1 || echo 0)
+	tomb=$(row_exists "$MARK_DEADTOMB" && echo 1 || echo 0)
+	other=$(row_exists "$MARK_OTHER" && echo 1 || echo 0)
+	umount_all
+	cleanup_here_rows
+	if [ "$dead" != "0" ]; then fail "the dead row of the same host was not removed at startup"; return; fi
+	if [ "$tomb" != "1" ]; then fail "the tombstone of the same host was removed too"; return; fi
+	if [ "$other" != "1" ]; then fail "the row of another host was removed too (its pid cannot be checked)"; return; fi
+	pass
+}
+
+test_prune_treats_same_host_dead_row_as_stale() {
+	# ★ **A row of the same host whose pid is gone is an "old row" for prune even with a fresh heartbeat** (v0.2.2).
+	#   Before the fix only rows whose heartbeat was older than the grace (3600 seconds) were removed, so the old row
+	#   of a mount that had just been brought up again stayed for an hour.
+	umount_all
+	local host; host=$(this_host)
+	umount_all
+	if [ -z "$host" ]; then fail "cannot get the name this host registers with (broken premise)"; return; fi
+	cleanup_here_rows
+	insert_fresh_row "$MARK_DEAD" "$host" 999101 '{}'
+	"$BIN/pgfsctl" prune --apply -c "$CONN" -s "$SCHEMA" >/dev/null 2>&1
+	local left; left=$(row_exists "$MARK_DEAD" && echo 1 || echo 0)
+	cleanup_here_rows
+	if [ "$left" != "0" ]; then fail "prune does not remove the dead row of the same host (with a fresh heartbeat)"; return; fi
+	pass
+}
+
+test_prune_check_exit_code() {
+	# ★ **`--check` exits 1 when there is something to clean up** (v0.2.2). **Tombstones count too.**
+	#   `--check --apply` exits 2 and removes nothing. An argument error (`--mounts-older-than` below the lower bound)
+	#   also exits 2 (it used to be 1 and could not be told apart from --check's "found").
+	umount_all
+	drop_dead_rows
+	make_stale_rows
+	local rc
+	"$BIN/pgfsctl" prune --check -c "$CONN" -s "$SCHEMA" >/dev/null 2>&1; rc=$?
+	if [ "$rc" != "1" ]; then fail "--check exits $rc with an old row and a tombstone present (expected 1)"; cleanup_rows; return; fi
+	"$BIN/pgfsctl" prune --check --apply -c "$CONN" -s "$SCHEMA" >/dev/null 2>&1; rc=$?
+	if [ "$rc" != "2" ]; then fail "--check --apply exits $rc (expected 2)"; cleanup_rows; return; fi
+	if ! row_exists "$MARK_PLAIN"; then fail "--check --apply removed a row"; cleanup_rows; return; fi
+	cleanup_rows
+	pass
+}
+
+test_status_folds_old_rows() {
+	# ★ **status folds rows whose heartbeat is at least 10 minutes old (except tombstones) out of the list and
+	#   Layer 3** (v0.2.2). Tombstones are shown. When there is something to clean up, a one-line summary
+	#   (`can be cleaned up:`) is printed. `--json` has every row.
+	umount_all
+	drop_dead_rows
+	make_stale_rows
+	local out json
+	out=$("$BIN/pgfsctl" status -c "$CONN" -s "$SCHEMA" 2>/dev/null)
+	json=$("$BIN/pgfsctl" status --json -c "$CONN" -s "$SCHEMA" 2>/dev/null)
+	cleanup_rows
+	if echo "$out" | grep -q ' 999001 '; then fail "the 2-day-old row (pid 999001) is in the list"; return; fi
+	if ! echo "$out" | grep -q ' 999002 '; then fail "the tombstone (pid 999002) is not in the list"; return; fi
+	if ! echo "$out" | grep -q 'old row(s)'; then fail "there is no line with the number of folded rows"; return; fi
+	if ! echo "$out" | grep -q 'can be cleaned up:'; then fail "there is no summary of what can be cleaned up"; return; fi
+	if ! echo "$json" | grep -q '999001'; then fail "the old row disappeared from --json (it should have every row)"; return; fi
+	pass
+}
 
 test_prune_dry_run_changes_nothing() {
 	# **The default is a dry run.** It counts and shows, and not a single row is deleted.
@@ -262,15 +361,15 @@ test_prune_rejects_small_grace() {
 	# ★ **`--mounts-older-than` has a lower bound (600 seconds).**
 	#   The grace doubles as "the limit up to which a row from another host is treated as live", so a small
 	#   value **treats a mount alive on another host as dead and removes the data side**. **The kind of failure
-	#   is checked too** - it exits 1 with a reason, and **nothing was removed** (removing the mounts rows before
-	#   rejecting would be an accident of its own).
+	#   is checked too** - it exits 2 with a reason (argument errors exit 2 from v0.2.2), and **nothing was removed**
+	#   (removing the mounts rows before rejecting would be an accident of its own).
 	umount_all
 	drop_dead_rows
 	make_stale_rows
 	local out rc
 	out=$("$BIN/pgfsctl" prune --apply --mounts-older-than 10 -c "$CONN" -s "$SCHEMA" 2>&1); rc=$?
-	if [ "$rc" != "1" ]; then
-		fail "--mounts-older-than 10 was not rejected (rc=$rc)"
+	if [ "$rc" != "2" ]; then
+		fail "--mounts-older-than 10 was not rejected (rc=$rc; argument errors exit 2 from v0.2.2)"
 		cleanup_rows; return
 	fi
 	case "$out" in
@@ -427,11 +526,11 @@ test_prune_removes_fuse_hidden_right_after_kill() {
 	sleep 0.5
 	exec 9< "$d/h.txt"
 	rm "$d/h.txt"
-	local pid; pid=$(pgrep -x mount.pgfs | head -1)
+	local pid; pid=$(pgrep -u "$(id -u)" -x mount.pgfs | head -1)
 	kill -9 "$pid" 2>/dev/null
 	exec 9<&-
 	fusermount3 -u "$MNT" 2>/dev/null
-	local i=0; while [ $i -lt 100 ]; do pgrep -x mount.pgfs >/dev/null || break; sleep 0.1; i=$((i+1)); done
+	local i=0; while [ $i -lt 100 ]; do pgrep -u "$(id -u)" -x mount.pgfs >/dev/null || break; sleep 0.1; i=$((i+1)); done
 
 	local before; before=$(prune | jval fuse_hidden)
 	if [ -z "$before" ] || [ "$before" = "0" ]; then
@@ -485,6 +584,10 @@ run test_heartbeat_reregisters_after_row_loss
 run test_prune_removes_orphan_data_when_idle
 run test_prune_keeps_user_named_fuse_hidden
 run test_prune_removes_fuse_hidden_right_after_kill
+run test_mount_start_reaps_same_host_dead_rows
+run test_prune_treats_same_host_dead_row_as_stale
+run test_prune_check_exit_code
+run test_status_folds_old_rows
 
 cleanup_rows
 rm -rf "$MNT/prunetest" "$MNT/prunetest2" 2>/dev/null

@@ -62,7 +62,7 @@ skip() { SKIPPED=$((SKIPPED+1)); echo "${YELLOW}SKIP${NC}: $CURRENT - $*"; }
 # ===== mount operations =====
 
 # Look it up by process name (`pgrep -f` also matches the calling shell, which contains the same command line).
-mount_count() { pgrep -x mount.pgfs | wc -l; }
+mount_count() { pgrep -u "$(id -u)" -x mount.pgfs | wc -l; }
 
 umount_one() {
 	local mp="$1"

@@ -118,14 +118,19 @@ public sealed class PruneAdmin
 				UnflushedLoss = (int)row.loss,
 			};
 			// The liveness test **depends on the host** (see IsLive below).
-			if (this.IsLive(entry, report.MountsGraceSeconds)) { report.LiveMounts.Add(entry); }
+			var live = this.IsLive(entry, report.MountsGraceSeconds);
+			if (live) { report.LiveMounts.Add(entry); }
 			// **Tombstones (B-2) are never removed.** They drive the warning on the next mount, so an operator
 			// reviews them and deletes them by hand.
 			if (entry.UnflushedLoss > 0) {
 				report.Tombstones.Add(entry);
 				continue;
 			}
-			if (entry.HeartbeatAgeSeconds < report.MountsGraceSeconds) { continue; }
+			// **An old row that may be removed = a row that is not alive** (v0.2.2). On the same host, a dead pid is
+			// enough and the heartbeat is not waited for - only "the heartbeat is older than the grace (3600 seconds by
+			// default)" used to be checked, so the old row of a mount brought up again on the same host stayed for an
+			// hour. Rows of other hosts are decided by IsLive with the grace, as before (older than the grace = old row).
+			if (live) { continue; }
 			report.StaleMounts.Add(entry);
 		}
 	}
@@ -189,6 +194,29 @@ public sealed class PruneAdmin
 			Logger.Warning("prune: cannot determine whether pid ", entry.Pid, " is alive: ", ex.Message);
 			return true;
 		}
+	}
+
+	/// <summary>
+	/// **Removes the dead rows of this host** (called at mount / assign startup, v0.2.2). <paramref name="ownMountId"/>
+	/// (our own row) and tombstones are kept. The test is the same as prune's (<see cref="IsLive"/> - on the same host
+	/// the pid decides and the heartbeat is not looked at). **Rows of other hosts are left alone** - their pid cannot be
+	/// checked, and a mount that has only stalled could be taken for dead (<c>pgfsctl prune</c> handles those with the
+	/// grace). Returns the number of rows removed; 0 when the registry cannot be read.
+	/// </summary>
+	public int ReapDeadRowsOfThisHost(string ownMountId) {
+		var report = new PruneReport { MountsGraceSeconds = DefaultMountsGraceSeconds };
+		this.ScanMounts(report);
+		var host = System.Net.Dns.GetHostName();
+		var deleted = 0;
+		foreach (var mount in report.StaleMounts) {
+			if (mount.MountId == ownMountId) { continue; }
+			if (!string.Equals(mount.Host, host, System.StringComparison.OrdinalIgnoreCase)) { continue; }
+			deleted += Pg.Execute(
+				this.connectionString,
+				$"DELETE FROM {this.QualifiedTable("mounts")} WHERE mount_id = @id AND COALESCE((stats->>'unflushedLoss')::int, 0) = 0",
+				new { id = mount.MountId });
+		}
+		return deleted;
 	}
 
 	/// <summary>

@@ -279,6 +279,7 @@ public partial class Api : System.IDisposable
 			this.registered = true;
 			this.WriteHeartbeat(); // Fill the stats/config snapshots from the moment we start (status Layer 3).
 			Logger.Information("registered in mounts: ", this.mountId, " @ ", this.config.Mount.MountPoint);
+			this.ReapDeadRowsOfThisHost();
 		} catch (System.Exception ex) {
 			Logger.Warning("skipped registering in mounts (the table may not exist yet; it is retried every heartbeat): ", ex.Message);
 		}
@@ -287,6 +288,21 @@ public partial class Api : System.IDisposable
 		// prune and status for good**, and did not count towards prune's "leave the data alone while any mount
 		// is alive".
 		this.heartbeatTask = System.Threading.Tasks.Task.Run(() => this.RunHeartbeatLoopAsync(this.heartbeatCts.Token));
+	}
+
+	/// <summary>
+	/// **Removes the dead registry rows of this host** (at startup, v0.2.2). The old rows of mounts that were
+	/// <c>kill -9</c>-ed or whose heartbeat stopped used to stay in <c>status</c> even after the mount was brought up
+	/// again on the same host. The test and the safeguards are <see cref="PruneAdmin.ReapDeadRowsOfThisHost"/> (only
+	/// rows of the same host whose pid is dead; tombstones and our own row are kept). A failure does not stop the mount.
+	/// </summary>
+	private void ReapDeadRowsOfThisHost() {
+		try {
+			var n = new PruneAdmin(this.connectionString, this.schemaName, this.tableNamePrefix).ReapDeadRowsOfThisHost(this.mountId);
+			if (n > 0) { Logger.Information("mounts: removed ", n, " dead registry row(s) of this host"); }
+		} catch (System.Exception ex) {
+			Logger.Warning("mounts: failed to remove the dead registry rows of this host (continuing): ", ex.Message);
+		}
 	}
 
 	/// <summary>

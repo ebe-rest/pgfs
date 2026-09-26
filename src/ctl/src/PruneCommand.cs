@@ -11,12 +11,18 @@ using Core.Api;
 /// <b>The default is a dry run</b> - it only counts and shows, and deletes nothing. `--apply` carries it out.
 /// **A cleanup command whose victims cannot be eyeballed first is dangerous**, so this default does not change.
 /// </para>
+/// <para>
+/// <b>Exit codes</b> (v0.2.2): 0 = success / 1 = <c>--check</c> found something to clean up (tombstones included) /
+/// 2 = an argument error. <c>--check</c> prints the same report as the dry run, for cron / monitoring to "tell me when
+/// things pile up".
+/// </para>
 /// </summary>
 public static class PruneCommand
 {
 	public static int Run(string[] opts) {
 		var apply = false;
 		var force = false;
+		var check = false;
 		var grace = PruneAdmin.DefaultMountsGraceSeconds;
 		var rest = new System.Collections.Generic.List<string>();
 		for (var i = 0; i < opts.Length; i++) {
@@ -28,10 +34,14 @@ public static class PruneCommand
 				force = true;
 				continue;
 			}
+			if (opts[i] == "--check") {
+				check = true;
+				continue;
+			}
 			if (opts[i] == "--mounts-older-than" && i + 1 < opts.Length) {
 				if (!long.TryParse(opts[i + 1], out grace)) {
 					Console.Error.WriteLine($"--mounts-older-than: cannot be read as a number of seconds: {opts[i + 1]}");
-					return 1;
+					return 2;
 				}
 				i++;
 				continue;
@@ -44,7 +54,12 @@ public static class PruneCommand
 		if (grace < PruneAdmin.MinMountsGraceSeconds) {
 			Console.Error.WriteLine($"--mounts-older-than: give at least {PruneAdmin.MinMountsGraceSeconds} seconds (given {grace}).");
 			Console.Error.WriteLine("  A small value treats mounts alive on other hosts as dead and removes the bodies they are using.");
-			return 1;
+			return 2;
+		}
+		// --check only looks. When it comes together with the instruction to delete, which one is meant is unclear, so nothing is done.
+		if (check && apply) {
+			Console.Error.WriteLine("--check and --apply cannot be given together (--check to only look, --apply to delete).");
+			return 2;
 		}
 
 		var (json, _, conn, schema, prefix) = CliUtil.Resolve(rest.ToArray());
@@ -55,9 +70,15 @@ public static class PruneCommand
 
 		if (json) {
 			Console.WriteLine(JsonSerializer.Serialize(ToJson(report, result, apply), JsonOpts));
-			return 0;
 		}
-		PrintText(report, result, apply, force);
+		if (!json) {
+			PrintText(report, result, apply, force);
+		}
+		// **Tombstones also count as "found".** They are not deleted, but they are something an operator should
+		// review and clear away (the record of an unflushed loss).
+		if (check && (!report.IsEmpty || report.Tombstones.Count > 0)) {
+			return 1;
+		}
 		return 0;
 	}
 
@@ -79,7 +100,7 @@ public static class PruneCommand
 		foreach (var m in report.LiveMounts) {
 			Console.WriteLine($"  live : {m.Host} {m.Mountpoint} (pid {m.Pid}, heartbeat {m.HeartbeatAgeSeconds}s ago)");
 		}
-		Console.WriteLine($"  stale rows to delete: {report.StaleMounts.Count} (heartbeat at least {report.MountsGraceSeconds}s ago / no loss)");
+		Console.WriteLine($"  stale rows to delete: {report.StaleMounts.Count} (rows that are not alive = same host: the pid is gone / other hosts: heartbeat at least {report.MountsGraceSeconds}s ago; no loss)");
 		foreach (var m in report.Tombstones) {
 			// **The gravestones are not deleted.** They are kept to tell the operator how much could not be written back (B-2).
 			Console.WriteLine($"  gravestones (kept): {m.Host} {m.Mountpoint} - {m.UnflushedLoss} unflushed");

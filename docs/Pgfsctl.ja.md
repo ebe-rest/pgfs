@@ -114,6 +114,7 @@ pgfsctl status [--json] [接続オプション]
 DB 由来の read-only 情報を 1 コマンドでセクション表示します（mount 不要）。3 層すべて実装済み。
 
 1. **Mounts（クラスタ稼働一覧・Layer 1）** … `{prefix}mounts` 登録表から host / pid / mode（`fuse`/`dokan`）/ mountpoint / uptime / heartbeat 経過 / live?（経過 < 90s）。テーブル不在（Phase 2 前の mkfs）は「table not present」と表示。
+   **v0.2.2〜: live でも墓標でもなく heartbeat が 10 分以上前の行は一覧と Layer 3 から省き**、`+N 件の古い行` と件数だけ出します (`--json` には全部出ます)。**掃除できるもの (生きていない行 / 墓標) があれば `掃除できるもの: … → pgfsctl prune で確認` と 1 行出します**。
 2. **Filesystem（FS 統計・Layer 2）** … **target (接続先 `host:port/db`・v0.2.1〜)**、schema/prefix/version/volume_label、inode 数、file 数、chunk 数、使用バイト（`sum(length(payload))`）、cluster_size、max_file_size、audit on/off、Citus 有無（+ `pg_dist_node` 数と**ノードの一覧** `coordinator host:port` / `worker host:port`・v0.2.1〜。どれも DB の実体から）。集計失敗値は `?`。
    **`mkfs --clean` / `--purge` の前に「どこを消すか」を確かめる**のに使う (`pgfsctl status -f <toml>` → `mkfs --purge -f <同じ toml>`・[Mkfs.ja.md §--purge](Mkfs.ja.md))。
 3. **Process detail（稼働プロセス詳細・Layer 3）** … 各 mount が直近 heartbeat 時に書いたスナップショット（[P4-2/P4-4](design/runtime-control-plane.ja.md)）。**inode キャッシュ**（entries / capacity / hit率 / hits・misses・evictions）、**content キャッシュ**（chunk 数 / bytes / max / hit率 / hits・misses・evictions）、**write-back**（dirty bytes/files、flush/failure、pending inode/監査、error state 等）、**handles**（開いているハンドル数 / これまでの最大数 / **開かれている実体の数**）、**notify**（listen / data / connected）、**実効 config**（走行中 `RootConfig` の運用関連サブセット = logging/retry/cache/statfs/audit/version 等・values-only・password 非含）。live でない行は `[stale]` 付き。
@@ -134,11 +135,25 @@ pgfsctl status --json -c "$CONN" -s pgfs     # GUI / スクリプト用
 ## `prune` — 異常終了が残したものの掃除 (追加)
 
 ```
-pgfsctl prune [--apply] [--force] [--mounts-older-than <sec>] [--json] [接続オプション]
+pgfsctl prune [--check | --apply] [--force] [--mounts-older-than <sec>] [--json] [接続オプション]
 ```
 
 **既定は dry-run**。数えて見せるだけで何も消しません。`--apply` で実行します。
 **消すものを先に目で見られない掃除コマンドは危ない**ので、この既定は変えません。
+
+**`--check` (v0.2.2〜)** は dry-run と同じ表示をしたうえで、**掃除できるものが 1 つでもあれば exit 1**、
+何も無ければ exit 0 を返します。監視 (cron / systemd timer / 監視エージェント) から「ゴミが溜まっているか」を
+見るためのものです。**墓標 (下記) も「あり」に数えます** — `prune` は墓標を消しませんが、人が確認すべきものなので。
+`--apply` とは同時に指定できません (exit 2)。
+
+| 終了コード | 意味 |
+|---|---|
+| 0 | 成功 (`--check` では「掃除するものが無い」) |
+| 1 | `--check` で掃除できるもの / 墓標がある。または接続失敗等の実行時エラー |
+| 2 | 引数不正 (未知のオプション / `--check` と `--apply` の併用 / `--mounts-older-than` が 600 未満) — **v0.2.1 までは 1** |
+
+> **接続失敗も exit 1** なので、`--check` の 1 を「ゴミあり」と断定したいときは標準エラーも見てください
+> (`--json` なら出力が JSON として読めれば実行は成功しています)。
 
 対象は 3 つで、どれも **「異常終了したマウントが残したものを、誰も掃除しない」** という同じ形です
 (設計は [handle-context.ja.md §段階 C の Core 設計](design/handle-context.ja.md)):
@@ -156,7 +171,8 @@ pgfsctl prune [--apply] [--force] [--mounts-older-than <sec>] [--json] [接続�
 
 ### 安全弁 (**種類ごとに live 判定を分ける**)
 
-- **`{prefix}mounts` の行**は heartbeat が `--mounts-older-than` (既定 **3600 秒**) より古ければ消します。
+- **`{prefix}mounts` の行**は、**同じホストの行はプロセスが居なければすぐ**、**別ホストの行は** heartbeat が
+  `--mounts-older-than` (既定 **3600 秒**) より古ければ消します (同じホストの判定は下記「`kill -9` の直後」)。
   **これは「別ホストの行を生きているとみなす上限」でもあります** (下記)。**下限は 600 秒**で、それより
   小さい値 (0・負の値を含む) は拒否します — 小さくすると**別ホストで生きているマウントを死んだ扱いにして、
   使用中の実体を消す**ためです。
@@ -166,6 +182,10 @@ pgfsctl prune [--apply] [--force] [--mounts-older-than <sec>] [--json] [接続�
   誰が生きているか分からない = 「居ない」ではなく「見えない」からです。先に移行
   ([CHANGELOG.ja.md](../CHANGELOG.ja.md) §移行が必要な変更) を流してください。JSON では
   `applied.skipped_because_unknown = true` になります。
+- **マウントは起動時に、同じホストの死んだ行を自分で消します (v0.2.2〜)**。判定は `prune` と同じ
+  (pid の生存 + プロセス名) で、**墓標と自分の行は残します**。同じマシンで `kill -9` → 再マウントを
+  繰り返しても行が溜まりません。別ホストの行には触りません (生きているかを確かめようがないため。
+  そちらは `prune` の猶予に任せます)。失敗しても警告を出してマウントは続けます。
 - **マウントは、自分の登録行が消えていたら heartbeat の周期 (30 秒) で登録し直します**。起動時の DB の
   瞬断で登録に失敗したマウントも同じです。以前は一度消えると以後ずっと見えず、上の「生きている
   マウントが居れば触らない」の数に入りませんでした。
@@ -220,6 +240,7 @@ pgfsctl prune --apply              # 掃除する (データ側は live が居�
 pgfsctl prune --apply --force      # 全マウントを止めたうえで、データ側も強制的に掃除
 pgfsctl prune --mounts-older-than 86400 --apply   # mounts の行は 1 日より古いものだけ
 pgfsctl prune --json               # 機械可読 (dry_run / mounts / orphan_data / fuse_hidden / applied)
+pgfsctl prune --check -f /etc/pgfs.toml >/dev/null || echo "掃除するものがある"   # 監視用
 ```
 
 ## 終了コード
@@ -228,3 +249,6 @@ pgfsctl prune --json               # 機械可読 (dry_run / mounts / orphan_dat
 |---|---|
 | 0 | 成功 |
 | 1 | 引数不正 / 未知サブコマンド / `config set` の拒否（Format/File+NextMount/未知キー/検証失敗）/ 接続失敗等 |
+| 2 | `prune` の引数不正 (v0.2.2〜。他のサブコマンドの引数不正は 1 のまま) |
+
+`prune --check` の 0 / 1 は [§prune](#prune--異常終了が残したものの掃除-追加) を参照。
