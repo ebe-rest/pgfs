@@ -327,6 +327,14 @@ public static class Program
 				Console.Out.Flush();
 				Console.SetOut(TextWriter.Null);
 				Console.SetError(TextWriter.Null);
+				// **From here on stderr reaches nobody**, so the Error / Warning lines and the start / exit lines also go to
+				// syslog (v0.2.2, `journalctl -t pgfs`). Before, output was simply cut off here, and the Error log of "what was
+				// lost" at unmount vanished unless --log-output was given. The exit code 4 is as before (it does not reach the parent).
+				var syslog = SyslogSink.TryOpen("pgfs");
+				if (syslog != null) {
+					Logger.SyslogSink = syslog.Write;
+					Logger.Lifecycle($"running as daemon (pid {Environment.ProcessId}, {mountPoint})");
+				}
 			}
 
 			await fuseMount.WaitForUnmountAsync();

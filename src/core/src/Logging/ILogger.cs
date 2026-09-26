@@ -24,6 +24,12 @@ public interface ILogger
 	Action<string>? WarningStderrSink { get; set; }
 
 	/// <summary>
+	/// A sink that also sends the logs of Warning and above to syslog (v0.2.2). Null disables it. The daemonized child of
+	/// <c>mount.pgfs</c> wires a <see cref="SyslogSink"/> here after cutting off stdout / stderr (every other path leaves it null).
+	/// </summary>
+	Action<Level.Enum, string>? SyslogSink { get; set; }
+
+	/// <summary>
 	/// Returns whether the given level is enabled. Callers use it on hot paths as
 	/// <c>if (Logger.IsTraceEnabled) { Logger.Trace(...); }</c> to avoid allocating the
 	/// `params object?[]` array and the boxing it incurs.

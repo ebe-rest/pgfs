@@ -63,6 +63,11 @@ public static class Logger
 			set => parent.WarningStderrSink = value;
 		}
 
+		public Action<Level.Enum, string>? SyslogSink {
+			get => parent.SyslogSink;
+			set => parent.SyslogSink = value;
+		}
+
 		public void Log(Level.Enum logLevel, params object?[] messages) {
 			for (var i = 0; i < messages.Length; i++) {
 				switch (messages[i]) {

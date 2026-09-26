@@ -273,6 +273,23 @@ takes effect on a representative bulk copy. `defer` makes it take effect at the 
    exit code of the daemonizing parent. `fusermount3 -u` and `umount(8)` complete on the kernel side so the FS
    cannot refuse with EBUSY (refusing would create "a mount that can never be unmounted") - the log and the exit
    code are the last reporting path.
+   **The daemonized child (the default via mount(8) / fstab) also writes this Error log to syslog** (v0.2.2 onwards,
+   ident `pgfs`, facility daemon). The child cuts off stdout / stderr once the mount is up, so before, it was kept
+   nowhere unless `--log-output` was given. It can be read with **`journalctl -t pgfs`** (below, "The log when
+   daemonized").
+
+   ### The log when daemonized (syslog, v0.2.2 onwards)
+
+   - **Scope**: only the child that was started without `--foreground` and daemonized (the case via fstab / mount(8)).
+     With `--foreground` it is stderr as before.
+   - **What is written**: **Warning and above**, and the start / exit lines (`running as daemon (pid N, <mountpoint>)` /
+     `exited (code N)`). The severity is Critical -> crit / Error -> err / Warning -> warning / start and exit -> notice.
+     When `logging.level` is narrowed above Warning, that much less is written.
+   - **It is written in addition to the log output of the settings (`--log-output`), to both.**
+   - **Destination**: an RFC 3164 datagram sent straight to `/dev/log` (`/var/run/syslog` on macOS). Where there is no
+     socket nothing happens. The mount goes on even when sending fails.
+   - **The exit code 4 still does not reach the caller.** A loss is traced through the syslog Error line, the gravestone
+     in the database and the audit row.
 3. **5 consecutive flush failures put the mount into an error state**, which refuses with `-EIO` not only new
    writes and creates but **also the operations that destroy a persisted body (`unlink` / `rmdir` /
    `truncate` / a replacing rename)**. **The operations that merely throw away this mount's
@@ -666,6 +683,7 @@ by hand with `fusermount3 -u <mountpoint>`.
 | The POSIX ACLs (setfacl/getfacl) | ✅ | `system.posix_acl_access` <-> the `st_mode` plus the canonical ACL (`user.pgfs_acl`). It shares the same canonical store as the Windows DACL. For the details see "the POSIX ACLs" above and [permission-interop.md](design/permission-interop.md). The strict enforcement of a named ACL awaits a requirement |
 | Confirming it works on macOS | ❌ | It depends on libfuse's macOS support. macFUSE is needed |
 | The access check (`Access`) | ❌ | For now it is expected that passing `default_permissions` at mount time has the kernel decide |
+| Reporting an exit that left unflushed work (when daemonized) | ⚠️ | From v0.2.2 **the Error stays in syslog (`journalctl -t pgfs`)**. **The exit code 4 still does not reach the caller** (the parent finishes first, once the mount is up). To learn it from the exit code, run with `--foreground` (systemd `Type=simple` and so on; no sample is provided) |
 | The mount option `-o` | ✅ | `-o key=val,flag,...` is classified (FUSE passthrough / accepted and ignored plus the `x-` prefix / pgfs settings / unknown = a Warning / an unsupported mount operation = an explicit Warning). For the details see "the mount options" above. The implementation is [ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs) |
 | Reconnecting after a failed connection | ✅ | The `Pg.OpenConnection` family is wrapped in [Retry](../src/core/src/Utility/Retry.cs). Exponential backoff, tuned with `database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms`. It does not retry arbitrary queries. Separately, create / write / flush have a bounded tx retry for `40P01` and `40001` ([support_for_citus.md](design/support_for_citus.md)) |
 | How a uname or gname that does not exist on the OS is shown | ✅ | v0.2.1 and later. It is shown as **the kernel's overflowuid / overflowgid** (`/proc/sys/kernel/overflow*`, usually 65534 = `nobody` / `nogroup` on Debian-family systems, `nobody` / `nobody` on RHEL-family ones) (there is no setting; the old `mount.fallback_*` were removed). What is created by a uid / gid with no name (such as a container's uid) is written to the database as `file_system.unknown_name` (`(unknown)`). **Its own identity is `mount.self_uname` / `self_gname`** (put on what it creates itself, and that name is shown as its own uid / gid). Note: for a uid with no name, even a file it created itself appears owned by the overflowuid, so it cannot write it under `default_permissions` (a limit of the design that holds names; the behaviour since v0.2.0). The implementation is [src/fuse/src/UserResolver.cs](../src/fuse/src/UserResolver.cs), verified by `test_fallback_uname_gname` in the e2e suite |

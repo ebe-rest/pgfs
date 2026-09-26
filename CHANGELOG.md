@@ -34,6 +34,10 @@ authoritative for how things came about).
   id that is not a gravestone is among the names nothing is removed and the exit code is 1. Before, they could only be
   removed with SQL (and could not be cleared on Windows, where there is no psql). The hint in the loss lines of
   `status` now points to this command.
+- **A daemonized `mount.pgfs` (the default via fstab / mount(8)) also writes Warning and above and the start / exit lines
+  to syslog** (ident `pgfs`, facility daemon), readable with `journalctl -t pgfs`. The child cuts off stderr once the
+  mount is up, so before, the Error of "what was lost" at unmount was kept nowhere unless `--log-output` was given.
+  The exit code 4 still does not reach the caller.
 - **At startup a mount removes the dead `{prefix}mounts` rows of its own host.** The decision is the same as `prune`'s
   (the liveness of the pid plus the process name). Gravestones, its own row and rows of other hosts are kept.
   Repeating `kill -9` and mounting again on the same machine no longer piles up rows.

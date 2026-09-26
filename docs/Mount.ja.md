@@ -234,6 +234,18 @@ persisted への上書きを同期 close に戻した後は未実測)。詳細�
    `pgfsctl prune --forget-tombstone <mount_id> --apply` で消すこと (v0.2.2〜・[Pgfsctl.ja.md](Pgfsctl.ja.md))。**期限は sweep の 1 巡の中でも見る**が、実行中の 1 トランザクションは打ち切れないので
    指定時間を多少超過し得る。喪失ログは pending inode / dirty データそれぞれ最大 32 件と監査行件数で、全件一覧ではない。デーモン起動の親の終了コードには終了時の 4 は伝わらない。`fusermount3 -u` / `umount(8)` はカーネル側で完了するので FS 側から EBUSY で拒否はできない
    (拒否すると「絶対に unmount できないマウント」になる) — ログと exit code が最後の報告経路。
+   **デーモン化した子 (mount(8) / fstab 経由の既定) は、この Error ログを syslog にも書く** (v0.2.2〜・ident `pgfs`・facility daemon)。
+   子はマウント成立後に stdout / stderr を切るので、以前は `--log-output` を付けていない限りどこにも残らなかった。
+   **`journalctl -t pgfs`** で見られる (下 §デーモン化したときのログ)。
+
+   ### デーモン化したときのログ (syslog・v0.2.2〜)
+
+   - **対象**: `--foreground` を付けずに起動し、デーモン化した子だけ (fstab / mount(8) 経由はこれ)。`--foreground` のときは今までどおり stderr。
+   - **書くもの**: **Warning 以上**と、起動・終了の行 (`running as daemon (pid N, <mountpoint>)` / `exited (code N)`)。
+     severity は Critical → crit / Error → err / Warning → warning / 起動・終了 → notice。`logging.level` で Warning より上に絞っていれば、そのぶん減る。
+   - **設定ファイルのログ出力 (`--log-output`) とは別に、両方へ書く**。
+   - **送り先**: `/dev/log` (macOS は `/var/run/syslog`) に RFC 3164 形式で直接送る。ソケットが無い環境では何もしない。送れなくてもマウントは続ける。
+   - **exit 4 は従来どおり呼び出し元に届かない**。喪失は syslog の Error 行・DB の墓標・監査行で追う。
 3. **flush が 5 回連続で失敗すると mount がエラーステート**になり、**新規の write / create に加えて
    persisted な実体を壊す操作 (`unlink` / `rmdir` / `truncate` / rename の置換) も `-EIO` で拒否**する。
    **このマウントの未 flush を捨てるだけの操作 (pending の削除・truncate) は通る** ので、
@@ -543,6 +555,7 @@ pgfs は **OS が決めたオフセットを使いません**。使うと**相�
 | POSIX ACL (setfacl/getfacl) | ✅ | `system.posix_acl_access` ⇄ `st_mode` + 正準 ACL (`user.pgfs_acl`)。Windows DACL と同じ正準ストアを共有。詳細は上記「POSIX ACL」/ [permission-interop.ja.md](design/permission-interop.ja.md)。named ACL の厳密 enforce は要件待ち |
 | macOS 動作確認 | ❌ | libfuse の macOS 対応次第。macFUSE が必要 |
 | アクセスチェック (`Access`) | ❌ | 当面マウント時に `default_permissions` を渡せばカーネル側で判断される想定 |
+| 未 flush を残した終了の報告 (デーモン化時) | ⚠️ | v0.2.2〜 **syslog (`journalctl -t pgfs`) に Error が残る**。**exit 4 は呼び出し元に届かない**まま (親はマウント成立で先に終わる)。終了コードで知りたいなら `--foreground` で動かす (systemd の `Type=simple` 等・見本は未提供) |
 | Mount オプション `-o` | ✅ | `-o key=val,flag,...` を分類 (FUSE passthrough / 受理して無視 + `x-` 接頭辞 / pgfs 設定 / 未知=Warning / 非対応マウント操作=明示 Warning)。詳細は上記「マウントオプション」。実装は [ConfigLoader.ParseDashOOptions](../src/core/src/Config/ConfigLoader.cs) |
 | 接続失敗時の再接続 | ✅ | [Retry](../src/core/src/Utility/Retry.cs) で `Pg.OpenConnection` 系を包む。指数バックオフ、`database.retry_max_attempts` / `_initial_delay_ms` / `_max_delay_ms` で調整。任意のクエリを再試行するものではない。別途、create / write / flush に `40P01`・`40001` の bounded tx retry がある ([support_for_citus.ja.md](design/support_for_citus.ja.md)) |
 | OS に存在しない uname / gname の見せ方 | ✅ | v0.2.1〜。**カーネルの overflowuid / overflowgid** (`/proc/sys/kernel/overflow*`・通常 65534 = Debian 系 `nobody` / `nogroup`、RHEL 系 `nobody` / `nobody`) として見せる (設定は持たない。旧 `mount.fallback_*` は廃止)。名前の無い uid / gid (コンテナの uid など) で作ったものは DB に `file_system.unknown_name` (`(unknown)`) と書く。**自分の名乗りは `mount.self_uname` / `self_gname`** (自分が作ったものに付け、その名前は自分の uid / gid として見せる)。注意: 名前の無い uid は、自分が作ったファイルでも overflowuid の所有に見えるので `default_permissions` の下では書けない (名前で持つ設計の制限・v0.2.0 からの挙動)。実装は [src/fuse/src/UserResolver.cs](../src/fuse/src/UserResolver.cs)、e2e の `test_fallback_uname_gname` で検証 |

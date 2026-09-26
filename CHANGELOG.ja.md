@@ -29,6 +29,9 @@
 - **`pgfsctl prune --forget-tombstone <mount_id>` (複数可) / `all`**: 墓標 (未 flush を残して終わった記録) を名指しで消す。既定は dry-run、`--apply` で消す。
   墓標以外は消さず、名指しに墓標でない id が混じれば何も消さずに exit 1。以前は SQL でしか消せなかった (psql の無い Windows では片付けられなかった)。
   `status` の喪失表示の案内もこのコマンドに変えた。
+- **デーモン化した `mount.pgfs` (fstab / mount(8) 経由の既定) は、Warning 以上と起動・終了の行を syslog にも書く** (ident `pgfs`・facility daemon)。
+  `journalctl -t pgfs` で見られる。子はマウント成立後に stderr を切るので、以前はアンマウント時の「何が失われたか」の Error が
+  `--log-output` を付けていない限りどこにも残らなかった。exit 4 が呼び出し元に届かないのは従来どおり。
 - **マウントは起動時に、同じホストの死んだ `{prefix}mounts` の行を消す**。判定は `prune` と同じ (pid の生存 + プロセス名)。墓標・自分の行・別ホストの行は残す。
   同じマシンで `kill -9` と再マウントを繰り返しても行が溜まらない。
 

@@ -13,7 +13,7 @@ mount.pgfs (Linux) でマウント済みの PGFS に対して、実装済み機�
 | [e2e.sh](e2e.sh) | bash テスト本体 (Linux 上で実行・**マウント済み前提**) |
 | [writeback.sh](writeback.sh) | **write-back 専用** (9 件)。`mount.write_back` の耐久性契約を見るため**自分でマウントを張り替える** |
 | [wbmeta.sh](wbmeta.sh) | **メタデータ write-back 専用** (**27 件**・ラウンド A 修正 + B-1〜B-9 後も全件緑)。`mount.write_back_metadata` の契約。自分でマウントを張り替え、DB 側は psql で直接確認する |
-| [startup.sh](startup.sh) | **起動まわりの契約専用** (10 件)。`-o` の扱い / `started (pid N)` / 所有者解決の fallback。自分でマウントを張り替える |
+| [startup.sh](startup.sh) | **起動まわりの契約専用** (11 件)。`-o` の扱い / デーモン化した子の syslog / `started (pid N)` / 所有者解決の fallback。自分でマウントを張り替える |
 | [prune.sh](prune.sh) | **`pgfsctl prune` 専用** (17 件)。異常終了が残したものの掃除。**psql 必須** (人工の残骸を作るため)。自分でマウントを張り替え、`kill -9` で本物の `.fuse_hidden` 残骸も作る |
 | [handles.sh](handles.sh) | **ハンドルリーク専用** (**11 件**)。`pgfsctl status` の `handles` 行を見て、借りたハンドルが必ず返っていることを確認する。**psql 必須** (スナップショットを ping で撃たせるため)。自分でマウントを張り替える |
 | [crossclient.sh](crossclient.sh) | **cross-client 専用** (**19 件**)。同じ DB-FS を **2 マウント**して可視性を見る (Windows の [crossclient.ps1](../windows/crossclient.ps1) の Linux 版)。自分で 2 つマウントを張る |

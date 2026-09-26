@@ -11,6 +11,7 @@ public class Instance(Level.Enum logLevel, Action<string> output) : ILogger
 	public Level.Enum MinLevel { get; set; } = logLevel;
 	public Action<string> Output { get; set; } = output;
 	public Action<string>? WarningStderrSink { get; set; }
+	public Action<Level.Enum, string>? SyslogSink { get; set; }
 
 	public void Log(Level.Enum logLevel, params object?[] messages) {
 		if (logLevel < this.MinLevel) {
@@ -37,6 +38,11 @@ public class Instance(Level.Enum logLevel, Action<string> output) : ILogger
 		var echo = this.WarningStderrSink;
 		if (logLevel >= Level.Warning && echo != null) {
 			echo($"pgfs: [{logLevel}] {bodyStr}");
+		}
+		// In the daemonized child, Warning and above also go to syslog (nobody reads stderr any more).
+		var syslog = this.SyslogSink;
+		if (logLevel >= Level.Warning && syslog != null) {
+			syslog(logLevel, $"[{logLevel}] {bodyStr}");
 		}
 	}
 

@@ -174,6 +174,37 @@ test_dash_o_fuse_breaking_options_are_not_forwarded() {
 	pass
 }
 
+test_daemon_logs_to_syslog() {
+	# ★ **The daemonized child also writes the start / exit lines and Warning and above to syslog** (v0.2.2, ident `pgfs`).
+	#   The child cuts off stderr, so before, the Error at unmount (what was lost) reached nobody without --log-output.
+	#   It checks that `journalctl -t pgfs _PID=<the real daemon>` has "running as daemon" and "exited (code 0)".
+	#   Before the fix the child writes nothing to syslog, so there are 0 lines.
+	if ! command -v journalctl >/dev/null 2>&1 || [ ! -S /dev/log ]; then skip "journalctl or /dev/log is missing"; return; fi
+	if ! journalctl -n 0 --no-pager >/dev/null 2>&1; then skip "cannot read the journal (the adm / systemd-journal group is needed)"; return; fi
+	mount_capture >/dev/null
+	if ! wait_mounted; then fail "cannot mount"; return; fi
+	local pid; pid=$(mount_pid)
+	# **fusermount3 -u right after mounting can fail with EBUSY** (the desktop environment comes to look at the new mount).
+	# unmount_clean fires once and waits 10 seconds, so here it is fired again until it comes off (up to 30 seconds).
+	local i=0
+	while mountpoint -q "$MOUNT_ROOT" 2>/dev/null && [ $i -lt 30 ]; do
+		fusermount3 -u "$MOUNT_ROOT" 2>/dev/null || sleep 1
+		i=$((i+1))
+	done
+	# Wait up to 60 seconds for the exit line.
+	local log=""
+	i=0
+	while [ $i -lt 600 ]; do
+		log=$(journalctl -t pgfs "_PID=$pid" --no-pager -o cat 2>/dev/null)
+		echo "$log" | grep -q 'exited (code 0)' && break
+		sleep 0.1
+		i=$((i+1))
+	done
+	if ! echo "$log" | grep -q "running as daemon (pid $pid"; then fail "syslog has no start line (pid $pid)"; return; fi
+	if ! echo "$log" | grep -q 'exited (code 0)'; then fail "syslog has no exit line (pid $pid)"; return; fi
+	pass
+}
+
 test_started_pid_is_the_daemon() {
 	# `started (pid N)` must be the pid of **the real daemon** that survives the daemonization.
 	# Printing the parent's pid makes it vanish the moment the mount comes up, so watch / stop scripts always miss.
@@ -425,6 +456,7 @@ run test_dash_o_max_write_maps_to_field
 run test_dash_o_unapplied_options_warn
 run test_dash_o_fuse_breaking_options_are_not_forwarded
 run test_started_pid_is_the_daemon
+run test_daemon_logs_to_syslog
 run test_unknown_owner_falls_back
 run test_allow_other_without_default_permissions_warns
 run test_url_connection_mounts

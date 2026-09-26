@@ -19,6 +19,11 @@ public static class Logger
 		set => Default.WarningStderrSink = value;
 	}
 
+	public static Action<Level.Enum, string>? SyslogSink {
+		get => Default.SyslogSink;
+		set => Default.SyslogSink = value;
+	}
+
 	public static bool IsEnabled(Level.Enum level) => Default.IsEnabled(level);
 	public static bool IsTraceEnabled => Default.IsEnabled(Level.Enum.Trace);
 	public static bool IsDebugEnabled => Default.IsEnabled(Level.Enum.Debug);
@@ -39,6 +44,11 @@ public static class Logger
 			sb.Append(message);
 		}
 		System.Console.Error.WriteLine($"pgfs: {sb}");
+		// In the daemonized child stderr is cut off, so syslog is the only place the start / exit lines reach (v0.2.2).
+		var syslog = Default.SyslogSink;
+		if (syslog != null) {
+			syslog(Level.Information, sb.ToString());
+		}
 	}
 
 	public static void Log(Level.Enum level, params object[] messages) => Default.Log(level, messages);
