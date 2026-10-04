@@ -17,7 +17,7 @@ This file records the changes **per release tag**. The granularity is "a differe
 internal refactors are not listed as a rule ([docs/history.md](docs/history.md) and the design documents are
 authoritative for how things came about).
 
-## [Unreleased] v0.2.2
+## [v0.2.2] - 2026-10-04
 
 ### ⚠ Changes that require a migration
 
@@ -49,6 +49,15 @@ authoritative for how things came about).
   When there is something to clean up it prints one line, `can be cleaned up: ... -> check with pgfsctl prune`.
 - **`pgfsctl prune` counts a dead row of the same host as an "old row" regardless of how fresh its heartbeat is**
   (it used to wait until `--mounts-older-than` had passed).
+
+### The known limitations
+
+- **`pgfsctl` silently ignores unknown options** (it runs and exits 0 instead of failing). Watch for typos. In particular,
+  **given `--forget-tombstone ... --apply`, a `pgfsctl` of v0.2.1 or earlier removes no gravestone and runs the ordinary
+  `prune --apply`**. Unknown options are planned to be rejected in the next version.
+- **The exit code 4 of a daemonized `mount.pgfs` (it exited leaving unflushed work) does not reach the caller** (the parent
+  finishes first, once the mount is up). A loss is traced through the syslog Error line, the gravestone in the database
+  and the audit row. To learn it from the exit code, run with `--foreground`.
 
 ## [v0.2.1] - 2026-09-25
 
